@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "405501753361",
+    "firebase_url": "https://mahalak-0-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "mahalak-0",
+    "storage_bucket": "mahalak-0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:405501753361:android:461ffa4c1e8ebb6e98d9b0",
+        "android_client_info": {
+          "package_name": "com.mahalak"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "405501753361-fr7d0aljonlhjhju69fjlbrbr2gv932b.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAnx_mRGGnbzKIckdh6qqrfl3jYRMGXZfI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "405501753361-fr7d0aljonlhjhju69fjlbrbr2gv932b.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

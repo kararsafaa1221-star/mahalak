@@ -1,0 +1,5 @@
+{
+  "name": "MAHALK",
+  "description": "منصة محلك - تجربة تسوق متكاملة لدعم المتاجر المحلية مع نظام إشعارات ذكي وتتبع للطلبات",
+  "requestFramePermissions": ["geolocation"]
+}

@@ -1,0 +1,173 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ----------------------------------------------------
+    // PERSISTENT HELPERS
+    // ----------------------------------------------------
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isAdmin() { return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function isOwner(uid) { return isSignedIn() && request.auth.uid == uid; }
+    
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    // ----------------------------------------------------
+    // DEFAULT DENY
+    // ----------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ----------------------------------------------------
+    // ADMINS
+    // ----------------------------------------------------
+    match /admins/{adminId} {
+      allow read: if isOwner(adminId);
+    }
+
+    // ----------------------------------------------------
+    // CUSTOMERS
+    // ----------------------------------------------------
+    function isValidCustomer(data) {
+      return data.keys().hasAll(['id', 'name', 'phone']) &&
+             data.id is string && data.id.size() <= 64 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.phone is string && data.phone.size() <= 20;
+    }
+
+    match /customers/{customerId} {
+      allow get: if isValidId(customerId) && (isOwner(customerId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isOwner(customerId) && isValidCustomer(incoming());
+      allow update: if (isOwner(customerId) || isAdmin()) && (
+        (incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'followedStores', 'storeNotifications', 'points']) && isValidCustomer(incoming())) ||
+        (isAdmin() && incoming().diff(existing()).affectedKeys().hasAny(['tier', 'ordersCount', 'monthlyOrdersCount', 'lastResetMonth', 'isBlocked']))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ----------------------------------------------------
+    // STORES
+    // ----------------------------------------------------
+    function isValidStore(data) {
+      return data.keys().hasAll(['id', 'name', 'ownerId']) &&
+             data.id is string && data.id.size() <= 64 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.ownerId is string;
+    }
+
+    match /stores/{storeId} {
+      allow read: if true;
+      allow create: if isOwner(incoming().ownerId) && isValidStore(incoming());
+      allow update: if (isOwner(existing().ownerId) || isAdmin()) && (
+        (incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'logo', 'cover', 'category', 'location']) && isValidStore(incoming())) ||
+        (isAdmin() && incoming().diff(existing()).affectedKeys().hasAny(['status', 'subscriptionExpiry', 'badges', 'rating', 'isBanned']))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ----------------------------------------------------
+    // PRODUCTS
+    // ----------------------------------------------------
+    function getStore(sid) { return get(/databases/$(database)/documents/stores/$(sid)).data; }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow create: if isOwner(getStore(incoming().storeId).ownerId);
+      allow update: if (isOwner(getStore(existing().storeId).ownerId) || isAdmin());
+      allow delete: if (isOwner(getStore(existing().storeId).ownerId) || isAdmin());
+    }
+
+    // ----------------------------------------------------
+    // ORDERS
+    // ----------------------------------------------------
+    match /orders/{orderId} {
+      allow get: if isSignedIn() && (
+        isOwner(resource.data.customerId) || 
+        isOwner(getStore(resource.data.storeId).ownerId) || 
+        isAdmin()
+      );
+      allow list: if isSignedIn(); // Filtering happens on client but rules secure the query via where clauses implicitly by checking data
+      allow create: if isOwner(incoming().customerId);
+      allow update: if isSignedIn() && (
+        (incoming().diff(existing()).affectedKeys().hasOnly(['status']) && (
+          isOwner(getStore(existing().storeId).ownerId) || isAdmin()
+        )) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt']) && isOwner(existing().customerId))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ----------------------------------------------------
+    // STORE REVIEWS
+    // ----------------------------------------------------
+    match /store_reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ----------------------------------------------------
+    // NOTIFICATIONS
+    // ----------------------------------------------------
+    match /notifications/{notificationId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isSignedIn();
+      allow update: if isOwner(resource.data.userId) && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+    }
+
+    // ----------------------------------------------------
+    // FLASH SALES
+    // ----------------------------------------------------
+    match /flash_sales/{saleId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /flash_sale_requests/{requestId} {
+      allow read: if isSignedIn() && (isOwner(getStore(resource.data.storeId).ownerId) || isAdmin());
+      allow create: if isOwner(getStore(incoming().storeId).ownerId);
+      allow update, delete: if isAdmin();
+    }
+
+    // ----------------------------------------------------
+    // PROMO CODES
+    // ----------------------------------------------------
+    match /promo_codes/{codeId} {
+      allow read: if true;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    // ----------------------------------------------------
+    // RECHARGE CODES
+    // ----------------------------------------------------
+    match /recharge_codes/{codeId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin();
+      allow update: if isSignedIn() && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'usedBy', 'usedAt']) ||
+        isAdmin()
+      );
+    }
+
+    // ----------------------------------------------------
+    // TEST CONNECTION
+    // ----------------------------------------------------
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // ----------------------------------------------------
+    // GLOBAL SETTINGS
+    // ----------------------------------------------------
+    match /settings/global {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

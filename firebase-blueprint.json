@@ -1,0 +1,217 @@
+{
+  "entities": {
+    "Store": {
+      "title": "Store",
+      "description": "Store entity for merchants",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "logo": { "type": "string" },
+        "cover": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "pending", "blocked"] },
+        "rating": { "type": "number" },
+        "subscriptionExpiry": { "type": "string" },
+        "badges": { "type": "array" },
+        "location": { "type": "object" }
+      },
+      "required": ["id", "name", "ownerId"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Product sold by stores",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "storeId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "finalPrice": { "type": "number" },
+        "inventory": { "type": "number" },
+        "images": { "type": "array" },
+        "discountValue": { "type": "number" },
+        "discountType": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "storeId", "name", "price"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "storeId": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "deliveryLocation": { "type": "object" },
+        "promoCode": { "type": "string" }
+      },
+      "required": ["id", "customerId", "storeId", "items", "total"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "App user (customer)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "points": { "type": "number" },
+        "tier": { "type": "string" },
+        "ordersCount": { "type": "number" },
+        "monthlyOrdersCount": { "type": "number" },
+        "lastResetMonth": { "type": "string" },
+        "followedStores": { "type": "array" },
+        "storeNotifications": { "type": "array" },
+        "isBlocked": { "type": "boolean" }
+      },
+      "required": ["id", "name", "phone"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "App notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "role": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "targetId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "title", "message"]
+    },
+    "FlashSale": {
+      "title": "FlashSale",
+      "description": "Flash sale event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "title", "startTime", "endTime"]
+    },
+    "FlashSaleRequest": {
+      "title": "FlashSaleRequest",
+      "description": "Merchant request to join flash sale",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "flashSaleId": { "type": "string" },
+        "storeId": { "type": "string" },
+        "storeName": { "type": "string" },
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "originalPrice": { "type": "number" },
+        "promotionalPrice": { "type": "number" },
+        "quantity": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "flashSaleId", "storeId", "productId"]
+    },
+    "PromoCode": {
+      "title": "PromoCode",
+      "description": "Discount codes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "discountType": { "type": "string" },
+        "discountValue": { "type": "number" },
+        "maxUses": { "type": "number" },
+        "usedCount": { "type": "number" },
+        "status": { "type": "string" },
+        "ownerCustomerId": { "type": "string" }
+      },
+      "required": ["id", "code", "discountType", "discountValue"]
+    },
+    "RechargeCode": {
+      "title": "RechargeCode",
+      "description": "Points recharge codes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "points": { "type": "number" },
+        "status": { "type": "string" },
+        "usedBy": { "type": "string" },
+        "usedAt": { "type": "string" }
+      },
+      "required": ["id", "code", "points"]
+    },
+    "StoreReview": {
+      "title": "StoreReview",
+      "description": "Store review from customer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "storeId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "rating": { "type": "number" },
+        "message": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "isReadByAdmin": { "type": "boolean" }
+      },
+      "required": ["id", "storeId", "customerId", "rating", "createdAt"]
+    },
+    "AdminSettings": {
+      "title": "AdminSettings",
+      "description": "Global app settings managed by admins",
+      "type": "object",
+      "properties": {
+        "autoApproveStores": { "type": "boolean" },
+        "featuredStoreIds": { "type": "array" },
+        "enableAutoNearby": { "type": "boolean" },
+        "nearbyStoreIds": { "type": "array" },
+        "ads": { "type": "array" },
+        "adInterval": { "type": "number" },
+        "lastSyncTime": { "type": "string" }
+      }
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "System administrators",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/stores/{storeId}": { "schema": "Store", "description": "Stores collection" },
+    "/products/{productId}": { "schema": "Product", "description": "Products collection" },
+    "/orders/{orderId}": { "schema": "Order", "description": "Orders collection" },
+    "/customers/{customerId}": { "schema": "Customer", "description": "Customers collection" },
+    "/notifications/{notificationId}": { "schema": "Notification", "description": "Notifications collection" },
+    "/flash_sales/{flashSaleId}": { "schema": "FlashSale", "description": "Flash sales collection" },
+    "/flash_sale_requests/{requestId}": { "schema": "FlashSaleRequest", "description": "Flash sale requests" },
+    "/promo_codes/{codeId}": { "schema": "PromoCode", "description": "Promo codes" },
+    "/recharge_codes/{codeId}": { "schema": "RechargeCode", "description": "Recharge codes" },
+    "/store_reviews/{reviewId}": { "schema": "StoreReview", "description": "Customer reviews for stores" },
+    "/settings/global": { "schema": "AdminSettings", "description": "Global application settings" },
+    "/admins/{adminId}": { "schema": "AdminUser", "description": "Administrators list" }
+  }
+}
