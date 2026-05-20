@@ -74,7 +74,7 @@ export const sendWhatsAppMessage = async (phoneNumber: string, message: string):
       message: error.message
     });
     
-    throw new Error(`${errorMessage} | ${detail} | Reason: ${String(error)}`, { cause: error });
+    throw new Error(`${errorMessage} | ${detail} | Reason: ${String(error)}`);
   }
 };
 

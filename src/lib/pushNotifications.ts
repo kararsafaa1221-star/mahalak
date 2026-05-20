@@ -247,6 +247,9 @@ export async function setupPushNotifications(
       });
 
       OneSignalNative.login(userId);
+
+      // Request permission immediately upon setup
+      requestNotificationPermission();
       
       OneSignalNative.User.pushSubscription.addEventListener('change', (event: any) => {
         if (event.current && event.current.id) {

@@ -398,9 +398,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const deleteProduct = async (id: string, mode?: string) => {
+  const deleteProduct = async (id: string) => {
     try {
-      // mode can be used later if needed
       const pReqs = flashSaleRequests.filter(r => r.productId === id);
       for (const req of pReqs) {
         await deleteDoc(doc(db, 'flash_sale_requests', req.id));
