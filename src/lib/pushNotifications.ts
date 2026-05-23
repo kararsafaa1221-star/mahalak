@@ -1,5 +1,4 @@
 import { Capacitor } from '@capacitor/core';
-import OneSignalNative from 'onesignal-cordova-plugin';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
@@ -230,6 +229,15 @@ export async function setupPushNotifications(
         return;
       }
       
+      let OneSignalNative;
+      try {
+        const module = await import('onesignal-cordova-plugin');
+        OneSignalNative = module.default;
+      } catch (err) {
+        console.error("Failed to load onesignal-cordova-plugin", err);
+        return;
+      }
+      
       OneSignalNative.initialize(appId);
       
       OneSignalNative.Notifications.addEventListener('foregroundWillDisplay', (event: any) => {
@@ -247,9 +255,6 @@ export async function setupPushNotifications(
       });
 
       OneSignalNative.login(userId);
-
-      // Request permission immediately upon setup
-      requestNotificationPermission();
       
       OneSignalNative.User.pushSubscription.addEventListener('change', (event: any) => {
         if (event.current && event.current.id) {
@@ -320,13 +325,30 @@ export async function requestNotificationPermission() {
   if (Capacitor.isNativePlatform()) {
     if (!appId || appId.length < 10) return false;
     
-    return new Promise<boolean>((resolve) => {
-      OneSignalNative.Notifications.requestPermission(true)
-        .then((accepted) => resolve(accepted === true))
-        .catch(() => resolve(false));
-    });
+    return import('onesignal-cordova-plugin')
+      .then(module => {
+        const OneSignalNative = module.default;
+        return OneSignalNative.Notifications.requestPermission(true)
+          .then((accepted: any) => accepted === true)
+          .catch(() => false);
+      })
+      .catch((err) => {
+        console.error("Failed to load onesignal-cordova-plugin for permission", err);
+        return false;
+      });
   } else {
-    // Web Push
+    // Web Push & Native Browser Notifications request
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        Notification.requestPermission().then(perm => {
+          console.log("Native notification permission state:", perm);
+        }).catch(err => {
+          console.warn("Native notification permission request failed:", err);
+        });
+      } catch (e) {
+        console.warn("Notification.requestPermission exception:", e);
+      }
+    }
     return new Promise<boolean>((resolve) => {
       window.OneSignalDeferred = window.OneSignalDeferred || [];
       window.OneSignalDeferred.push(async function(OneSignal: any) {
@@ -342,7 +364,7 @@ export async function requestNotificationPermission() {
 }
 
 export async function showLocalNotification(title: string, body: string, data?: any) {
-  if (Notification.permission === 'granted') {
+  if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
     const registration = await navigator.serviceWorker.ready;
     registration.showNotification(title, {
       body,

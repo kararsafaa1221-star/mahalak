@@ -1,7 +1,15 @@
 /* خط عربي مناسب */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Tajawal:wght@300;400;500;700;800;900&display=swap');
 
 @import "tailwindcss";
+
+@theme {
+  --font-tajawal: 'Tajawal', sans-serif;
+}
+
+.font-tajawal {
+  font-family: 'Tajawal', sans-serif;
+}
 
 /* ==========================================
    ملف الأنماط الرئيسي - منصة محلك
@@ -71,24 +79,16 @@ body {
   animation: scale-up 0.3s ease-out;
 }
 
-/* شريط التمرير المخصص (Custom Scrollbar) */
+/* شريط التمرير المخصص (Custom Scrollbar) - مخفي تماماً لتسهيل التنقل باللمس والإيماءات */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
 }
 
-::-webkit-scrollbar-track {
-  background: #f1f5f9;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+* {
+  scrollbar-width: none !important; /* لمتصفح فايرفوكس */
+  -ms-overflow-style: none !important; /* لمتصفح إنترنت إكسبلورر وإيدج القديم */
 }
 
 /* تحسينات للأزرار والنقر */

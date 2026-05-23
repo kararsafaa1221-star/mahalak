@@ -12,6 +12,27 @@
     <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
   </head>
   <body>
+    <div id="error-container" style="color: red; padding: 20px; font-family: monospace; display: none;"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        var msg = e.message || '';
+        if (msg.toLowerCase().indexOf('websocket') !== -1 || msg.toLowerCase().indexOf('vite') !== -1 || msg.toLowerCase().indexOf('hmr') !== -1) return;
+        document.getElementById('error-container').style.display = 'block';
+        document.getElementById('error-container').innerText += '\n' + e.message + ' at ' + e.filename + ':' + e.lineno;
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var reasonStr = '';
+        if (e.reason) {
+          if (e.reason.stack) reasonStr = e.reason.stack;
+          else if (e.reason.message) reasonStr = e.reason.message;
+          else reasonStr = e.reason.toString();
+        }
+        var lowerReason = reasonStr.toLowerCase();
+        if (lowerReason.indexOf('websocket') !== -1 || lowerReason.indexOf('vite') !== -1 || lowerReason.indexOf('hmr') !== -1) return;
+        document.getElementById('error-container').style.display = 'block';
+        document.getElementById('error-container').innerText += '\nUnhandled Promise: ' + reasonStr;
+      });
+    </script>
     <div id="root"></div>
 
     <script type="module" src="/src/main.tsx"></script>

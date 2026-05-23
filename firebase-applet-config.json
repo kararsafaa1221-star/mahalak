@@ -1,10 +1,8 @@
 {
-  "projectId": "mahalak-0",
-  "appId": "1:405501753361:web:416d771d8ced065298d9b0",
-  "apiKey": "AIzaSyC5swHqwDCDgh_icSUkRLdjKvWNnGP2aEA",
+  "apiKey": "AIzaSyAnx_mRGGnbzKICKdh6qqrfL3jYRMGXZfI",
   "authDomain": "mahalak-0.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-c4f0db08-0527-4118-8a29-362428b60560",
+  "projectId": "mahalak-0",
   "storageBucket": "mahalak-0.firebasestorage.app",
   "messagingSenderId": "405501753361",
-  "measurementId": ""
+  "appId": "461ffa4c1e8ebb6e98d9b01:405501753361"
 }
