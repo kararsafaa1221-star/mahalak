@@ -107,26 +107,54 @@ export const MerchantApp: React.FC = () => {
   // فتح الروابط الخارجية مباشرة وبدون فتح نافذة جديدة في الموبايل أو كاباسيتور
   const openExternalUrl = (url: string) => {
     if (!url) return;
-    const isCapacitor = !!(window as any).Capacitor;
-    if (isCapacitor) {
-      window.open(url, '_system');
-      return;
-    }
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const isIframe = window.self !== window.top;
     
-    if (isMobile || isIframe || url.includes('wa.me') || url.includes('t.me') || url.includes('messenger') || url.includes('facebook')) {
-      window.location.assign(url);
-    } else {
-      try {
-        const win = window.open(url, '_blank');
-        if (!win) {
+    const lowerUrl = url.toLowerCase();
+
+    // التحقق مما إذا كان الرابط هو لأحد تطبيقات التواصل الاجتماعي، الخرائط أو الاتصال (جوجل ماب، ويز، واتساب، تليغرام، مسنجر، إنستقرام، فيسبوك، ويب، هواتف)
+    const isAppInstallLink = 
+      lowerUrl.includes('wa.me') || 
+      lowerUrl.includes('whatsapp') || 
+      lowerUrl.includes('t.me') || 
+      lowerUrl.includes('telegram') || 
+      lowerUrl.includes('maps.google') || 
+      lowerUrl.includes('google.com/maps') || 
+      lowerUrl.includes('google.co.id/maps') || 
+      lowerUrl.includes('google.iq/maps') || 
+      lowerUrl.includes('maps.apple.com') || 
+      lowerUrl.includes('waze.com') || 
+      lowerUrl.includes('waze://') || 
+      lowerUrl.includes('messenger') || 
+      lowerUrl.includes('facebook.com') || 
+      lowerUrl.includes('instagram.com') || 
+      lowerUrl.startsWith('tel:') || 
+      lowerUrl.startsWith('mailto:');
+
+    if (isAppInstallLink) {
+      const isCapacitor = !!(window as any).Capacitor;
+      if (isCapacitor) {
+        window.open(url, '_system');
+        return;
+      }
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      const isIframe = window.self !== window.top;
+      
+      if (isMobile || isIframe) {
+        window.location.assign(url);
+      } else {
+        try {
+          const win = window.open(url, '_blank');
+          if (!win) {
+            window.location.assign(url);
+          }
+        } catch (_e) {
           window.location.assign(url);
         }
-      } catch (_e) {
-        window.location.assign(url);
       }
+      return;
     }
+
+    // الروابط العادية تنفتح داخل التطبيق
+    setIframeUrl(url);
   };
 
   // ==========================================
@@ -175,6 +203,7 @@ export const MerchantApp: React.FC = () => {
     | "flashsales"
   >("home");
   const [showNotifications, setShowNotifications] = useState(false);
+  const [iframeUrl, setIframeUrl] = useState<string | null>(null);
 
   // ==========================================
   // نظام التزامن مع تاريخ المتصفح لدعم رجوع الأندرويد وإيماءات اليد (للتاجر)
@@ -5509,6 +5538,60 @@ https://mahallak.app/store/${data.id}`
           onClose={() => setShowBgRemoverModal(false)}
           onSelectImage={setProdImage}
         />
+
+        {/* نافذة عرض الروابط الخارجية داخل التطبيق مع زر الرجوع للتطبيق */}
+        <AnimatePresence>
+          {iframeUrl && (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[150] flex flex-col overflow-hidden animate-fade-in" dir="rtl">
+              {/* شريط التحكم العلوي */}
+              <div className="bg-gradient-to-l from-[#4D2980] to-[#381a66] text-white py-3 px-4 flex items-center justify-between shadow-lg border-b border-white/10 z-50">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                    <StoreIcon size={18} className="text-amber-400" />
+                  </div>
+                  <div className="max-w-[150px] sm:max-w-xs text-right">
+                    <h3 className="text-xs sm:text-sm font-black text-white font-tajawal">مستعرض محلك الداخلي</h3>
+                    <p className="text-[10px] text-slate-300 font-bold truncate leading-none mt-0.5">{iframeUrl}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      try {
+                        navigator.clipboard.writeText(iframeUrl);
+                        alert('تم نسخ الرابط بنجاح! ✅');
+                      } catch (err) {
+                        console.error(err);
+                      }
+                    }}
+                    className="p-2 hover:bg-white/10 rounded-xl text-white transition-colors animate-pulse"
+                    title="نسخ الرابط"
+                  >
+                    <Copy size={16} />
+                  </button>
+                  <button
+                    onClick={() => setIframeUrl(null)}
+                    className="px-4 py-2 sm:px-5 sm:py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 active:scale-95 text-slate-900 font-extrabold rounded-xl text-xs sm:text-sm shadow-md transition-all flex items-center gap-1.5"
+                  >
+                    <ChevronRight size={16} className="rotate-180" />
+                    <span>الرجوع للتطبيق</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* محتوى الصفحة الخارجي */}
+              <div className="flex-1 bg-white relative">
+                <iframe
+                  src={iframeUrl}
+                  className="w-full h-full border-none"
+                  title="موقع خارجي"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                />
+              </div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     );
   }
@@ -6003,6 +6086,60 @@ https://mahallak.app/store/${data.id}`
           </form>
         )}
       </div>
+
+      {/* نافذة عرض الروابط الخارجية داخل التطبيق مع زر الرجوع للتطبيق */}
+      <AnimatePresence>
+        {iframeUrl && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[150] flex flex-col overflow-hidden animate-fade-in" dir="rtl">
+            {/* شريط التحكم العلوي */}
+            <div className="bg-gradient-to-l from-[#4D2980] to-[#381a66] text-white py-3 px-4 flex items-center justify-between shadow-lg border-b border-white/10 z-50">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                  <StoreIcon size={18} className="text-amber-400" />
+                </div>
+                <div className="max-w-[150px] sm:max-w-xs text-right">
+                  <h3 className="text-xs sm:text-sm font-black text-white font-tajawal">مستعرض محلك الداخلي</h3>
+                  <p className="text-[10px] text-slate-300 font-bold truncate leading-none mt-0.5">{iframeUrl}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    try {
+                      navigator.clipboard.writeText(iframeUrl);
+                      alert('تم نسخ الرابط بنجاح! ✅');
+                    } catch (err) {
+                      console.error(err);
+                    }
+                  }}
+                  className="p-2 hover:bg-white/10 rounded-xl text-white transition-colors animate-pulse"
+                  title="نسخ الرابط"
+                >
+                  <Copy size={16} />
+                </button>
+                <button
+                  onClick={() => setIframeUrl(null)}
+                  className="px-4 py-2 sm:px-5 sm:py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 active:scale-95 text-slate-900 font-extrabold rounded-xl text-xs sm:text-sm shadow-md transition-all flex items-center gap-1.5"
+                >
+                  <ChevronRight size={16} className="rotate-180" />
+                  <span>الرجوع للتطبيق</span>
+                </button>
+              </div>
+            </div>
+
+            {/* محتوى الصفحة الخارجي */}
+            <div className="flex-1 bg-white relative">
+              <iframe
+                src={iframeUrl}
+                className="w-full h-full border-none"
+                title="موقع خارجي"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              />
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

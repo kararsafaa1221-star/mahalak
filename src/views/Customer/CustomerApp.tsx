@@ -500,6 +500,7 @@ export const CustomerApp: React.FC = () => {
   // حالة تأكيد التغييرات غير المحفوظة
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingTab, setPendingTab] = useState<any>(null);
+  const [iframeUrl, setIframeUrl] = useState<string | null>(null);
 
   // التحقق من وجود تغييرات غير محفوظة في الملف الشخصي
   const isProfileDirty = () => {
@@ -1275,31 +1276,59 @@ export const CustomerApp: React.FC = () => {
   const openExternalUrl = (url: string) => {
     if (!url) return;
 
-    // التحقق مما إذا كان التطبيق يعمل كـ Capacitor (أي تطبيق أندرويد/آيفون مثبت)
-    // في بيئة كاباسيتور، استخدام '_system' يوجه الرابط ليُفتح بالتطبيق الأصلي للنظام أو المتصفح الخارجي لحل مشكلة واتساب والاتصال
-    const isCapacitor = !!(window as any).Capacitor;
-    if (isCapacitor) {
-      window.open(url, '_system');
+    const lowerUrl = url.toLowerCase();
+
+    // التحقق مما إذا كان الرابط هو لأحد تطبيقات التواصل الاجتماعي، الخرائط أو الاتصال (جوجل ماب، ويز، واتساب، تليغرام، مسنجر، إنستقرام، فيسبوك، ويب، هواتف)
+    const isAppInstallLink = 
+      lowerUrl.includes('wa.me') || 
+      lowerUrl.includes('whatsapp') || 
+      lowerUrl.includes('t.me') || 
+      lowerUrl.includes('telegram') || 
+      lowerUrl.includes('maps.google') || 
+      lowerUrl.includes('google.com/maps') || 
+      lowerUrl.includes('google.co.id/maps') || 
+      lowerUrl.includes('google.iq/maps') || 
+      lowerUrl.includes('maps.apple.com') || 
+      lowerUrl.includes('waze.com') || 
+      lowerUrl.includes('waze://') || 
+      lowerUrl.includes('messenger') || 
+      lowerUrl.includes('facebook.com') || 
+      lowerUrl.includes('instagram.com') || 
+      lowerUrl.startsWith('tel:') || 
+      lowerUrl.startsWith('mailto:');
+
+    // إذا كان رابط تطبيق خارجي، نقوم بفتحه خارجياً مباشرةً (ينقله لتطبيق آخر)
+    if (isAppInstallLink) {
+      // التحقق مما إذا كان التطبيق يعمل كـ Capacitor (أي تطبيق أندرويد/آيفون مثبت)
+      // في بيئة كاباسيتور، استخدام '_system' يوجه الرابط ليُفتح بالتطبيق الأصلي للنظام أو المتصفح الخارجي لحل مشكلة واتساب والاتصال
+      const isCapacitor = !!(window as any).Capacitor;
+      if (isCapacitor) {
+        window.open(url, '_system');
+        return;
+      }
+
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      const isIframe = window.self !== window.top;
+      
+      // في الهواتف أو عند العرض داخل إطار تفاعلي (iframe)، الانتقال في الموضع الحالي (window.location.assign) 
+      // هو الأضمن لفتح تطبيق واتساب/تليغرام/مسنجر مباشرة وتجنب إعتراض المتصفح أو ظهور صفحة زرقاء
+      if (isMobile || isIframe) {
+        window.location.assign(url);
+      } else {
+        try {
+          const win = window.open(url, '_blank');
+          if (!win) {
+            window.location.assign(url);
+          }
+        } catch (_e) {
+          window.location.assign(url);
+        }
+      }
       return;
     }
 
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const isIframe = window.self !== window.top;
-    
-    // في الهواتف أو عند العرض داخل إطار تفاعلي (iframe)، الانتقال في الموضع الحالي (window.location.assign) 
-    // هو الأضمن لفتح تطبيق واتساب/تليغرام/مسنجر مباشرة وتجنب إعتراض المتصفح أو ظهور صفحة زرقاء
-    if (isMobile || isIframe || url.includes('wa.me') || url.includes('t.me') || url.includes('messenger') || url.includes('facebook')) {
-      window.location.assign(url);
-    } else {
-      try {
-        const win = window.open(url, '_blank');
-        if (!win) {
-          window.location.assign(url);
-        }
-      } catch (_e) {
-        window.location.assign(url);
-      }
-    }
+    // إذا كان الرابط عادي وليس تطبيق تواصل أو خرائط، نفتحه في الـ Iframe داخل التطبيق لكي يسهل للمستخدم الرجوع للتطبيق بلمسة زر!
+    setIframeUrl(url);
   };
 
   // مشاركة المتجر (WhatsApp)
@@ -2061,6 +2090,11 @@ export const CustomerApp: React.FC = () => {
                               <div className="absolute bottom-2 left-2 z-10 animate-fade-in" title="موثق رسمياً">
                                 <VerifiedBadge size={20} />
                               </div>
+                              {adminSettings.featuredStoreIds?.includes(store.id) && (
+                                <div className="absolute top-2 right-2 bg-gradient-to-tr from-amber-400 to-amber-500 text-white p-1 rounded-md shadow-xs z-10 animate-fade-in" title="متجر مميز">
+                                  <Zap size={10} fill="currentColor" />
+                                </div>
+                              )}
                             </div>
                             
                             {/* البيانات تحت الشعار */}
@@ -2203,9 +2237,11 @@ export const CustomerApp: React.FC = () => {
                                   <VerifiedBadge size={20} />
                                 </div>
                               )}
-                              <div className="absolute top-2 right-2 bg-amber-400 text-white p-1 rounded-md shadow-sm">
-                                <Zap size={10} fill="currentColor" />
-                              </div>
+                              {adminSettings.featuredStoreIds?.includes(store.id) && (
+                                <div className="absolute top-2 right-2 bg-gradient-to-tr from-amber-400 to-amber-500 text-white p-1 rounded-md shadow-sm z-10 animate-fade-in" title="متجر مميز">
+                                  <Zap size={10} fill="currentColor" />
+                                </div>
+                              )}
                             </div>
                             
                             {/* البيانات تحت الشعار */}
@@ -2321,6 +2357,11 @@ export const CustomerApp: React.FC = () => {
                                 {dist && (
                                   <div className="absolute top-2 right-2 bg-[#9952FF] text-white px-1.5 py-0.5 rounded-md shadow-sm border border-[#e9daff]">
                                     <span className="text-[8px] sm:text-[9.5px] font-black leading-none">{dist}كم</span>
+                                  </div>
+                                )}
+                                {adminSettings.featuredStoreIds?.includes(store.id) && (
+                                  <div className={`absolute top-2 ${dist ? 'left-2' : 'right-2'} bg-gradient-to-tr from-amber-400 to-amber-500 text-white p-1 rounded-md shadow-sm z-10 animate-fade-in`} title="متجر مميز">
+                                    <Zap size={10} fill="currentColor" />
                                   </div>
                                 )}
                               </div>
@@ -2548,6 +2589,11 @@ export const CustomerApp: React.FC = () => {
                             {(store.isVerified || (store as any).is_verified) && (
                               <div className="absolute bottom-2 left-2 z-10 animate-fade-in" title="موثق رسمياً">
                                 <VerifiedBadge size={22} />
+                              </div>
+                            )}
+                            {adminSettings.featuredStoreIds?.includes(store.id) && (
+                              <div className="absolute top-2 right-2 bg-gradient-to-tr from-amber-400 to-amber-500 text-white p-1 rounded-md shadow-xs z-10 animate-fade-in" title="متجر مميز">
+                                <Zap size={10} fill="currentColor" />
                               </div>
                             )}
                           </div>
@@ -4319,6 +4365,60 @@ export const CustomerApp: React.FC = () => {
                   </button>
                 </div>
               </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* نافذة عرض الروابط الخارجية داخل التطبيق مع زر الرجوع للتطبيق */}
+        <AnimatePresence>
+          {iframeUrl && (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[150] flex flex-col overflow-hidden animate-fade-in" dir="rtl">
+              {/* شريط التحكم العلوي */}
+              <div className="bg-gradient-to-l from-[#4D2980] to-[#381a66] text-white py-3 px-4 flex items-center justify-between shadow-lg border-b border-white/10 z-50">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                    <ShoppingBag size={18} className="text-amber-400" />
+                  </div>
+                  <div className="max-w-[150px] sm:max-w-xs text-right">
+                    <h3 className="text-xs sm:text-sm font-black text-white font-tajawal">مستعرض محلك الداخلي</h3>
+                    <p className="text-[10px] text-slate-300 font-bold truncate leading-none mt-0.5">{iframeUrl}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      try {
+                        navigator.clipboard.writeText(iframeUrl);
+                        alert('تم نسخ الرابط بنجاح! ✅');
+                      } catch (err) {
+                        console.error(err);
+                      }
+                    }}
+                    className="p-2 hover:bg-white/10 rounded-xl text-white transition-colors animate-pulse"
+                    title="نسخ الرابط"
+                  >
+                    <Copy size={16} />
+                  </button>
+                  <button
+                    onClick={() => setIframeUrl(null)}
+                    className="px-4 py-2 sm:px-5 sm:py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 active:scale-95 text-slate-900 font-extrabold rounded-xl text-xs sm:text-sm shadow-md transition-all flex items-center gap-1.5"
+                  >
+                    <ChevronRight size={16} className="rotate-180" />
+                    <span>الرجوع للتطبيق</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* محتوى الصفحة الخارجي */}
+              <div className="flex-1 bg-white relative">
+                <iframe
+                  src={iframeUrl}
+                  className="w-full h-full border-none"
+                  title="موقع خارجي"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                />
+              </div>
             </div>
           )}
         </AnimatePresence>
