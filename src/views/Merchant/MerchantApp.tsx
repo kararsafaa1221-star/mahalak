@@ -8,6 +8,18 @@ import { formatSafeDate, formatSafeTimeString, formatSafeDateTimeString } from "
 import { motion, AnimatePresence } from "framer-motion";
 import { useReactToPrint } from "react-to-print";
 import { QRCodeSVG } from "qrcode.react";
+import { MapContainer, TileLayer, Marker } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
+
+// Fix leaflet marker icon issue
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+});
+
 import {
   Store as StoreIcon,
   Package,
@@ -46,8 +58,18 @@ import {
   MoreVertical,
   Car,
   Sparkles,
+  Film,
+  Eye,
+  Heart,
+  Play,
+  Pause,
+  Loader2,
 } from "lucide-react";
+import { collection, doc, query, where, getDocs, deleteDoc } from "firebase/firestore";
+import { db } from "../../lib/firebase";
+import { Reel } from "../../types";
 import { ImageUploader } from "../../components/ImageUploader";
+import { UploadReel } from "../../components/UploadReel";
 import { BackgroundRemover } from "../../components/BackgroundRemover";
 import { LocationPicker } from "../../components/LocationPicker";
 import { CopyButton } from "../../components/CopyButton";
@@ -201,6 +223,7 @@ export const MerchantApp: React.FC = () => {
     | "customers"
     | "profile"
     | "flashsales"
+    | "reels"
   >("home");
   const [showNotifications, setShowNotifications] = useState(false);
   const [iframeUrl, setIframeUrl] = useState<string | null>(null);
@@ -702,6 +725,61 @@ https://mahallak.app/store/${data.id}`
 
   const [audienceSearchQuery, setAudienceSearchQuery] = useState("");
   const [selectedAudienceId, setSelectedAudienceId] = useState<string | null>(null);
+
+  // ==========================================
+  // نظام إدارة مقاطع الريلز الخاصة بالتاجر
+  // ==========================================
+  const [merchantReels, setMerchantReels] = useState<Reel[]>([]);
+  const [loadingReels, setLoadingReels] = useState(false);
+  const [reelsTabMode, setReelsTabMode] = useState<"list" | "create" | "edit">("list");
+  const [editingReel, setEditingReel] = useState<Reel | null>(null);
+
+  const fetchMerchantReels = React.useCallback(async () => {
+    if (!currentMerchant?.id) return;
+    setLoadingReels(true);
+    try {
+      const reelsRef = collection(db, "reels");
+      const q = query(reelsRef, where("merchantId", "==", currentMerchant.id));
+      const querySnapshot = await getDocs(q);
+      const fetched: Reel[] = [];
+      querySnapshot.forEach((docSnap) => {
+        fetched.push({ id: docSnap.id, ...docSnap.data() } as Reel);
+      });
+      fetched.sort((a, b) => {
+        const timeA = a.createdAt?.seconds ? a.createdAt.seconds : 0;
+        const timeB = b.createdAt?.seconds ? b.createdAt.seconds : 0;
+        return timeB - timeA;
+      });
+      setMerchantReels(fetched);
+    } catch (err) {
+      console.error("Error fetching merchant reels:", err);
+    } finally {
+      setLoadingReels(false);
+    }
+  }, [currentMerchant]);
+
+  useEffect(() => {
+    if (activeTab === "reels" && currentMerchant?.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchMerchantReels();
+    }
+  }, [activeTab, currentMerchant?.id, fetchMerchantReels]);
+
+  const handleDeleteReel = async (reelId: string) => {
+    if (!window.confirm("هل أنت متأكد من حذف هذا الريل نهائياً؟")) return;
+    try {
+      await deleteDoc(doc(db, "reels", reelId));
+      setMerchantReels((prev) => prev.filter((r) => r.id !== reelId));
+    } catch (err) {
+      console.error("Error deleting reel:", err);
+      alert("فشل حذف مقطع الريل. يرجى المحاولة لاحقاً.");
+    }
+  };
+
+  const handleStartEditReel = (reel: Reel) => {
+    setEditingReel(reel);
+    setReelsTabMode("edit");
+  };
 
   // ==========================================
   // التحديث اللحظي للطلبات (Placeholder)
@@ -1487,9 +1565,8 @@ https://mahallak.app/store/${data.id}`
             {[
               { id: "home", icon: StoreIcon, label: "الرئيسية" },
               { id: "products", icon: Package, label: "المنتجات" },
+              { id: "reels", icon: Film, label: "ريلز التسوق" },
               { id: "orders", icon: ClipboardList, label: "الطلبات" },
-              { id: "promo", icon: Ticket, label: "الخصومات" },
-              { id: "flashsales", icon: Gift, label: "الفعاليات" },
               { id: "customers", icon: Users, label: "زبائني" },
               { id: "profile", icon: User, label: "حسابي" },
             ].map((item) => (
@@ -1522,9 +1599,8 @@ https://mahallak.app/store/${data.id}`
           {[
             { id: "home", icon: StoreIcon, label: "الرئيسية" },
             { id: "products", icon: Package, label: "المنتجات" },
+            { id: "reels", icon: Film, label: "ريلز" },
             { id: "orders", icon: ClipboardList, label: "الطلبات" },
-            { id: "promo", icon: Ticket, label: "الخصومات" },
-            { id: "flashsales", icon: Gift, label: "الفعاليات" },
             { id: "customers", icon: Users, label: "زبائني" },
             { id: "profile", icon: User, label: "حسابي" },
           ].map((item) => (
@@ -1796,6 +1872,24 @@ https://mahallak.app/store/${data.id}`
                     color: "text-emerald-600",
                     tab: "home"
                   },
+                  {
+                    label: "الريلز المرفوعة",
+                    val: merchantReels.filter(r => r.merchantId === currentMerchant.id).length || 0,
+                    color: "text-blue-500",
+                    tab: "reels"
+                  },
+                  {
+                    label: "التقييمات",
+                    val: currentMerchant.rating ? `${currentMerchant.rating.toFixed(1)} / 5` : "0",
+                    color: "text-amber-500",
+                    tab: "home"
+                  },
+                  {
+                    label: "عروض فلاش سيلز",
+                    val: flashSales.filter(f => f.itemStoreId === currentMerchant.id && f.status === "active").length,
+                    color: "text-red-500",
+                    tab: "home"
+                  },
                 ].map((s, i) => (
                   <div
                     key={i}
@@ -1838,6 +1932,395 @@ https://mahallak.app/store/${data.id}`
                   </button>
                 </div>
               </div>
+
+              {/* أكواد الخصم والخصومات المضافة */}
+              <div className="space-y-6 pt-2">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border flex justify-between items-center">
+                  <div>
+                    <h2 className="text-lg font-bold">أكواد الخصم 🎫</h2>
+                  </div>
+                  <button
+                    onClick={() => setPromoModal(true)}
+                    className="px-4 py-2 bg-[#9952FF] text-white font-bold rounded-xl shadow-md flex items-center space-x-2 space-x-reverse"
+                  >
+                    <Plus size={18} />
+                    <span>إنشاء كود خَصم</span>
+                  </button>
+                </div>
+                {merchantPromos.length === 0 ? (
+                  <div className="bg-white p-8 rounded-2xl border text-center text-slate-400">
+                    لا توجد أكواد خصم نشطة حالياً. اضغط على الزر أعلاه لإنشاء كود أول.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {merchantPromos.map((p) => (
+                      <div
+                        key={p.id}
+                        className="bg-white p-5 rounded-2xl border shadow-sm"
+                      >
+                        <div className="flex justify-between items-center mb-3">
+                          <div className="flex items-center gap-1">
+                            <code className="bg-slate-50 text-slate-700 px-3 py-1.5 rounded-xl font-black tracking-wider">
+                              {p.code}
+                            </code>
+                            <CopyButton text={p.code} size={11} />
+                          </div>
+                          <span
+                            className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${p.status === "active" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}
+                          >
+                            {p.status === "active" ? "فعال" : "منتهي"}
+                          </span>
+                        </div>
+                        <span className="text-lg font-black">
+                          {(p.discountValue || 0).toLocaleString()}{" "}
+                          {p.discountType === "percent" ? "%" : "د.ع"}
+                        </span>
+                        <div className="flex justify-between mt-3 text-xs text-slate-500">
+                          <p>
+                            استخدام: {p.usedCount}/{p.maxUses}
+                          </p>
+                          {p.maxUsesPerUser && <p>حصة الفرد: {p.maxUsesPerUser}</p>}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-2 bg-slate-50 p-1.5 rounded-lg text-center">
+                          {p.startDate
+                            ? `${formatSafeDate(p.startDate)} إلى `
+                            : ""}
+                          {p.expiresAt
+                            ? formatSafeDate(p.expiresAt)
+                            : "مستمر"}
+                        </p>
+                        <div className="flex justify-between items-center mt-3 pt-3 border-t">
+                          <button
+                            onClick={() => togglePromoCodeStatus(p.id)}
+                            className={`text-xs font-bold px-3 py-1.5 rounded-xl transition ${
+                              p.status === "active"
+                                ? "bg-orange-50 text-orange-600 hover:bg-orange-100"
+                                : "bg-green-50 text-green-600 hover:bg-green-100"
+                            }`}
+                          >
+                            {p.status === "active" ? "إيقاف" : "تفعيل"}
+                          </button>
+                          <button
+                            onClick={() => deletePromoCode(p.id)}
+                            className="p-1.5 text-red-400 bg-red-50 hover:bg-red-500 hover:text-white rounded-xl transition"
+                            title="حذف الكود نهائياً"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* الفعاليات المركزية */}
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <div className="bg-gradient-to-l from-yellow-50 to-white rounded-2xl border shadow-sm p-6 overflow-hidden relative text-right">
+                  <div className="absolute top-0 right-0 p-4 opacity-10">
+                    <Zap size={100} className="text-yellow-500" />
+                  </div>
+                  <div className="relative z-10 text-right">
+                    <h3 className="font-black text-2xl text-[#4D2980] flex items-center space-x-2 space-x-reverse mb-2 justify-start">
+                      <Zap size={24} className="text-yellow-500" />
+                      <span>الفعاليات المركزية (Flash Sales)</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 max-w-sm">
+                      شارك بمنتجاتك في الفعاليات المركزية وحقق مبيعات ضخمة خلال
+                      فترة قصيرة!
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4">
+                  {flashSales.filter((s) => s.status !== "ended" && s.status !== "paused").length === 0 ? (
+                    <div className="bg-white p-12 rounded-2xl border shadow-sm text-center">
+                      <Gift size={48} className="mx-auto text-slate-200 mb-4" />
+                      <p className="font-bold text-slate-400">
+                        لا توجد فعاليات مركزية حالياً
+                      </p>
+                    </div>
+                  ) : (
+                    flashSales
+                      .filter((s) => s.status !== "ended" && s.status !== "paused")
+                      .map((sale) => {
+                        const isUpcoming = new Date() < new Date(sale.startTime);
+                        const myRequests = flashSaleRequests.filter(
+                          (r) =>
+                            r.flashSaleId === sale.id &&
+                            r.storeId === currentMerchant.id,
+                        );
+                        return (
+                          <div
+                            key={sale.id}
+                            className="bg-white rounded-2xl border shadow-sm p-6 text-right"
+                          >
+                            <div className="flex justify-between items-start mb-4">
+                              <div>
+                                <h4 className="font-black text-lg text-[#4D2980]">
+                                  {sale.title}
+                                </h4>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  {sale.description}
+                                </p>
+                              </div>
+                              {(sale.status === "upcoming" && isUpcoming) && (
+                                <span className="px-3 py-1 bg-amber-100 text-amber-700 text-[10px] font-bold rounded-full border border-amber-200">
+                                  تبدأ قريباً
+                                </span>
+                              )}
+                              {(sale.status === "active" || (!isUpcoming)) && (
+                                <span className="px-3 py-1 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200 flex items-center gap-1">
+                                  <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></div>
+                                  فعالية نشطة الآن
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex gap-4 mb-6 text-[11px] font-bold text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                              <div>
+                                يبدأ:{" "}
+                                <span
+                                  className="font-mono text-[#4D2980]"
+                                  dir="ltr"
+                                >
+                                  {formatSafeDateTimeString(sale.startTime)}
+                                </span>
+                              </div>
+                              <div>
+                                ينتهي:{" "}
+                                <span
+                                  className="font-mono text-[#4D2980]"
+                                  dir="ltr"
+                                >
+                                  {formatSafeDateTimeString(sale.endTime)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {sale.status === "active" &&
+                              myRequests.length === 0 && (
+                                <div className="bg-rose-50 text-rose-600 p-3 rounded-xl text-xs font-bold mb-4 border border-rose-100 text-center">
+                                  لا يمكنك المشاركة لأن الفعالية قد بدأت بالفعل.
+                                  يرجى التقديم في الفعاليات القادمة مسبقاً.
+                                </div>
+                              )}
+
+                            <div className="space-y-3">
+                              <h5 className="font-bold text-slate-700 text-xs flex justify-between items-center pb-2 border-b">
+                                <span>
+                                  منتجاتك المشاركة ({myRequests.length})
+                                </span>
+                                {(sale.status === "upcoming" && isUpcoming) && (
+                                  <button
+                                    onClick={() =>
+                                      setJoinFlashSaleData({
+                                        flashSaleId: sale.id,
+                                      })
+                                    }
+                                    className="px-3 py-1 bg-slate-50 text-[#4D2980] rounded-lg font-bold text-[10px] hover:bg-slate-100 transition"
+                                  >
+                                    + طلب مشاركة لمنتج
+                                  </button>
+                                )}
+                              </h5>
+
+                              {myRequests.length === 0 && (
+                                <div className="text-center text-slate-400 py-4 text-xs font-bold bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                                  لم يتم مشاركه لمنتج
+                                </div>
+                              )}
+
+                              {myRequests.map((req) => {
+                                const p = products.find(
+                                  (prod) => prod.id === req.productId,
+                                );
+                                if (!p) return null;
+                                return (
+                                  <div
+                                    key={req.id}
+                                    className="flex justify-between items-center p-3 bg-white border border-slate-100 rounded-2xl shadow-sm"
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      <img
+                                        src={p.image || undefined}
+                                        className="w-10 h-10 rounded-xl object-cover"
+                                      />
+                                      <div>
+                                        <h6 className="font-black text-[11px] text-[#4D2980]">
+                                          {p.name}
+                                        </h6>
+                                        <div className="flex gap-2 text-[9px] mt-0.5">
+                                          <span className="text-slate-400">
+                                            أصلي:{" "}
+                                            <del>{p.price.toLocaleString()}</del>
+                                          </span>
+                                          <span className="text-rose-600 font-black">
+                                            حالي:{" "}
+                                            {req.promotionalPrice.toLocaleString()}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      {req.status === "pending" && (
+                                        <span className="px-2 py-1 bg-slate-100 text-slate-600 font-bold text-[9px] rounded uppercase">
+                                          قيد المراجعة
+                                        </span>
+                                      )}
+                                      {req.status === "approved" && (
+                                        <span className="px-2 py-1 bg-emerald-100 text-emerald-700 font-bold text-[9px] rounded uppercase">
+                                          مقبول
+                                        </span>
+                                      )}
+                                      {req.status === "rejected" && (
+                                        <span className="px-2 py-1 bg-rose-100 text-rose-700 font-bold text-[9px] rounded uppercase">
+                                          مرفوض
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "reels" && (
+            <div className="space-y-6 animate-fade-in max-w-2xl mx-auto" dir="rtl">
+              {reelsTabMode === "list" ? (
+                <div className="space-y-5">
+                  <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div>
+                      <h2 className="text-xl font-black text-slate-900 font-tajawal flex items-center gap-2">
+                        <Film className="text-[#9952FF]" size={22} />
+                        <span>منشورات الريلز الخاصة بك 🎬</span>
+                      </h2>
+                      <p className="text-xs text-slate-500 font-medium mt-1">إهتم بزيادة مبيعاتك بنشر مقاطع قصيرة تشرح جودة منتجاتك وتوفر تسوقاً مباشراً وسهلاً للمشترين!</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setEditingReel(null);
+                        setReelsTabMode("create");
+                      }}
+                      className="whitespace-nowrap px-5 py-3 bg-[#9952FF] hover:bg-[#853df2] text-white font-black rounded-2xl shadow-lg shadow-[#9952FF]/10 flex items-center gap-2 transition active:scale-95"
+                    >
+                      <Plus size={18} />
+                      <span>إضافة ريلز</span>
+                    </button>
+                  </div>
+
+                  {loadingReels ? (
+                    <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-3">
+                      <Loader2 size={32} className="animate-spin text-[#9952FF]" />
+                      <p className="text-xs text-slate-500 font-bold">جاري تحميل منشورات الريلز...</p>
+                    </div>
+                  ) : merchantReels.length === 0 ? (
+                    <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm text-center">
+                      <Film size={48} className="mx-auto text-slate-200 mb-4" />
+                      <h3 className="font-black text-base text-slate-800 font-tajawal">لم تقم بنشر أي ريلز بعد!</h3>
+                      <p className="text-xs text-slate-400 font-medium mt-2 max-w-xs mx-auto">
+                        سارع بنشر مقاطع فيديو قصيرة حول منتجاتك لتتحول لخيارات تسوق فورية لزبائن المتجر وتكسب انتشاراً أسرع!
+                      </p>
+                      <button
+                        onClick={() => {
+                          setEditingReel(null);
+                          setReelsTabMode("create");
+                        }}
+                        className="mt-5 px-5 py-2.5 bg-[#9952FF]/10 text-[#9952FF] font-black text-xs rounded-xl hover:bg-[#9952FF]/15 transition"
+                      >
+                        + انشر أول ريلز لمتجرك الآن
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {merchantReels.map((reel) => {
+                        const prod = products.find((p) => p.id === reel.linkedProductId);
+                        return (
+                          <div key={reel.id} className="bg-white overflow-hidden rounded-2xl border border-slate-100 shadow-sm flex gap-4 p-4 items-center">
+                            {/* Video container */}
+                            <div className="relative w-24 h-36 bg-slate-900 rounded-xl overflow-hidden shrink-0 group">
+                              <video
+                                src={reel.videoUrl}
+                                preload="metadata"
+                                className="w-full h-full object-cover"
+                                muted
+                                playsInline
+                              />
+                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition duration-200">
+                                <Play size={20} className="text-white fill-current" />
+                              </div>
+                            </div>
+
+                            {/* Reel Info */}
+                            <div className="flex-1 min-w-0 pr-1 flex flex-col justify-between h-36 py-1 text-right">
+                              <div>
+                                <h3 className="text-sm font-black text-slate-950 font-tajawal truncate mb-2">
+                                  {prod ? prod.name : "منتج غير موجود أو محذوف ⚠️"}
+                                </h3>
+                                {prod && (
+                                  <span className="text-xs font-bold text-[#9952FF] bg-[#9952FF]/5 px-2.5 py-1 rounded-lg">
+                                    {(prod.finalPrice || prod.price).toLocaleString()} د.ع
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* stats */}
+                              <div className="flex items-center gap-4 text-slate-500 text-xs font-semibold my-2">
+                                <div className="flex items-center gap-1">
+                                  <Eye size={14} className="text-slate-400" />
+                                  <span>{(reel.viewsCount || 0).toLocaleString()}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <Heart size={14} className="text-rose-500" />
+                                  <span>{(reel.likesCount || 0).toLocaleString()}</span>
+                                </div>
+                              </div>
+
+                              {/* Buttons */}
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleStartEditReel(reel)}
+                                  className="flex-1 py-2 bg-slate-50 hover:bg-[#9952FF]/5 hover:text-[#9952FF] text-slate-600 font-bold text-xs rounded-xl border border-slate-100 transition flex items-center justify-center gap-1.5"
+                                >
+                                  <Edit size={14} />
+                                  <span>تعديل</span>
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteReel(reel.id)}
+                                  className="py-2 px-3 bg-rose-50 hover:bg-rose-500 hover:text-white text-rose-600 font-bold text-xs rounded-xl border border-rose-100 transition flex items-center justify-center"
+                                  title="حذف"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="animate-fade-in">
+                  <UploadReel
+                    reelToEdit={editingReel}
+                    onSuccess={() => {
+                      setReelsTabMode("list");
+                      fetchMerchantReels();
+                    }}
+                    onCancel={() => {
+                      setReelsTabMode("list");
+                    }}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -2437,25 +2920,44 @@ https://mahallak.app/store/${data.id}`
                                   {o.customerProvince} - {o.customerAddress}
                                 </p>
                                 {(o as any).customerLat && (o as any).customerLng && (
-                                  <div className="flex gap-2 mt-1.5">
-                                    <a 
-                                      href={`https://www.google.com/maps/search/?api=1&query=${(o as any).customerLat},${(o as any).customerLng}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="flex items-center gap-1 text-[8px] font-black bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded shadow-sm hover:bg-slate-50 transition-colors"
-                                    >
-                                      <MapPin size={10} className="text-red-500" />
-                                      Maps
-                                    </a>
-                                    <a 
-                                      href={`https://waze.com/ul?ll=${(o as any).customerLat},${(o as any).customerLng}&navigate=yes`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="flex items-center gap-1 text-[8px] font-black bg-[#f2fcfed9] border border-[#c2f2ff] text-[#00a9e0] px-2 py-0.5 rounded shadow-sm hover:bg-[#e6faff] transition-colors"
-                                    >
-                                      <Car size={10} />
-                                      Waze
-                                    </a>
+                                  <div className="mt-2 space-y-2">
+                                    <div className="w-full h-24 rounded-xl overflow-hidden border border-slate-200 shadow-sm relative pointer-events-none z-0">
+                                      <MapContainer 
+                                        center={[(o as any).customerLat, (o as any).customerLng]} 
+                                        zoom={14} 
+                                        style={{ height: "100%", width: "100%", zIndex: 0 }}
+                                        zoomControl={false}
+                                        attributionControl={false}
+                                        dragging={false}
+                                        scrollWheelZoom={false}
+                                        doubleClickZoom={false}
+                                      >
+                                        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                                        <Marker position={[(o as any).customerLat, (o as any).customerLng]} />
+                                      </MapContainer>
+                                      {/* غطاء شفاف لمنع التفاعل مع الخريطة عبر اللمس */}
+                                      <div className="absolute inset-0 z-[400] bg-transparent"></div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <a 
+                                        href={`https://www.google.com/maps/search/?api=1&query=${(o as any).customerLat},${(o as any).customerLng}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-1 text-[8px] font-black bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded shadow-sm hover:bg-slate-50 transition-colors"
+                                      >
+                                        <MapPin size={10} className="text-red-500" />
+                                        Maps
+                                      </a>
+                                      <a 
+                                        href={`https://waze.com/ul?ll=${(o as any).customerLat},${(o as any).customerLng}&navigate=yes`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-1 text-[8px] font-black bg-[#f2fcfed9] border border-[#c2f2ff] text-[#00a9e0] px-2 py-1 rounded shadow-sm hover:bg-[#e6faff] transition-colors"
+                                      >
+                                        <Car size={10} />
+                                        Waze
+                                      </a>
+                                    </div>
                                   </div>
                                 )}
                               </div>
@@ -2468,10 +2970,13 @@ https://mahallak.app/store/${data.id}`
                             <div className="space-y-1.5 max-h-[100px] overflow-y-auto no-scrollbar pr-1">
                               {o.items.map((it, idx) => (
                                 <div key={idx} className="flex items-center justify-between gap-2 min-w-0">
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    <span className="w-5 h-5 bg-slate-100 rounded text-[9px] font-black text-slate-600 flex items-center justify-center shrink-0">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    {it.image && (
+                                      <img src={it.image} alt={it.productName} className="w-8 h-8 rounded-lg object-cover border border-slate-100 shrink-0 bg-slate-50" />
+                                    )}
+                                    <div className="flex items-center justify-center w-5 h-5 bg-slate-100 rounded text-[9px] font-black text-slate-600 shrink-0">
                                       {it.quantity}
-                                    </span>
+                                    </div>
                                     <span className="text-[10px] font-bold text-slate-700 truncate" title={it.productName}>
                                       {it.productName}
                                     </span>
@@ -2499,6 +3004,9 @@ https://mahallak.app/store/${data.id}`
                                 <button onClick={() => setActionModal({ show: true, orderId: o.id, type: "rejected" })} className="flex-1 py-2 bg-white text-rose-500 border border-slate-200 rounded-xl font-black text-[10px] flex items-center justify-center gap-1.5 hover:bg-rose-50 active:scale-95 transition-all w-full">
                                   <X size={14} /> رفض
                                 </button>
+                                <button onClick={() => { setSelectedInvoice(o); setShowInvoiceModal(true); }} className="flex-1 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl font-black text-[10px] flex items-center justify-center gap-1.5 hover:bg-slate-50 active:scale-95 transition-all w-full">
+                                  <FileText size={14} /> فاتورة
+                                </button>
                               </>
                             )}
                             {o.status === "accepted" && (
@@ -2508,22 +3016,17 @@ https://mahallak.app/store/${data.id}`
                             )}
                             {o.status === "shipped" && (
                               <>
-                                <button onClick={() => updateOrderStatus(o.id, "delivered")} className="flex-[2] py-2 bg-emerald-500 text-white rounded-xl font-black text-[10px] flex items-center justify-center gap-1 hover:bg-emerald-600 active:scale-95 transition-all w-full">
-                                  <CheckCircle size={14} /> وصل
+                                <button onClick={() => updateOrderStatus(o.id, "delivered")} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl font-black text-[10px] flex items-center justify-center gap-1 hover:bg-emerald-600 active:scale-95 transition-all w-full">
+                                  <CheckCircle size={14} /> تم التوصيل
                                 </button>
-                                <div className="flex gap-1.5 w-full">
-                                  <button onClick={() => setReplacementModal({ show: true, orderId: o.id, originalItems: o.items })} className="flex-1 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl font-black text-[9px] hover:bg-slate-50 active:scale-95 w-full">
-                                    تبديل
-                                  </button>
-                                  <button onClick={() => handleReturnOrder(o.id)} className="flex-1 py-2 bg-white text-rose-500 border border-rose-200 rounded-xl font-black text-[9px] hover:bg-rose-50 active:scale-95 w-full">
-                                    إرجاع
-                                  </button>
-                                </div>
+                                <button onClick={() => setReplacementModal({ show: true, orderId: o.id, originalItems: o.items })} className="flex-1 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl font-black text-[10px] hover:bg-slate-50 active:scale-95 transition-all w-full flex items-center justify-center">
+                                  تبديل
+                                </button>
+                                <button onClick={() => handleReturnOrder(o.id)} className="flex-1 py-2 bg-white text-rose-500 border border-rose-200 rounded-xl font-black text-[10px] hover:bg-rose-50 active:scale-95 transition-all w-full flex items-center justify-center">
+                                  إرجاع
+                                </button>
                               </>
                             )}
-                            <button onClick={() => { setSelectedInvoice(o); setShowInvoiceModal(true); }} className="flex-1 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl font-black text-[10px] flex items-center justify-center gap-1.5 hover:bg-slate-50 active:scale-95 transition-all mt-auto w-full">
-                              <FileText size={14} /> فاتورة
-                            </button>
                           </div>
                         </div>
                       </div>
@@ -2534,82 +3037,7 @@ https://mahallak.app/store/${data.id}`
             );
           })()}
 
-          {/* الخصومات */}
-          {activeTab === "promo" && (
-            <div className="space-y-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border flex justify-between items-center">
-                <div>
-                  <h2 className="text-lg font-bold">أكواد الخصم 🎫</h2>
-                </div>
-                <button
-                  onClick={() => setPromoModal(true)}
-                  className="px-4 py-2 bg-[#9952FF] text-white font-bold rounded-xl shadow-md flex items-center space-x-2 space-x-reverse"
-                >
-                  <Plus size={18} />
-                  <span>إنشاء كود</span>
-                </button>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {merchantPromos.map((p) => (
-                  <div
-                    key={p.id}
-                    className="bg-white p-5 rounded-2xl border shadow-sm"
-                  >
-                    <div className="flex justify-between items-center mb-3">
-                      <div className="flex items-center gap-1">
-                        <code className="bg-slate-50 text-slate-700 px-3 py-1.5 rounded-xl font-black tracking-wider">
-                          {p.code}
-                        </code>
-                        <CopyButton text={p.code} size={11} />
-                      </div>
-                      <span
-                        className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${p.status === "active" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}
-                      >
-                        {p.status === "active" ? "فعال" : "منتهي"}
-                      </span>
-                    </div>
-                    <span className="text-lg font-black">
-                      {(p.discountValue || 0).toLocaleString()}{" "}
-                      {p.discountType === "percent" ? "%" : "د.ع"}
-                    </span>
-                    <div className="flex justify-between mt-3 text-xs text-slate-500">
-                      <p>
-                        استخدام: {p.usedCount}/{p.maxUses}
-                      </p>
-                      {p.maxUsesPerUser && <p>حصة الفرد: {p.maxUsesPerUser}</p>}
-                    </div>
-                    <p className="text-[10px] text-slate-400 mt-2 bg-slate-50 p-1.5 rounded-lg text-center">
-                      {p.startDate
-                        ? `${formatSafeDate(p.startDate)} إلى `
-                        : ""}
-                      {p.expiresAt
-                        ? formatSafeDate(p.expiresAt)
-                        : "مستمر"}
-                    </p>
-                    <div className="flex justify-between items-center mt-3 pt-3 border-t">
-                      <button
-                        onClick={() => togglePromoCodeStatus(p.id)}
-                        className={`text-xs font-bold px-3 py-1.5 rounded-xl transition ${
-                          p.status === "active"
-                            ? "bg-orange-50 text-orange-600 hover:bg-orange-100"
-                            : "bg-green-50 text-green-600 hover:bg-green-100"
-                        }`}
-                      >
-                        {p.status === "active" ? "إيقاف" : "تفعيل"}
-                      </button>
-                      <button
-                        onClick={() => deletePromoCode(p.id)}
-                        className="p-1.5 text-red-400 bg-red-50 hover:bg-red-500 hover:text-white rounded-xl transition"
-                        title="حذف الكود نهائياً"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+
 
           {/* زبائني */}
           {activeTab === "customers" && (
@@ -2879,184 +3307,6 @@ https://mahallak.app/store/${data.id}`
                   )}
                 </form>
               </motion.div>
-            </div>
-          )}
-
-          {/* الهوية الرقمية QR */}
-          {activeTab === "flashsales" && (
-            <div className="space-y-4">
-              <div className="bg-gradient-to-l from-yellow-50 to-white rounded-2xl border shadow-sm p-6 overflow-hidden relative">
-                <div className="absolute top-0 right-0 p-4 opacity-10">
-                  <Zap size={100} className="text-yellow-500" />
-                </div>
-                <div className="relative z-10 text-right">
-                  <h3 className="font-black text-2xl text-[#4D2980] flex items-center space-x-2 space-x-reverse mb-2">
-                    <Zap size={24} className="text-yellow-500" />
-                    <span>الفعاليات المركزية (Flash Sales)</span>
-                  </h3>
-                  <p className="text-xs text-slate-500 max-w-sm">
-                    شارك بمنتجاتك في الفعاليات المركزية وحقق مبيعات ضخمة خلال
-                    فترة قصيرة!
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4">
-                {flashSales.filter((s) => s.status !== "ended" && s.status !== "paused").length === 0 ? (
-                  <div className="bg-white p-12 rounded-2xl border shadow-sm text-center">
-                    <Gift size={48} className="mx-auto text-slate-200 mb-4" />
-                    <p className="font-bold text-slate-400">
-                      لا توجد فعاليات مركزية حالياً
-                    </p>
-                  </div>
-                ) : (
-                  flashSales
-                    .filter((s) => s.status !== "ended" && s.status !== "paused")
-                    .map((sale) => {
-                      const isUpcoming = new Date() < new Date(sale.startTime);
-                      const myRequests = flashSaleRequests.filter(
-                        (r) =>
-                          r.flashSaleId === sale.id &&
-                          r.storeId === currentMerchant.id,
-                      );
-                      return (
-                        <div
-                          key={sale.id}
-                          className="bg-white rounded-2xl border shadow-sm p-6"
-                        >
-                          <div className="flex justify-between items-start mb-4">
-                            <div>
-                              <h4 className="font-black text-lg text-[#4D2980]">
-                                {sale.title}
-                              </h4>
-                              <p className="text-xs text-slate-500 mt-1">
-                                {sale.description}
-                              </p>
-                            </div>
-                            {(sale.status === "upcoming" && isUpcoming) && (
-                              <span className="px-3 py-1 bg-amber-100 text-amber-700 text-[10px] font-bold rounded-full border border-amber-200">
-                                تبدأ قريباً
-                              </span>
-                            )}
-                            {(sale.status === "active" || (!isUpcoming)) && (
-                              <span className="px-3 py-1 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200 flex items-center gap-1">
-                                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></div>
-                                فعالية نشطة الآن
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="flex gap-4 mb-6 text-[11px] font-bold text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                            <div>
-                              يبدأ:{" "}
-                              <span
-                                className="font-mono text-[#4D2980]"
-                                dir="ltr"
-                              >
-                                {formatSafeDateTimeString(sale.startTime)}
-                              </span>
-                            </div>
-                            <div>
-                              ينتهي:{" "}
-                              <span
-                                className="font-mono text-[#4D2980]"
-                                dir="ltr"
-                              >
-                                {formatSafeDateTimeString(sale.endTime)}
-                              </span>
-                            </div>
-                          </div>
-
-                          {sale.status === "active" &&
-                            myRequests.length === 0 && (
-                              <div className="bg-rose-50 text-rose-600 p-3 rounded-xl text-xs font-bold mb-4 border border-rose-100 text-center">
-                                لا يمكنك المشاركة لأن الفعالية قد بدأت بالفعل.
-                                يرجى التقديم في الفعاليات القادمة مسبقاً.
-                              </div>
-                            )}
-
-                          <div className="space-y-3">
-                            <h5 className="font-bold text-slate-700 text-xs flex justify-between items-center pb-2 border-b">
-                              <span>
-                                منتجاتك المشاركة ({myRequests.length})
-                              </span>
-                              {(sale.status === "upcoming" && isUpcoming) && (
-                                <button
-                                  onClick={() =>
-                                    setJoinFlashSaleData({
-                                      flashSaleId: sale.id,
-                                    })
-                                  }
-                                  className="px-3 py-1 bg-slate-50 text-[#4D2980] rounded-lg font-bold text-[10px] hover:bg-slate-100 transition"
-                                >
-                                  + طلب مشاركة لمنتج
-                                </button>
-                              )}
-                            </h5>
-
-                            {myRequests.length === 0 && (
-                              <div className="text-center text-slate-400 py-4 text-xs font-bold bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                                لم يتم مشاركه لمنتج
-                              </div>
-                            )}
-
-                            {myRequests.map((req) => {
-                              const p = products.find(
-                                (prod) => prod.id === req.productId,
-                              );
-                              if (!p) return null;
-                              return (
-                                <div
-                                  key={req.id}
-                                  className="flex justify-between items-center p-3 bg-white border border-slate-100 rounded-2xl shadow-sm"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <img
-                                      src={p.image || undefined}
-                                      className="w-10 h-10 rounded-xl object-cover"
-                                    />
-                                    <div>
-                                      <h6 className="font-black text-[11px] text-[#4D2980]">
-                                        {p.name}
-                                      </h6>
-                                      <div className="flex gap-2 text-[9px] mt-0.5">
-                                        <span className="text-slate-400">
-                                          أصلي:{" "}
-                                          <del>{p.price.toLocaleString()}</del>
-                                        </span>
-                                        <span className="text-rose-600 font-black">
-                                          حالي:{" "}
-                                          {req.promotionalPrice.toLocaleString()}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <div>
-                                    {req.status === "pending" && (
-                                      <span className="px-2 py-1 bg-slate-100 text-slate-600 font-bold text-[9px] rounded uppercase">
-                                        قيد المراجعة
-                                      </span>
-                                    )}
-                                    {req.status === "approved" && (
-                                      <span className="px-2 py-1 bg-emerald-100 text-emerald-700 font-bold text-[9px] rounded uppercase">
-                                        مقبول
-                                      </span>
-                                    )}
-                                    {req.status === "rejected" && (
-                                      <span className="px-2 py-1 bg-rose-100 text-rose-700 font-bold text-[9px] rounded uppercase">
-                                        مرفوض
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })
-                )}
-              </div>
             </div>
           )}
 

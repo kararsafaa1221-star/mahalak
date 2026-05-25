@@ -169,5 +169,15 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+
+    // ----------------------------------------------------
+    // SHOLLABLE REELS
+    // ----------------------------------------------------
+    match /reels/{reelId} {
+      allow read: if true;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn() || isAdmin();
+    }
   }
 }

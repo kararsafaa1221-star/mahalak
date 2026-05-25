@@ -198,9 +198,25 @@
         "role": { "type": "string" }
       },
       "required": ["uid", "email"]
+    },
+    "Reel": {
+      "title": "Reel",
+      "description": "Shoppable Reels videos linked with products",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "videoUrl": { "type": "string" },
+        "linkedProductId": { "type": "string" },
+        "merchantId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "likesCount": { "type": "number" },
+        "viewsCount": { "type": "number" }
+      },
+      "required": ["id", "videoUrl", "linkedProductId", "merchantId"]
     }
   },
   "firestore": {
+    "/reels/{reelId}": { "schema": "Reel", "description": "Shoppable Reels collection" },
     "/stores/{storeId}": { "schema": "Store", "description": "Stores collection" },
     "/products/{productId}": { "schema": "Product", "description": "Products collection" },
     "/orders/{orderId}": { "schema": "Order", "description": "Orders collection" },

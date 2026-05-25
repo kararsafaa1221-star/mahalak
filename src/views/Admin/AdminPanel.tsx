@@ -1,19 +1,34 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/useApp';
-import { Store, Customer, Order } from '../../types';
+import { db } from '../../lib/firebase';
+import { collection, onSnapshot, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { Store, Customer, Order, Reel } from '../../types';
 import { STORE_CATEGORIES, STORE_BADGES } from '../../constants';
 import { 
   Settings, Users, Store as StoreIcon, DollarSign, Shield, Bell, 
   Check, X, Ban, RefreshCw, Search, Edit, AlertTriangle, LogOut, 
   TrendingUp, Calendar, Package, Ticket, Eye, EyeOff, Trash2,
-  Plus, Copy, Globe, Star, ShoppingBag, CreditCard, Archive,
-  BarChart3, Activity, Zap, Award, Crown, Palette, Menu, CheckCircle, MessageCircle, Send, Loader2, MapPin, Clock, Truck, Camera, Megaphone
+  Plus, Copy, Globe, Star, ShoppingBag, CreditCard, Archive, Car,
+  BarChart3, Activity, Zap, Award, Crown, Palette, Menu, CheckCircle, MessageCircle, Send, Loader2, MapPin, Clock, Truck, Camera, Megaphone, Film, PlayCircle, Trash, Printer
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useReactToPrint } from 'react-to-print';
+import { QRCodeSVG } from 'qrcode.react';
 import { ImageUploader } from '../../components/ImageUploader';
 import { sendWhatsAppMessage } from '../../services/otpService';
 import { BackupService } from '../../services/backupService';
-import { MapContainer, TileLayer } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Fix leaflet marker icon issue
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+});
+
 import HeatmapLayer from '../../components/HeatmapLayer';
 import { Map } from 'lucide-react';
 import { showLocalNotification } from '../../lib/pushNotifications';
@@ -805,7 +820,7 @@ export const AdminPanel: React.FC = () => {
     markAllNotificationsAsRead,
     deleteProduct, updateProduct, updateAdminSettings,
     flashSales, flashSaleRequests, createFlashSale, updateFlashSaleStatus, updateFlashSaleRequestStatus, updateFlashSaleDates, deleteFlashSale,
-    rechargeCodes, generateRechargeCodes, seedDatabase,
+    rechargeCodes, generateRechargeCodes, deleteRechargeCode, seedDatabase,
     generateVirtualData, deleteAllVirtualData,
     getCustomerSeqId,
   } = useApp();
@@ -816,8 +831,19 @@ export const AdminPanel: React.FC = () => {
   
   // التاب النشط
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'stores' | 'customers' | 'orders' | 'products' | 'recharge' | 'promos' | 'subscriptions' | 'notifications' | 'broadcast' | 'heatmap' | 'settings' | 'flashsales' | 'whatsapp' | 'database' | 'reviews'
+    'overview' | 'stores' | 'customers' | 'orders' | 'products' | 'recharge' | 'promos' | 'subscriptions' | 'broadcast' | 'heatmap' | 'settings' | 'flashsales' | 'whatsapp' | 'database' | 'reviews' | 'reels'
   >('overview');
+  
+  const [adminReels, setAdminReels] = useState<Reel[]>([]);
+  const [reelToDelete, setReelToDelete] = useState<string | null>(null);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'reels'), (snap) => {
+      setAdminReels(snap.docs.map(doc => ({ ...doc.data() as Reel, id: doc.id })));
+    }, (error) => {
+      console.warn("Could not fetch reels for admin:", error);
+    });
+    return () => unsub();
+  }, []);
   
   // فلاتر البحث والتصفية
   const [storeFilter, setStoreFilter] = useState<'all' | 'active' | 'suspended' | 'verified' | 'subscribed' | 'expired_sub'>('all');
@@ -835,6 +861,23 @@ export const AdminPanel: React.FC = () => {
   const [isSavingReview, setIsSavingReview] = useState<boolean>(false);
   const [deletingReviewId, setDeletingReviewId] = useState<string | null>(null);
   const [isDeletingReview, setIsDeletingReview] = useState<boolean>(false);
+
+  const [deletingRechargeCodeId, setDeletingRechargeCodeId] = useState<string | null>(null);
+  const [isDeletingRechargeCode, setIsDeletingRechargeCode] = useState<boolean>(false);
+
+  const handleConfirmRechargeCodeDelete = async () => {
+    if (!deletingRechargeCodeId) return;
+    setIsDeletingRechargeCode(true);
+    try {
+      await deleteRechargeCode(deletingRechargeCodeId);
+      setDeletingRechargeCodeId(null);
+    } catch (err) {
+      console.error('Error deleting recharge code:', err);
+      alert('حدث خطأ أثناء حذف الكود');
+    } finally {
+      setIsDeletingRechargeCode(false);
+    }
+  };
 
   // تحضير بيانات الخريطة الحرارية
   const [rechargeCount, setRechargeCount] = useState(10);
@@ -983,6 +1026,28 @@ export const AdminPanel: React.FC = () => {
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const invoiceRef = React.useRef<HTMLDivElement>(null);
+
+  const handlePrint = useReactToPrint({
+    content: () => invoiceRef.current,
+    documentTitle: `Invoice-${selectedOrder?.id || 'Order'}`,
+  });
+
+  const handleShareWhatsAppInvoice = (order: Order) => {
+    let msg = `*فاتورة طلب - منصة محلك*\n`;
+    msg += `الطلب: ${order.id}\n`;
+    msg += `الزبون: ${order.customerName}\n`;
+    msg += `الهاتف: ${order.customerPhone}\n\n`;
+    msg += `*المنتجات:*\n`;
+    order.items.forEach(item => {
+      msg += `- ${item.name} (${item.quantity}x)\n`;
+    });
+    msg += `\nالاجمالي: ${order.total.toLocaleString()} د.ع\n`;
+    const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank');
+  };
+
   const [deleteConfirmModal, setDeleteConfirmModal] = useState<{type: 'store' | 'customer' | 'flashSale', id: string, name: string} | null>(null);
   const [editFlashSaleDatesModal, setEditFlashSaleDatesModal] = useState<{id: string, name: string, start: string, end: string} | null>(null);
 
@@ -1157,6 +1222,35 @@ export const AdminPanel: React.FC = () => {
   const unreadNotifsCount = adminNotifications.filter(n => !n.read).length;
   const [lastNotifCount, setLastNotifCount] = useState(unreadNotifsCount);
 
+  // Auto Backup Logic
+  useEffect(() => {
+    if (adminSettings?.enableAutoBackup) {
+      const lastBackup = adminSettings.lastAutoBackup;
+      const now = new Date().getTime();
+      const oneDay = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+      if (!lastBackup || now - parseInt(lastBackup) > oneDay) {
+        if (typeof window !== 'undefined') {
+          console.log("Triggering auto backup...");
+          handleExportSystem();
+          updateAdminSettings({ lastAutoBackup: now.toString() });
+        }
+      }
+      
+      const interval = setInterval(() => {
+        const checkNow = new Date().getTime();
+        const currentLastBackup = adminSettings?.lastAutoBackup ? parseInt(adminSettings.lastAutoBackup) : 0;
+        if (checkNow - currentLastBackup > oneDay) {
+          console.log("Triggering periodic auto backup...");
+          handleExportSystem();
+          updateAdminSettings({ lastAutoBackup: checkNow.toString() });
+        }
+      }, 60 * 60 * 1000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [adminSettings?.enableAutoBackup, adminSettings?.lastAutoBackup]);
+
   useEffect(() => {
     if (unreadNotifsCount > lastNotifCount) {
       const latestNotif = adminNotifications[0];
@@ -1191,9 +1285,6 @@ export const AdminPanel: React.FC = () => {
   // عند اختيار تاب يغلق القائمة الجانبية تلقائياً (للموبايل)
   const handleTabSelect = (tab: typeof activeTab) => {
     setActiveTab(tab);
-    if (tab === 'notifications' && unreadNotifsCount > 0) {
-      markAllNotificationsAsRead('admin', 'admin');
-    }
     setSidebarOpen(false);
     setSearchQuery('');
     setSelectedProvince('');
@@ -1214,21 +1305,36 @@ export const AdminPanel: React.FC = () => {
 
     const totalStores = stores.length;
     const activeStores = stores.filter(s => s.status === 'active').length;
-    const pendingStores = stores.filter(s => s.status === 'pending').length;
-    const suspendedStores = stores.filter(s => s.status === 'suspended').length;
     
     const totalCustomers = customers.length;
     const activeCustomers = customers.filter(c => !c.isBlocked).length;
     const blockedCustomers = customers.filter(c => c.isBlocked).length;
     
+    // الريلز
+    const totalReels = adminReels.length;
+    const totalReelViews = adminReels.reduce((acc, r) => acc + (r.viewsCount || 0), 0);
+    const totalReelLikes = adminReels.reduce((acc, r) => acc + (r.likes || 0), 0);
+    
+    // التقييمات
+    const validReviews = storeReviews.filter(r => stores.some(s => s.id === r.storeId));
+    const totalReviews = validReviews.length;
+    
+    // الفلاش سيلز (عروض التخفيضات)
+    const activeFlashSales = flashSales.filter(f => f.status === 'active').length;
+    const totalFlashSaleRequests = flashSaleRequests.length;
+    
+    // كودات الشحن
+    const activeRechargeCodes = rechargeCodes.filter(c => c.status === 'active').length;
+    const totalRechargePoints = rechargeCodes.filter(c => c.status === 'active').reduce((acc, c) => acc + c.points, 0);
+
     const totalOrders = validOrders.length;
     const pendingOrders = validOrders.filter(o => o.status === 'pending').length;
-    const acceptedOrders = validOrders.filter(o => o.status === 'accepted').length;
-    const rejectedOrders = validOrders.filter(o => o.status === 'rejected' || o.status === 'cancelled').length;
+    const acceptedOrders = validOrders.filter(o => ['accepted', 'shipped', 'delivered'].includes(o.status)).length;
+    const rejectedOrders = validOrders.filter(o => ['rejected', 'cancelled', 'returned', 'replaced'].includes(o.status)).length;
     
-    const totalRevenue = validOrders.filter(o => o.status === 'accepted').reduce((acc, o) => acc + o.total, 0);
-    const totalDeliveryFees = validOrders.filter(o => o.status === 'accepted').reduce((acc, o) => acc + o.deliveryPrice, 0);
-    const totalDiscounts = validOrders.filter(o => o.status === 'accepted').reduce((acc, o) => acc + o.discountAmount, 0);
+    const totalRevenue = validOrders.filter(o => o.status === 'delivered').reduce((acc, o) => acc + o.total, 0);
+    const totalDeliveryFees = validOrders.filter(o => o.status === 'delivered').reduce((acc, o) => acc + o.deliveryPrice, 0);
+    const totalDiscounts = validOrders.filter(o => o.status === 'delivered').reduce((acc, o) => acc + o.discountAmount, 0);
     
     // تصفية المنتجات للمتاجر الموجودة فقط
     const validProducts = products.filter(p => stores.some(s => s.id === p.storeId));
@@ -1275,15 +1381,18 @@ export const AdminPanel: React.FC = () => {
       .slice(0, 5);
 
     return {
-      totalStores, activeStores, pendingStores, suspendedStores,
+      totalStores, activeStores,
       totalCustomers, activeCustomers, blockedCustomers,
+      totalReels, totalReelViews, totalReelLikes,
+      totalReviews,
       totalOrders, pendingOrders, acceptedOrders, rejectedOrders,
       totalRevenue, totalDeliveryFees, totalDiscounts,
       totalProducts, publishedProducts, draftProducts, archivedProducts,
       totalPromos, activePromos, expiredPromos, totalPromoUsage,
-      totalPoints, storesByProvince, customersByTier, topStores
+      totalPoints, storesByProvince, customersByTier, topStores,
+      activeFlashSales, totalFlashSaleRequests, activeRechargeCodes, totalRechargePoints
     };
-  }, [stores, customers, orders, products, promoCodes]);
+  }, [stores, customers, orders, products, promoCodes, adminReels, storeReviews, flashSales, flashSaleRequests, rechargeCodes]);
 
   // فلترة المتاجر
   const filteredStores = useMemo(() => {
@@ -1345,7 +1454,10 @@ export const AdminPanel: React.FC = () => {
       const customerExists = customers.some(c => c.id === o.customerId);
       if (!storeExists || !customerExists) return false;
 
-      const matchStatus = orderFilter === 'all' || o.status === orderFilter || (orderFilter === 'rejected' && o.status === 'cancelled');
+      const matchStatus = orderFilter === 'all' || 
+        (orderFilter === 'pending' && o.status === 'pending') ||
+        (orderFilter === 'accepted' && ['accepted', 'shipped', 'delivered'].includes(o.status)) || 
+        (orderFilter === 'rejected' && ['rejected', 'cancelled', 'returned', 'replaced'].includes(o.status));
       const matchSearch = searchQuery === '' || 
         o.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
         o.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1553,13 +1665,13 @@ export const AdminPanel: React.FC = () => {
       
       {/* الظل الخلفي عند فتح القائمة في الموبايل */}
       {sidebarOpen && (
-        <div className="fixed inset-0 bg-black/40 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />
+        <div className="fixed inset-0 bg-black/40 z-[900] lg:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* زر القائمة العائم للموبايل - على اليمين */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className={`fixed top-4 z-[80] lg:hidden w-12 h-12 rounded-full shadow-2xl border flex items-center justify-center transition-all active:scale-95 ${
+        className={`fixed top-4 z-[999] lg:hidden w-12 h-12 rounded-full shadow-2xl border flex items-center justify-center transition-all active:scale-95 ${
           sidebarOpen
             ? 'bg-red-500 text-white border-red-400'
             : 'bg-white text-[#9952FF] border-[#e9daff]'
@@ -1573,7 +1685,7 @@ export const AdminPanel: React.FC = () => {
       {/* ==========================================
           الشريط الجانبي (Sidebar) - ينغلق آلياً بالمحمول
           ========================================== */}
-      <aside className={`admin-sidebar ${sidebarOpen ? 'admin-sidebar-open' : 'admin-sidebar-closed'} w-72 bg-gradient-to-b from-[#4D2980] to-[#381a66] text-white p-4 flex flex-col fixed right-0 top-0 h-screen z-30 shadow-2xl transition-transform duration-300`}>
+      <aside className={`admin-sidebar ${sidebarOpen ? 'admin-sidebar-open' : 'admin-sidebar-closed'} w-72 bg-gradient-to-b from-[#4D2980] to-[#381a66] text-white p-4 flex flex-col fixed right-0 top-0 h-screen z-[950] shadow-2xl transition-transform duration-300`}>
         
         {/* اللوغو */}
         <div className="flex items-center space-x-3 space-x-reverse border-b border-[#9952FF] pb-4 mb-4">
@@ -1609,11 +1721,6 @@ export const AdminPanel: React.FC = () => {
           >
             <StoreIcon size={18} />
             <span className="font-semibold">إدارة المتاجر</span>
-            {stats.pendingStores > 0 && (
-              <span className="mr-auto bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full animate-pulse font-bold">
-                {stats.pendingStores}
-              </span>
-            )}
           </button>
 
           {/* إدارة الزبائن */}
@@ -1701,23 +1808,6 @@ export const AdminPanel: React.FC = () => {
             <span className="font-semibold">الفعاليات المركزية</span>
           </button>
 
-          {/* الإشعارات */}
-          <button 
-            onClick={() => handleTabSelect('notifications')}
-            className={`w-full flex items-center space-x-3 space-x-reverse px-4 py-2.5 rounded-xl transition text-sm ${
-              activeTab === 'notifications' ? 'bg-[#9952FF] text-white shadow-md' : 'text-slate-400 hover:bg-[#9952FF]/50'
-            }`}
-          >
-            <Bell size={18} />
-            <span className="font-semibold">سجل الإشعارات</span>
-            {unreadNotifsCount > 0 ? (
-              <span className="mr-auto bg-rose-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold animate-bounce">
-                {unreadNotifsCount}
-              </span>
-            ) : (
-              <span className="mr-auto bg-slate-700 text-xs px-2 py-0.5 rounded-full">{notifications.length}</span>
-            )}
-          </button>
 
           {/* تقييمات المتاجر */}
           <button 
@@ -1728,9 +1818,9 @@ export const AdminPanel: React.FC = () => {
           >
             <Star size={18} />
             <span className="font-semibold">تقييمات المتاجر</span>
-            {storeReviews.filter(r => !r.isReadByAdmin).length > 0 && (
+            {storeReviews.filter(r => !r.isReadByAdmin && stores.some(s => s.id === r.storeId)).length > 0 && (
               <span className="mr-auto bg-rose-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold animate-bounce">
-                جديد ({storeReviews.filter(r => !r.isReadByAdmin).length})
+                جديد ({storeReviews.filter(r => !r.isReadByAdmin && stores.some(s => s.id === r.storeId)).length})
               </span>
             )}
           </button>
@@ -1783,13 +1873,24 @@ export const AdminPanel: React.FC = () => {
 
           {/* الإعلانات الممولة */}
           <button 
-            onClick={() => handleTabSelect('ads')}
+            onClick={() => handleTabSelect('ads' as any)}
             className={`w-full flex items-center space-x-3 space-x-reverse px-4 py-2.5 rounded-xl transition text-sm ${
-              activeTab === 'ads' ? 'bg-[#9952FF] text-white shadow-md' : 'text-slate-400 hover:bg-[#9952FF]/50'
+              activeTab === ('ads' as any) ? 'bg-[#9952FF] text-white shadow-md' : 'text-slate-400 hover:bg-[#9952FF]/50'
             }`}
           >
             <Megaphone size={18} className="text-pink-400" />
             <span className="font-semibold">الإعلانات الممولة</span>
+          </button>
+
+          {/* ريلز */}
+          <button 
+            onClick={() => handleTabSelect('reels')}
+            className={`w-full flex items-center space-x-3 space-x-reverse px-4 py-2.5 rounded-xl transition text-sm ${
+              activeTab === 'reels' ? 'bg-[#9952FF] text-white shadow-md' : 'text-slate-400 hover:bg-[#9952FF]/50'
+            }`}
+          >
+            <Film size={18} className="text-blue-400" />
+            <span className="font-semibold">إدارة الريلز</span>
           </button>
 
           {/* الإعدادات */}
@@ -1832,7 +1933,6 @@ export const AdminPanel: React.FC = () => {
               {activeTab === 'recharge' && '⚡ توليد كودات شحن النقاط'}
               {activeTab === 'promos' && '🎫 إدارة أكواد الخصم والعروض'}
               {activeTab === 'subscriptions' && '💳 أسعار وحزم الاشتراكات'}
-                {activeTab === 'notifications' && '🔔 سجل الإشعارات'}
                 {activeTab === 'broadcast' && '📢 إرسال إشعارات للزبائن'}
                 {activeTab === 'whatsapp' && '💬 حملات الواتساب الذكية'}
                 {activeTab === 'heatmap' && '🗺️ الخريطة الحرارية للطلبات'}
@@ -1891,7 +1991,10 @@ export const AdminPanel: React.FC = () => {
             
             {/* الإحصائيات الرئيسية */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition">
+              <div 
+                onClick={() => handleTabSelect('stores')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition cursor-pointer"
+              >
                 <div className="flex items-center justify-between">
                   <div className={`p-3 ${tc.bg} ${tc.light} rounded-xl`}>
                     <StoreIcon size={24} />
@@ -1903,12 +2006,14 @@ export const AdminPanel: React.FC = () => {
                 </div>
                 <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
                   <span className="text-green-600">نشط: {stats.activeStores}</span>
-                  <span className="text-yellow-600">معلق: {stats.pendingStores}</span>
-                  <span className="text-red-600">موقف: {stats.suspendedStores}</span>
+                  <span className="text-slate-400">جميع المحافظات</span>
                 </div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition">
+              <div 
+                onClick={() => handleTabSelect('customers')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition cursor-pointer"
+              >
                 <div className="flex items-center justify-between">
                   <div className="p-3 bg-purple-100 text-purple-600 rounded-xl">
                     <Users size={24} />
@@ -1924,7 +2029,10 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition">
+              <div 
+                onClick={() => handleTabSelect('orders')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition cursor-pointer"
+              >
                 <div className="flex items-center justify-between">
                   <div className="p-3 bg-orange-100 text-orange-600 rounded-xl">
                     <ShoppingBag size={24} />
@@ -1936,12 +2044,15 @@ export const AdminPanel: React.FC = () => {
                 </div>
                 <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
                   <span className="text-yellow-600">معلق: {stats.pendingOrders}</span>
-                  <span className="text-green-600">مقبول: {stats.acceptedOrders}</span>
+                  <span className="text-green-600">مكتمل: {stats.acceptedOrders}</span>
                   <span className="text-red-600">مرفوض: {stats.rejectedOrders}</span>
                 </div>
               </div>
 
-              <div className="bg-gradient-to-br from-emerald-500 to-green-600 p-5 rounded-2xl shadow-lg text-white">
+              <div 
+                onClick={() => handleTabSelect('orders')}
+                className="bg-gradient-to-br from-emerald-500 to-green-600 p-5 rounded-2xl shadow-lg text-white cursor-pointer hover:shadow-xl transition"
+              >
                 <div className="flex items-center justify-between">
                   <div className="p-3 bg-white/20 rounded-xl">
                     <DollarSign size={24} />
@@ -1958,9 +2069,49 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
-            {/* صف ثاني من الإحصائيات */}
+            {/* الإحصائيات الإضافية (ريلز وتقييمات ومنتجات) */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+              <div 
+                onClick={() => handleTabSelect('reels')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
+              >
+                <div className="flex items-center space-x-3 space-x-reverse">
+                  <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
+                    <Film size={20} />
+                  </div>
+                  <div>
+                    <span className="text-lg font-black text-slate-800 block">{stats.totalReels}</span>
+                    <span className="text-[10px] text-slate-400 font-bold">ريلز منشورة</span>
+                  </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
+                  <span className="text-blue-500">مشاهدات: {(stats.totalReelViews || 0).toLocaleString()}</span>
+                  <span className="text-pink-500">إعجابات: {(stats.totalReelLikes || 0).toLocaleString()}</span>
+                </div>
+              </div>
+
+              <div 
+                onClick={() => handleTabSelect('reviews')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
+              >
+                <div className="flex items-center space-x-3 space-x-reverse">
+                  <div className="p-3 bg-amber-100 text-amber-600 rounded-xl">
+                    <Star size={20} />
+                  </div>
+                  <div>
+                    <span className="text-lg font-black text-slate-800 block">{stats.totalReviews}</span>
+                    <span className="text-[10px] text-slate-400 font-bold">تقييم للمتاجر</span>
+                  </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
+                  <span className="text-slate-400">من قبل زبائن موثوقين</span>
+                </div>
+              </div>
+
+              <div 
+                onClick={() => handleTabSelect('products')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
+              >
                 <div className="flex items-center space-x-3 space-x-reverse">
                   <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
                     <Package size={20} />
@@ -1970,41 +2121,67 @@ export const AdminPanel: React.FC = () => {
                     <span className="text-[10px] text-slate-400 font-bold">منتج في النظام</span>
                   </div>
                 </div>
+                <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
+                  <span className="text-green-500">نشط: {stats.publishedProducts}</span>
+                  <span className="text-slate-400">مسودة: {stats.draftProducts}</span>
+                </div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+              <div 
+                onClick={() => handleTabSelect('promos')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
+              >
                 <div className="flex items-center space-x-3 space-x-reverse">
                   <div className="p-3 bg-pink-100 text-pink-600 rounded-xl">
                     <Ticket size={20} />
                   </div>
                   <div>
                     <span className="text-lg font-black text-slate-800 block">{stats.totalPromos}</span>
-                    <span className="text-[10px] text-slate-400 font-bold">كود خصم ({stats.activePromos} فعال)</span>
+                    <span className="text-[10px] text-slate-400 font-bold">كود خصم</span>
                   </div>
                 </div>
-              </div>
-
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-                <div className="flex items-center space-x-3 space-x-reverse">
-                  <div className="p-3 bg-yellow-100 text-yellow-600 rounded-xl">
-                    <Award size={20} />
-                  </div>
-                  <div>
-                    <span className="text-lg font-black text-slate-800 block">{(stats.totalPoints || 0).toLocaleString()}</span>
-                    <span className="text-[10px] text-slate-400 font-bold">نقطة موزعة على الزبائن</span>
-                  </div>
+                <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
+                  <span className="text-green-500">فعال: {stats.activePromos}</span>
+                  <span className="text-slate-400">استخدام: {stats.totalPromoUsage} مرة</span>
                 </div>
               </div>
+            </div>
 
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            {/* الإحصائيات الإضافية 2 (فلاش سيلز ونقاط شحن) */}
+            <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
+              <div 
+                onClick={() => handleTabSelect('flashsales')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
+              >
                 <div className="flex items-center space-x-3 space-x-reverse">
-                  <div className="p-3 bg-teal-100 text-teal-600 rounded-xl">
+                  <div className="p-3 bg-red-100 text-red-600 rounded-xl">
                     <Zap size={20} />
                   </div>
                   <div>
-                    <span className="text-lg font-black text-slate-800 block">{stats.totalPromoUsage}</span>
-                    <span className="text-[10px] text-slate-400 font-bold">مرة استخدام للأكواد</span>
+                    <span className="text-lg font-black text-slate-800 block">{stats.activeFlashSales}</span>
+                    <span className="text-[10px] text-slate-400 font-bold">عروض فلاش سيلز نشطة</span>
                   </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
+                  <span className="text-amber-500">طلبات انتظار: {stats.totalFlashSaleRequests}</span>
+                </div>
+              </div>
+
+              <div 
+                onClick={() => handleTabSelect('recharge')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
+              >
+                <div className="flex items-center space-x-3 space-x-reverse">
+                  <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
+                    <CreditCard size={20} />
+                  </div>
+                  <div>
+                    <span className="text-lg font-black text-slate-800 block">{(stats.totalRechargePoints || 0).toLocaleString()}</span>
+                    <span className="text-[10px] text-slate-400 font-bold">نقاط الشحن المتاحة</span>
+                  </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
+                  <span className="text-slate-400">أكواد فعالة: {stats.activeRechargeCodes}</span>
                 </div>
               </div>
             </div>
@@ -2147,14 +2324,13 @@ export const AdminPanel: React.FC = () => {
               </select>
 
               <div className="flex flex-wrap gap-2">
-                {(['all', 'active', 'suspended', 'verified', 'subscribed', 'expired_sub'] as const).map((filter) => (
+                {(['all', 'active', 'verified', 'subscribed', 'expired_sub'] as const).map((filter) => (
                   <button
                     key={filter}
-                    onClick={() => setStoreFilter(filter)}
+                    onClick={() => setStoreFilter(filter as any)}
                     className={`px-3 py-2 text-xs font-bold rounded-xl transition whitespace-nowrap ${
                       storeFilter === filter 
                       ? (filter === 'active' ? 'bg-green-500 text-white' : 
-                         filter === 'suspended' ? 'bg-red-500 text-white' : 
                          filter === 'verified' ? 'bg-blue-500 text-white' : 
                          filter === 'subscribed' ? 'bg-emerald-600 text-white' : 
                          filter === 'expired_sub' ? 'bg-rose-500 text-white' : 
@@ -2164,7 +2340,6 @@ export const AdminPanel: React.FC = () => {
                   >
                     {filter === 'all' && `الكل (${stores.length})`}
                     {filter === 'active' && `نشط (${stores.filter(s => s.status === 'active').length})`}
-                    {filter === 'suspended' && `معلق (${stores.filter(s => s.status === 'suspended').length})`}
                     {filter === 'verified' && `🛡️ الموثقة (${stores.filter(s => s.isVerified || (s as any).is_verified).length})`}
                     {filter === 'subscribed' && `💳 المشتركة (${stores.filter(s => {
                       if (!s.subscriptionExpiry || s.subscriptionExpiry === 'none' || s.subscriptionExpiry === 'منتهي') return false;
@@ -2266,12 +2441,11 @@ export const AdminPanel: React.FC = () => {
                             <span className={'px-2 py-0.5 rounded-full text-[10px] font-bold ' + (
                               store.isBanned ? 'bg-red-100 text-red-700' :
                               store.status === 'active' ? 'bg-emerald-100 text-emerald-800' :
-                              store.status === 'suspended' ? 'bg-amber-100 text-amber-800' :
                               'bg-slate-100 text-slate-700'
                             )}>
                               {store.isBanned ? 'محظور' :
                                store.status === 'active' ? 'نشط' :
-                               store.status === 'suspended' ? 'معلق' : 'بانتظار الموافقة'}
+                               'بانتظار الموافقة'}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-center sticky left-0 bg-white/95 backdrop-blur-sm z-10 shadow-[-2px_0_5px_rgba(0,0,0,0.02)] whitespace-nowrap">
@@ -2422,7 +2596,37 @@ export const AdminPanel: React.FC = () => {
                             </div>
                             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 col-span-2">
                               <span className="text-[10px] text-slate-400 font-bold block mb-1">أقرب نقطة دالة</span>
-                              <span className="text-sm font-bold text-slate-800">{activeStore.landmark || 'غير محدد'}</span>
+                              <span className="text-sm font-bold text-slate-800 mb-2 block">{activeStore.landmark || 'غير محدد'}</span>
+                              {adminSettings?.enableMaps !== false && activeStore.lat && activeStore.lng && (
+                                <div className="w-full h-32 rounded-xl overflow-hidden border border-slate-200 mt-2 pointer-events-none relative z-0">
+                                  <MapContainer 
+                                    center={[activeStore.lat, activeStore.lng]} 
+                                    zoom={14} 
+                                    style={{ height: "100%", width: "100%", zIndex: 0 }}
+                                    zoomControl={false}
+                                    attributionControl={false}
+                                    dragging={false}
+                                    scrollWheelZoom={false}
+                                    doubleClickZoom={false}
+                                  >
+                                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                                    <Marker position={[activeStore.lat, activeStore.lng]} />
+                                  </MapContainer>
+                                </div>
+                              )}
+                              {(activeStore.lat && activeStore.lng) && (
+                                <div className="flex justify-end mt-2">
+                                  <a 
+                                    href={`https://www.google.com/maps?q=${activeStore.lat},${activeStore.lng}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="bg-white p-2 rounded-lg text-[#9952FF] shadow-sm hover:shadow-md transition pointer-events-auto border border-slate-200 flex items-center gap-2 text-[10px]"
+                                  >
+                                    <Globe size={14} /> 
+                                    <span>فتح في خرائط جوجل</span>
+                                  </a>
+                                </div>
+                              )}
                             </div>
                             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                               <span className="text-[10px] text-slate-400 font-bold block mb-1">سعر التوصيل للمحافظة</span>
@@ -2598,7 +2802,6 @@ export const AdminPanel: React.FC = () => {
                               >
                                 <option value="active">نشط ومفعل</option>
                                 <option value="pending">بانتظار الموافقة</option>
-                                <option value="suspended">معلق مؤقتاً</option>
                               </select>
                             </div>
                             
@@ -2654,15 +2857,14 @@ export const AdminPanel: React.FC = () => {
 
                             {activeStore.isVerified && (
                               <button 
+                                type="button"
                                 onClick={async () => {
                                   if (confirm('هل أنت متأكد من إلغاء توثيق هذا المتجر وسحب الشارة الزرقاء منه؟')) {
                                     try {
                                       await adminUpdateStore(activeStore.id, {
-                                        isVerified: false,
-                                        verificationType: null as any,
-                                        verificationExpiresAt: null as any
-                                      } as any);
-                                      alert('❌ تم إلغاء توثيق المتجر وتدمير الشارة بنجاح!');
+                                        isVerified: false
+                                      });
+                                      alert('❌ تم إلغاء توثيق المتجر بنجاح!');
                                     } catch (err: any) {
                                       alert('خطأ: ' + err.message);
                                     }
@@ -2670,7 +2872,7 @@ export const AdminPanel: React.FC = () => {
                                 }}
                                 className="px-4 py-2 bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold rounded-xl text-xs transition"
                               >
-                                🚫 إلغاء ومعطل شارة التوثيق بضغطة زر
+                                الغاء التوثيق
                               </button>
                             )}
                           </div>
@@ -2927,10 +3129,9 @@ export const AdminPanel: React.FC = () => {
                                         try {
                                           await adminUpdateStore(activeStore.id, {
                                             subscriptionExpiry: 'منتهي',
-                                            subscriptionId: 'sub_monthly',
-                                            status: 'suspended'
+                                            subscriptionId: 'sub_monthly'
                                           });
-                                          alert('❌ تم إنهاء اشتراك المتجر وإيقافه بنجاح!');
+                                          alert('❌ تم إنهاء اشتراك المتجر بنجاح!');
                                         } catch (err: any) {
                                           alert('خطأ أثناء إنهاء الاشتراك: ' + err.message);
                                         }
@@ -3204,14 +3405,6 @@ export const AdminPanel: React.FC = () => {
                           تفعيل المتجر
                         </button>
                       )}
-                      {activeStore.status !== 'suspended' && (
-                        <button 
-                          onClick={() => { updateStoreStatus(activeStore.id, 'suspended'); setSelectedStore(null); }}
-                          className="px-4 py-2.5 bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs rounded-xl transition"
-                        >
-                          تعليق المتجر
-                        </button>
-                      )}
                       <button 
                         onClick={() => { toggleStoreBan(activeStore.id); setSelectedStore(null); }}
                         className={'px-4 py-2.5 font-bold text-xs rounded-xl transition ' + (activeStore.isBanned ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-700')}
@@ -3400,7 +3593,7 @@ export const AdminPanel: React.FC = () => {
                   <div className="p-6 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
                     <div>
                       <h3 className="text-lg font-black text-slate-800">{selectedCustomer.name}</h3>
-                      <span className="text-xs text-slate-400">ID: #{getCustomerSeqId(selectedCustomer.id)}</span>
+                      <span className="text-xs text-slate-400">ID: {selectedCustomer.id}</span>
                     </div>
                     <button onClick={() => setSelectedCustomer(null)} className="p-2 hover:bg-slate-100 rounded-lg">
                       <X size={20} />
@@ -3419,7 +3612,24 @@ export const AdminPanel: React.FC = () => {
                       </div>
                       <div className="bg-slate-50 p-4 rounded-xl col-span-2">
                         <span className="text-[10px] text-slate-400 font-bold block mb-1">العنوان الكامل</span>
-                        <span className="text-sm font-bold text-slate-800">{selectedCustomer.address || 'غير محدد'}</span>
+                        <span className="text-sm font-bold text-slate-800 block mb-2">{selectedCustomer.address || 'غير محدد'}</span>
+                        {adminSettings?.enableMaps !== false && selectedCustomer.lat && selectedCustomer.lng && (
+                          <div className="w-full h-32 rounded-xl overflow-hidden border border-slate-200 mt-2 pointer-events-none relative z-0">
+                            <MapContainer 
+                              center={[selectedCustomer.lat, selectedCustomer.lng]} 
+                              zoom={14} 
+                              style={{ height: "100%", width: "100%", zIndex: 0 }}
+                              zoomControl={false}
+                              attributionControl={false}
+                              dragging={false}
+                              scrollWheelZoom={false}
+                              doubleClickZoom={false}
+                            >
+                              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                              <Marker position={[selectedCustomer.lat, selectedCustomer.lng]} />
+                            </MapContainer>
+                          </div>
+                        )}
                       </div>
                       {(selectedCustomer.lat && selectedCustomer.lng) && (
                         <div className="bg-[#f5eeff] p-4 rounded-xl col-span-2 flex items-center justify-between">
@@ -3431,7 +3641,7 @@ export const AdminPanel: React.FC = () => {
                             href={`https://www.google.com/maps?q=${selectedCustomer.lat},${selectedCustomer.lng}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="bg-white p-2 rounded-lg text-[#9952FF] shadow-sm hover:shadow-md transition"
+                            className="bg-white p-2 rounded-lg text-[#9952FF] shadow-sm hover:shadow-md transition pointer-events-auto"
                           >
                             <Globe size={18} />
                           </a>
@@ -3521,8 +3731,8 @@ export const AdminPanel: React.FC = () => {
                   >
                     {filter === 'all' && `الكل (${stats.totalOrders})`}
                     {filter === 'pending' && `معلق (${stats.pendingOrders})`}
-                    {filter === 'accepted' && `مقبول (${stats.acceptedOrders})`}
-                    {filter === 'rejected' && `مرفوض (${stats.rejectedOrders})`}
+                    {filter === 'accepted' && `مقبول ومكتمل (${stats.acceptedOrders})`}
+                    {filter === 'rejected' && `مرفوض وملغي (${stats.rejectedOrders})`}
                   </button>
                 ))}
               </div>
@@ -3642,9 +3852,18 @@ export const AdminPanel: React.FC = () => {
                         {selectedOrder.status === 'rejected' && 'مرفوض'}
                       </span>
                     </div>
-                    <button onClick={() => setSelectedOrder(null)} className="p-2 hover:bg-slate-100 rounded-lg">
-                      <X size={20} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setShowInvoiceModal(true)} 
+                        className="p-2 bg-[#f5eeff] text-[#9952FF] hover:bg-[#e9daff] rounded-lg flex items-center gap-1 font-bold text-xs"
+                      >
+                        <Printer size={16} />
+                        الفاتورة
+                      </button>
+                      <button onClick={() => setSelectedOrder(null)} className="p-2 hover:bg-slate-100 rounded-lg">
+                        <X size={20} />
+                      </button>
+                    </div>
                   </div>
                   
                   <div className="p-6 space-y-4">
@@ -3677,7 +3896,24 @@ export const AdminPanel: React.FC = () => {
                       </div>
                       <div className="bg-slate-50 p-3 rounded-xl col-span-2">
                         <span className="text-[10px] text-slate-400 font-bold block">العنوان</span>
-                        <span>{selectedOrder.customerAddress}</span>
+                        <span className="mb-2 block">{selectedOrder.customerAddress}</span>
+                        {adminSettings?.enableMaps !== false && (selectedOrder as any).customerLat && (selectedOrder as any).customerLng && (
+                          <div className="w-full h-32 rounded-xl overflow-hidden border border-slate-200 mt-2 pointer-events-none relative z-0">
+                            <MapContainer 
+                              center={[(selectedOrder as any).customerLat, (selectedOrder as any).customerLng]} 
+                              zoom={14} 
+                              style={{ height: "100%", width: "100%", zIndex: 0 }}
+                              zoomControl={false}
+                              attributionControl={false}
+                              dragging={false}
+                              scrollWheelZoom={false}
+                              doubleClickZoom={false}
+                            >
+                              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                              <Marker position={[(selectedOrder as any).customerLat, (selectedOrder as any).customerLng]} />
+                            </MapContainer>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -3937,6 +4173,7 @@ export const AdminPanel: React.FC = () => {
                       <th className="p-4 font-bold border-b">الحالة</th>
                       <th className="p-4 font-bold border-b">بواسطة</th>
                       <th className="p-4 font-bold border-b">التاريخ</th>
+                      <th className="p-4 font-bold border-b w-20 text-center">الإجراء</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
@@ -3964,6 +4201,15 @@ export const AdminPanel: React.FC = () => {
                           <td className="p-4 text-xs text-slate-400">
                             {formatSafeDateTimeString(code.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}
                           </td>
+                          <td className="p-4 text-center">
+                            <button
+                              onClick={() => setDeletingRechargeCodeId(code.id)}
+                              className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition border border-transparent mx-auto flex justify-center"
+                              title="حذف الكود"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -3971,6 +4217,38 @@ export const AdminPanel: React.FC = () => {
                 </table>
               </div>
             </div>
+
+            {deletingRechargeCodeId && (
+              <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" dir="rtl">
+                <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-xl border border-slate-100 animate-scale-in">
+                  <div className="p-5 text-center space-y-3">
+                    <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
+                      <AlertTriangle size={24} />
+                    </div>
+                    <h3 className="font-bold text-slate-800 text-sm">حذف كود الشحن نهائياً؟</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed font-bold">
+                      هل أنت متأكد من حذف هذا الكود نهائياً من قاعدة البيانات؟ لن تظهر هذه القيمة مجدداً ولا يمكن التراجع عن هذا الإجراء.
+                    </p>
+                  </div>
+                  <div className="px-5 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+                    <button
+                      onClick={() => setDeletingRechargeCodeId(null)}
+                      className="px-4 py-2 text-xs font-black text-slate-550 bg-slate-200 rounded-xl transition cursor-pointer"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      onClick={handleConfirmRechargeCodeDelete}
+                      disabled={isDeletingRechargeCode}
+                      className="px-5 py-2 text-xs font-black text-white bg-red-600 hover:bg-red-700 rounded-xl transition shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                    >
+                      {isDeletingRechargeCode && <Loader2 size={12} className="animate-spin" />}
+                      <span>{isDeletingRechargeCode ? 'جاري الحذف...' : 'نعم، احذف نهائياً'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -4393,60 +4671,13 @@ export const AdminPanel: React.FC = () => {
         )}
 
         {/* ==========================================
-            تاب سجل الإشعارات
-            ========================================== */}
-        {activeTab === 'notifications' && (
-          <div className="space-y-4 animate-fade-in">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-4 border-b border-slate-100 bg-slate-50 font-bold text-slate-700">
-                سجل الإشعارات الأخيرة ({notifications.length})
-              </div>
-              
-              {notifications.length === 0 ? (
-                <div className="p-12 text-center text-slate-400">
-                  <Bell size={48} className="mx-auto mb-3 text-slate-300" />
-                  <p className="font-bold">لا توجد إشعارات في النظام</p>
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
-                  {notifications.slice(0, 50).map(notif => (
-                    <div key={notif.id} className={`p-4 hover:bg-slate-50 transition ${!notif.read ? 'bg-[#f5eeff]/30' : ''}`}>
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2 space-x-reverse mb-1">
-                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                              notif.role === 'merchant' ? 'bg-[#e9daff] text-[#4D2980]' :
-                              notif.role === 'customer' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                            }`}>
-                              {notif.role === 'merchant' && 'تاجر'}
-                              {notif.role === 'customer' && 'زبون'}
-                              {notif.role === 'admin' && 'أدمن'}
-                            </span>
-                            <span className="text-xs font-bold text-slate-800">{notif.title}</span>
-                          </div>
-                          <p className="text-xs text-slate-600">{notif.message}</p>
-                          <span className="text-[10px] text-slate-400 mt-1 block">
-                            {formatSafeDate(notif.createdAt)} - {formatSafeTimeString(notif.createdAt, 'ar-IQ', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                        {!notif.read && <span className="w-2 h-2 bg-[#9952FF] rounded-full"></span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ==========================================
             تاب تقييمات المتاجر
             ========================================== */}
         {activeTab === 'reviews' && (
           <div className="space-y-4 animate-fade-in">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="p-4 border-b border-slate-100 bg-slate-50 font-bold text-slate-700 flex justify-between items-center">
-                <span>سجل تقييمات المتاجر ({storeReviews.length})</span>
+                <span>سجل تقييمات المتاجر ({storeReviews.filter(r => stores.some(s => s.id === r.storeId)).length})</span>
               </div>
               
                {storeReviews.filter(review => {
@@ -4804,8 +5035,8 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
               
-              <div className="flex-1 rounded-2xl overflow-hidden border border-slate-200 relative">
-                <MapContainer center={[33.3152, 44.3661]} zoom={6} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
+              <div className="flex-1 rounded-2xl overflow-hidden border border-slate-200 relative z-0">
+                <MapContainer center={[33.3152, 44.3661]} zoom={6} scrollWheelZoom={true} style={{ height: '100%', width: '100%', zIndex: 0 }}>
                   <TileLayer
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -4827,6 +5058,50 @@ export const AdminPanel: React.FC = () => {
             تاب قاعدة البيانات
             ========================================== */}
         {activeTab === 'database' && <DatabasePanel />}
+
+        {/* ==========================================
+            تاب الريلز
+            ========================================== */}
+        {activeTab === 'reels' && (
+          <div className="space-y-6 animate-in slide-in-from-bottom flex flex-col items-center">
+            <h2 className="text-xl font-black text-slate-800 self-start mb-4">إدارة الريلز والمحتوى</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 w-full">
+              {adminReels.length === 0 ? (
+                <div className="col-span-full py-10 text-center text-slate-500 font-bold bg-white rounded-2xl border border-slate-100">لا توجد ريلز حالياً.</div>
+              ) : (
+                adminReels.map(reel => {
+                  const store = stores.find(s => s.id === reel.merchantId);
+                  const product = products.find(p => p.id === reel.linkedProductId);
+                  return (
+                    <div key={reel.id} className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm relative group flex flex-col h-64 sm:h-72">
+                      <video 
+                        src={reel.videoUrl} 
+                        className="w-full h-full object-cover rounded-t-2xl" 
+                        controls={true}
+                      />
+                      <div className="absolute top-2 right-2 p-1 bg-black/60 rounded-lg text-white text-[9px] flex items-center gap-1 backdrop-blur-sm">
+                        <Eye size={10} /> {reel.viewsCount || 0}
+                      </div>
+                      <button 
+                        onClick={() => setReelToDelete(reel.id)}
+                        className="absolute top-2 left-2 p-1.5 bg-rose-500 text-white rounded-lg shadow-sm hover:bg-rose-600 transition z-[100]"
+                      >
+                        <Trash size={12} />
+                      </button>
+                      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                        <div className="flex items-center gap-1.5">
+                          {store && store.logo && <img src={store.logo} className="w-5 h-5 rounded-full border border-white" alt="" />}
+                          <p className="text-white text-[9px] font-bold truncate max-w-[80px]">{store?.shopName || 'متجر محذوف'}</p>
+                        </div>
+                        <p className="text-[9px] text-white/80 truncate mt-1">{product?.name || 'منتج محذوف'}</p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ==========================================
             تاب الإعلانات الممولة
@@ -5293,6 +5568,21 @@ export const AdminPanel: React.FC = () => {
                     </button>
                   </div>
 
+                  {/* إعدادات الخرائط */}
+                  <div className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl shadow-sm">
+                    <div className="flex flex-col">
+                      <label className="text-xs font-black text-slate-700">خرائط الموقع للطلبات</label>
+                      <span className="text-[9px] text-slate-400 font-bold">تفعيل مصغرات الخريطة (Map) في تفاصيل الطلبات</span>
+                    </div>
+                    <button 
+                      onClick={() => updateAdminSettings({ enableMaps: adminSettings.enableMaps === false ? true : false })}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all border ${adminSettings.enableMaps !== false ? 'bg-[#9952FF] border-[#9952FF] text-white shadow-lg shadow-[#e9daff]' : 'bg-white border-slate-200 text-slate-500'}`}
+                    >
+                      <MapPin size={14} fill={adminSettings.enableMaps !== false ? "currentColor" : "none"} />
+                      <span className="text-[10px] font-black">{adminSettings.enableMaps !== false ? 'مفعلة' : 'معطلة'}</span>
+                    </button>
+                  </div>
+
                   {!adminSettings.enableAutoNearby ? (
                     <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-slate-50 rounded-xl border border-slate-100">
                      {stores
@@ -5341,7 +5631,7 @@ export const AdminPanel: React.FC = () => {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <button 
                   onClick={handleExportSystem}
                   className="flex flex-col items-center justify-center p-6 bg-white border border-slate-200 rounded-2xl hover:border-[#9952FF] hover:shadow-md transition group"
@@ -5349,6 +5639,15 @@ export const AdminPanel: React.FC = () => {
                   <RefreshCw size={28} className="text-[#9952FF] group-hover:rotate-180 transition-transform duration-500" />
                   <span className="text-sm font-black text-slate-800 mt-2">تصدير قاعدة البيانات</span>
                   <span className="text-[10px] text-slate-400 mt-1">حفظ كل شيء في ملف واحد</span>
+                </button>
+
+                <button 
+                  onClick={() => updateAdminSettings({ enableAutoBackup: !adminSettings.enableAutoBackup })}
+                  className={`flex flex-col items-center justify-center p-6 bg-white border rounded-2xl hover:shadow-md transition group ${adminSettings.enableAutoBackup ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-blue-500'}`}
+                >
+                  <Archive size={28} className={`${adminSettings.enableAutoBackup ? 'text-blue-600' : 'text-blue-400'} group-hover:scale-110 transition-transform`} />
+                  <span className="text-sm font-black text-slate-800 mt-2">نسخ احتياطي تلقائي</span>
+                  <span className="text-[10px] text-slate-500 mt-1 font-bold">{adminSettings.enableAutoBackup ? 'مفعل (يتم يومياً)' : 'غير مفعل'}</span>
                 </button>
 
                 <button 
@@ -5421,6 +5720,203 @@ export const AdminPanel: React.FC = () => {
           </div>
         )}
 
+        {/* Modal: الفاتورة الإلكترونية المطورة في لوحة الادمن */}
+        <AnimatePresence>
+          {showInvoiceModal && selectedOrder && (
+            <div className="fixed inset-0 bg-[#4D2980]/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="bg-white w-full max-w-lg rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+              >
+                {/* أزرار التحكم الفوقية */}
+                <div className="p-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                   <div className="flex gap-2">
+                     <button
+                        onClick={() => handleShareWhatsAppInvoice(selectedOrder)}
+                        className="p-3 bg-emerald-500 text-white rounded-2xl shadow-lg hover:bg-emerald-600 transition-all flex items-center gap-2 text-xs font-black"
+                     >
+                       <MessageCircle size={18} />
+                       <span>واتساب</span>
+                     </button>
+                     <button
+                        onClick={handlePrint}
+                        className="p-3 bg-[#9952FF] text-white rounded-2xl shadow-lg hover:bg-[#9952FF] transition-all flex items-center gap-2 text-xs font-black"
+                     >
+                       <Printer size={18} />
+                       <span>طباعة</span>
+                     </button>
+                   </div>
+                   <button
+                    onClick={() => setShowInvoiceModal(false)}
+                    className="p-3 bg-white text-slate-400 hover:text-rose-500 rounded-2xl shadow-sm border border-slate-100 transition-all"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                {/* محتوى الفاتورة القابل للطباعة */}
+                <div className="flex-1 overflow-y-auto no-scrollbar p-1">
+                  <div 
+                    ref={invoiceRef}
+                    className="p-10 bg-white min-h-[600px] text-right font-sans"
+                    dir="rtl"
+                  >
+                    {/* Header */}
+                    <div className="flex justify-between items-start mb-10 pb-6 border-b-2 border-slate-100">
+                      <div>
+                        {stores.find(s => s.id === selectedOrder.storeId)?.logo ? (
+                          <img src={stores.find(s => s.id === selectedOrder.storeId)!.logo} className="w-20 h-20 rounded-2xl object-cover mb-4" alt="" />
+                        ) : (
+                          <div className="w-20 h-20 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-600 mb-4">
+                            <StoreIcon size={40} />
+                          </div>
+                        )}
+                        <h2 className="text-2xl font-black text-[#4D2980]">{stores.find(s => s.id === selectedOrder.storeId)?.shopName || selectedOrder.storeName}</h2>
+                        <p className="text-xs font-bold text-slate-400 mt-1">متجركم المفضل</p>
+                      </div>
+                      <div className="text-left" dir="ltr">
+                        <h1 className="text-4xl font-black text-slate-200 uppercase tracking-widest mb-4">INVOICE</h1>
+                        <div className="space-y-1">
+                          <div className="text-[10px] font-black text-slate-400 flex items-center justify-end gap-1">
+                            <span>رقم الفاتورة: </span>
+                            <span className="text-[#4D2980]">#{getOrderSeqId(selectedOrder.id)}</span>
+                            <CopyButton text={getOrderSeqId(selectedOrder.id)} size={9} className="print:hidden" />
+                          </div>
+                          <p className="text-[10px] font-black text-slate-400">التاريخ: <span className="text-[#4D2980]">{formatSafeDateTimeString(selectedOrder.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}</span></p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Customer & Merchant Details */}
+                    <div className="grid grid-cols-2 gap-8 mb-10">
+                      <div>
+                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3 border-r-4 border-slate-500 pr-3">مستلم الفاتورة:</p>
+                        <p className="text-sm font-black text-[#4D2980] mb-1 flex items-center gap-1">
+                          <span>{selectedOrder.customerName}</span>
+                          <CopyButton text={selectedOrder.customerName} size={10} className="print:hidden" />
+                        </p>
+                        <p className="text-[10px] font-mono text-purple-600 mb-1 select-all inline-flex items-center gap-1">
+                          <span>ID: #{getCustomerSeqId(selectedOrder.customerId)}</span>
+                          <CopyButton text={getCustomerSeqId(selectedOrder.customerId)} size={9} className="print:hidden" />
+                        </p>
+                        <p className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
+                          <span>{selectedOrder.customerPhone}</span>
+                          <CopyButton text={selectedOrder.customerPhone} size={9} className="print:hidden" />
+                        </p>
+                        <p className="text-xs font-bold text-slate-400 leading-relaxed italic mb-2">{selectedOrder.customerProvince} - {selectedOrder.customerAddress}</p>
+                        {(selectedOrder as any).customerLat && (selectedOrder as any).customerLng && (
+                          <div className="flex gap-2">
+                            <a 
+                              href={`https://www.google.com/maps/search/?api=1&query=${(selectedOrder as any).customerLat},${(selectedOrder as any).customerLng}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-[9px] font-black bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"
+                            >
+                              <MapPin size={12} className="text-red-500" />
+                              خرائط جوجل
+                            </a>
+                            <a 
+                              href={`https://waze.com/ul?ll=${(selectedOrder as any).customerLat},${(selectedOrder as any).customerLng}&navigate=yes`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-[9px] font-black bg-[#f2fcfed9] border border-[#c2f2ff] text-[#00a9e0] px-2 py-1 rounded-lg shadow-sm hover:bg-[#e6faff] transition-colors"
+                            >
+                              <Car size={12} />
+                              ويز (Waze)
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3 border-r-4 border-slate-200 pr-3">المصدر:</p>
+                        <p className="text-sm font-black text-[#4D2980] mb-1">{stores.find(s => s.id === selectedOrder.storeId)?.shopName || selectedOrder.storeName}</p>
+                        <p className="text-xs font-bold text-slate-500 mb-1">{stores.find(s => s.id === selectedOrder.storeId)?.phone}</p>
+                        <p className="text-xs font-bold text-slate-400">{stores.find(s => s.id === selectedOrder.storeId)?.province} - {stores.find(s => s.id === selectedOrder.storeId)?.area}</p>
+                      </div>
+                    </div>
+
+                    {/* Items Table */}
+                    <table className="w-full mb-10">
+                      <thead>
+                        <tr className="bg-slate-50 text-right">
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase rounded-r-2xl text-right">المنتج</th>
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-center">الكمية</th>
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-center">السعر</th>
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-left rounded-l-2xl text-left">المجموع</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {selectedOrder.items?.map((item: any, idx: number) => (
+                          <tr key={idx} className="group">
+                            <td className="p-4">
+                              <p className="text-xs font-black text-slate-700">{item.productName}</p>
+                            </td>
+                            <td className="p-4 text-center">
+                              <span className="text-xs font-black text-slate-500">{item.quantity}</span>
+                            </td>
+                            <td className="p-4 text-center">
+                              <span className="text-xs font-bold text-slate-500">{item.price?.toLocaleString()} د.ع</span>
+                            </td>
+                            <td className="p-4 text-left">
+                              <span className="text-xs font-black text-[#4D2980]">{(item.price * item.quantity).toLocaleString()} د.ع</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    {/* Totals & QR */}
+                    <div className="flex justify-between items-end border-t-2 border-slate-50 pt-10">
+                      <div className="flex flex-col items-center gap-2">
+                        <QRCodeSVG 
+                          value={JSON.stringify({ 
+                            id: selectedOrder.id, 
+                            store: stores.find(s => s.id === selectedOrder.storeId)?.shopName || selectedOrder.storeName,
+                            total: selectedOrder.total,
+                            date: selectedOrder.createdAt 
+                          })}
+                          size={100}
+                          level="H"
+                          includeMargin={true}
+                        />
+                        <p className="text-[9px] font-black text-slate-300 uppercase tracking-tighter">Scan for E-Invoice</p>
+                      </div>
+                      
+                      <div className="w-64 space-y-3">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold text-slate-400">المجموع الفرعي:</span>
+                          <span className="font-black text-slate-600">{(selectedOrder.subtotal || 0).toLocaleString()} د.ع</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold text-slate-400">سعر التوصيل:</span>
+                          <span className="font-black text-slate-600">{(selectedOrder.deliveryPrice || 0).toLocaleString()} د.ع</span>
+                        </div>
+                        {selectedOrder.discountAmount > 0 && (
+                          <div className="flex justify-between items-center text-xs text-emerald-600">
+                            <span className="font-bold">خصم الكود:</span>
+                            <span className="font-black">- {selectedOrder.discountAmount.toLocaleString()} د.ع</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center p-4 bg-[#9952FF] rounded-2xl text-white shadow-xl shadow-slate-100">
+                          <span className="text-xs font-black uppercase">الإجمالي النهائي:</span>
+                          <span className="text-lg font-black">{(selectedOrder.total || 0).toLocaleString()} د.ع</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer Note */}
+                    <div className="mt-16 text-center">
+                      <p className="text-[10px] font-bold text-slate-400 italic">نأمل رؤيتكم مرة أخرى قريباً.</p>
+                      <div className="w-16 h-1 bg-slate-100 mx-auto mt-4 rounded-full"></div>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* مودال إدارة الأوسمة */}
@@ -5602,6 +6098,40 @@ export const AdminPanel: React.FC = () => {
                   حفظ الأوسمة
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* مودال تأكيد حذف الريلز */}
+      {reelToDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm p-6 shadow-2xl animate-scale-in border border-slate-100 flex flex-col items-center text-center space-y-4">
+            <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center shadow-inner">
+              <Trash size={32} />
+            </div>
+            <h3 className="font-black text-slate-800 text-lg">تأكيد حذف الريلز</h3>
+            <p className="text-sm font-bold text-slate-600">هل أنت متأكد من رغبتك في حذف هذا الريلز؟ لا يمكن التراجع عن هذا الإجراء.</p>
+            <div className="flex gap-2 w-full pt-2">
+              <button
+                onClick={async () => {
+                  try {
+                    await deleteDoc(doc(db, 'reels', reelToDelete));
+                    setReelToDelete(null);
+                  } catch (error) {
+                    alert('حدث خطأ أثناء الحذف: ' + error);
+                  }
+                }}
+                className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl transition shadow-md shadow-red-500/20"
+              >
+                تأكيد الحذف
+              </button>
+              <button
+                onClick={() => setReelToDelete(null)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl transition border border-slate-200"
+              >
+                إلغاء
+              </button>
             </div>
           </div>
         </div>

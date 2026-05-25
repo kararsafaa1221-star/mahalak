@@ -78,6 +78,7 @@ export interface AppContextType {
   rechargeCodes: RechargeCode[];
   generateRechargeCodes: (count: number, points: number) => Promise<void>;
   redeemRechargeCode: (code: string, customerId: string) => Promise<number>;
+  deleteRechargeCode: (id: string) => Promise<void>;
   toggleAutoApprove: () => void;
   updateSubscriptionPrice: (id: string, p: number) => void;
   updateStoreStatus: (id: string, s: string) => void;
@@ -300,7 +301,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     const currentMonth = new Date().toISOString().substring(0, 7);
-    const id = data.id || 'cust_' + Date.now();
+    
+    let nextNumId = 1;
+    if (customers && customers.length > 0) {
+      customers.forEach(c => {
+        const num = parseInt(c.id);
+        if (!isNaN(num) && num >= nextNumId) {
+          nextNumId = num + 1;
+        }
+      });
+    }
+    const id = data.id || String(nextNumId);
+
     const newCust: any = { 
       ...data, 
       id,
@@ -911,6 +923,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return codeData.points;
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, 'redeem_recharge');
+      throw e;
+    }
+  };
+
+  const deleteRechargeCode = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'recharge_codes', id));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'delete_recharge');
       throw e;
     }
   };
@@ -2303,7 +2324,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       getCustomerSeqId, getOrderSeqId,
       setOrders,
       setCurrentCustomer, setCurrentMerchant, setCurrentAdmin, registerCustomer, updateCustomerProfile, toggleFollowStore, toggleStoreNotification, placeOrder, convertPointsToPromo, addCustomerPoints, submitStoreReview, updateStoreReview, deleteStoreReview, registerMerchant, updateStoreProfile, addProduct, updateProduct, deleteProduct, createPromoCode, updatePromoCode, togglePromoCodeStatus, updateOrder, updateOrderStatus, addNotification, markNotificationAsRead, markAllNotificationsAsRead, sendAdminNotification,
-      rechargeCodes, generateRechargeCodes, redeemRechargeCode,
+      rechargeCodes, generateRechargeCodes, redeemRechargeCode, deleteRechargeCode,
       toggleAutoApprove, updateSubscriptionPrice, updateStoreStatus, updateStoreBadges, adminUpdateStore, toggleCustomerBlock, deleteCustomer, toggleStoreBan, deleteStore, deletePromoCode, updateAdminSettings,
       createFlashSale, updateFlashSaleStatus, updateFlashSaleDates, deleteFlashSale, requestJoinFlashSale, updateFlashSaleRequestStatus, seedDatabase,
       generateVirtualData, deleteAllVirtualData

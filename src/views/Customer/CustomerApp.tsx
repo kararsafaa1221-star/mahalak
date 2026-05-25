@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../../context/useApp';
 import { Product, Store, Customer } from '../../types';
 import { STORE_CATEGORIES, STORE_BADGES } from '../../constants';
@@ -12,6 +12,20 @@ import {
 import { sendOTP } from '../../services/otpService';
 import { LocationPicker } from '../../components/LocationPicker';
 import { VerifiedBadge } from '../../components/VerifiedBadge';
+import { ReelsFeed } from '../../components/ReelsFeed';
+import { ReelsProfileList } from '../../components/ReelsProfileList';
+import { MapContainer, TileLayer, Marker } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Fix leaflet marker icon issue
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+});
+
 import { showLocalNotification, requestNotificationPermission, setupPushNotifications } from '../../lib/pushNotifications';
 import { formatSafeDate, formatSafeTimeString, formatSafeDateTimeString } from '../../utils/date';
 
@@ -199,7 +213,27 @@ export const CustomerApp: React.FC = () => {
   const [orderToCancel, setOrderToCancel] = useState<any | null>(null);
   
   // إدارة التصفح داخل المتجر المختار
-  const [selectedStore, setSelectedStore] = useState<Store | null>(null);
+  const [selectedStore, setRawSelectedStore] = useState<Store | null>(null);
+  const lastScrollY = useRef(0);
+  const selectedStoreRef = useRef<Store | null>(null);
+
+  const setSelectedStore = useCallback((store: Store | null) => {
+    if (store) {
+      if (!selectedStoreRef.current) {
+        lastScrollY.current = window.scrollY;
+      }
+      selectedStoreRef.current = store;
+      setRawSelectedStore(store);
+      setTimeout(() => window.scrollTo({ top: 0, behavior: 'instant' }), 0); // Scroll to top when opening store
+    } else {
+      selectedStoreRef.current = null;
+      setRawSelectedStore(null);
+      // Ensure the DOM has a moment to render the previous list before scrolling
+      setTimeout(() => {
+        window.scrollTo({ top: lastScrollY.current, behavior: 'instant' });
+      }, 50);
+    }
+  }, []);
 
   const uniqueStores = useMemo(() => {
     const map = new Map<string, Store>();
@@ -1333,12 +1367,18 @@ export const CustomerApp: React.FC = () => {
 
   // مشاركة المتجر (WhatsApp)
   // نظام المشاركة الشامل
-  const openShareModal = (type: 'store' | 'product', data: any) => {
-    const text = type === 'store' 
-      ? `ألقِ نظرة على متجر "${data.shopName}" في تطبيق محلك! محل رهيب يعرض منتجات رائعة في منطقة ${data.area}.
-رابط المتجر: https://mahallak.app/store/${data.id}`
-      : `شاهد هذا المنتج: "${data.name}" بسعر ${data.price.toLocaleString()} د.ع في متجر "${data.shopName}".
+  const openShareModal = (type: 'store' | 'product' | 'reel', data: any) => {
+    let text = '';
+    if (type === 'store') {
+      text = `ألقِ نظرة على متجر "${data.shopName}" في تطبيق محلك! محل رهيب يعرض منتجات رائعة في منطقة ${data.area}.
+رابط المتجر: https://mahallak.app/store/${data.id}`;
+    } else if (type === 'product') {
+      text = `شاهد هذا المنتج: "${data.name}" بسعر ${data.price.toLocaleString()} د.ع في متجر "${data.shopName}".
 رابط المنتج: https://mahallak.app/product/${data.id}`;
+    } else if (type === 'reel') {
+      text = `شاهد هذا الفيديو الممتع لمنتج رائع في تطبيق محلك! 🎬✨
+رابط المقطع: https://mahallak.app/reel/${data.id}`;
+    }
     
     setShareText(text);
     setShareConfig({ type, data });
@@ -1349,7 +1389,9 @@ export const CustomerApp: React.FC = () => {
     const encodedText = encodeURIComponent(shareText);
     const url = shareConfig?.type === 'store' 
       ? `https://mahallak.app/store/${shareConfig?.data?.id}` 
-      : `https://mahallak.app/product/${shareConfig?.data?.id}`;
+      : shareConfig?.type === 'product'
+      ? `https://mahallak.app/product/${shareConfig?.data?.id}`
+      : `https://mahallak.app/reel/${shareConfig?.data?.id}`;
     
     let shareUrl = '';
     switch(platform) {
@@ -1371,7 +1413,9 @@ export const CustomerApp: React.FC = () => {
     if (shareUrl) openExternalUrl(shareUrl);
     
     // مكافأة النقاط (مرة واحدة في الدقيقة تقريباً لتجنب سوء الاستخدام)
-    addCustomerPoints(currentCustomer!.id, 5);
+    if (currentCustomer) {
+      addCustomerPoints(currentCustomer.id, 5);
+    }
   };
 
   // تحويل النقاط إلى كود خصم
@@ -1492,7 +1536,7 @@ export const CustomerApp: React.FC = () => {
                   className="px-2.5 py-1 bg-white hover:bg-slate-50 rounded-xl text-slate-700 shadow-xs border border-slate-100 hover:scale-105 active:scale-95 transition-all flex items-center gap-1 font-bold text-[9.5px] sm:text-xs font-tajawal"
                 >
                   <ChevronRight size={14} />
-                  <span>رجوع للمتاجر</span>
+                  <span>رجوع</span>
                 </button>
               </div>
 
@@ -1830,7 +1874,8 @@ export const CustomerApp: React.FC = () => {
         ) : (
           <>
             {/* الهيدر العلوي - تصميم عصري */}
-            <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-slate-200/60 transition-all">
+            {activeTab !== 'reels' && (
+              <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-slate-200/60 transition-all">
               <div className="max-w-4xl mx-auto px-4 h-16 flex justify-between items-center text-[#4D2980]">
                 
                 <div className="flex items-center gap-3">
@@ -1887,6 +1932,7 @@ export const CustomerApp: React.FC = () => {
                 </div>
               </div>
             </header>
+            )}
 
         {/* قائمة الإشعارات المنسدلة - تصميم جديد */}
         {showNotifications && (
@@ -1983,7 +2029,7 @@ export const CustomerApp: React.FC = () => {
         )}
 
         {/* التاب المفتوح حالياً */}
-        <main className="flex-1 p-3 sm:p-5 max-w-4xl mx-auto w-full min-w-0 overflow-x-hidden">
+        <main className={activeTab === 'reels' ? "w-full min-h-screen bg-black" : "flex-1 p-3 sm:p-5 max-w-4xl mx-auto w-full min-w-0 overflow-x-hidden"}>
           
           {/* تاب المتاجر والتصفح */}
           {activeTab === 'stores' && (
@@ -2044,6 +2090,49 @@ export const CustomerApp: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* عروض فلاش سيلز */}
+              {(() => {
+                const activeFlashSales = flashSales.filter(f => f.status === 'active' || (f.status === 'upcoming' && new Date() >= new Date(f.startTime) && new Date() < new Date(f.endTime)));
+                if (activeFlashSales.length === 0) return null;
+                return (
+                  <div className="bg-gradient-to-l from-red-600 to-rose-500 rounded-[2rem] p-5 shadow-lg relative overflow-hidden group mx-1 mb-4 text-white">
+                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500">
+                      <Zap size={140} />
+                    </div>
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 bg-white/20 backdrop-blur-sm rounded-xl">
+                            <Zap size={18} fill="currentColor" />
+                          </div>
+                          <h3 className="font-black text-white text-xs sm:text-sm tracking-tight drop-shadow-sm">فلاش سيلز - خصومات لفترة محدودة!</h3>
+                        </div>
+                      </div>
+                      <div className="flex overflow-x-auto gap-3 pb-2 scrollbar-thin">
+                        {activeFlashSales.map(fs => {
+                          const targetStore = stores.find(s => s.id === fs.itemStoreId);
+                          return (
+                            <div 
+                              key={fs.id} 
+                              onClick={() => { if(targetStore && !targetStore.isBanned) setSelectedStore(targetStore); }}
+                              className="w-40 shrink-0 bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20 cursor-pointer hover:bg-white/20 transition-all text-center"
+                            >
+                                <span className="block text-[10px] font-bold text-rose-100 truncate mb-1">{fs.title}</span>
+                                {targetStore && (
+                                  <div className="flex items-center gap-2 justify-center mt-2 bg-white rounded-xl p-1.5 shadow-sm text-slate-800">
+                                    <img src={targetStore.logo} className="w-6 h-6 rounded-lg shrink-0 object-cover" alt="" />
+                                    <span className="text-[10px] font-black truncate">{targetStore.shopName}</span>
+                                  </div>
+                                )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* قسم المتاجر الموثقة - يظهر مباشرة تحت الإعلان المميز */}
               <div className="bg-white rounded-[2rem] border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group mx-1">
@@ -2401,6 +2490,26 @@ export const CustomerApp: React.FC = () => {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* تاب مقاطع الفيديو التسوقية الجديد */}
+          {activeTab === 'reels' && (
+            <div className="w-full h-full animate-fade-in bg-black">
+              <ReelsFeed 
+                onBack={() => handleTabChange('stores')}
+                onShowCart={() => setShowCart(true)}
+                cartCount={cart.reduce((sum, item) => sum + item.quantity, 0)}
+                onAddToCart={(p) => addToCart(p, 1)}
+                currentCustomer={currentCustomer}
+                onShareReel={(reel) => openShareModal('reel', reel)}
+                onVisitStore={(storeId) => {
+                  const foundStore = stores.find(s => s.id === storeId);
+                  if (foundStore) {
+                    setSelectedStore(foundStore);
+                  }
+                }}
+              />
             </div>
           )}
 
@@ -2801,13 +2910,33 @@ export const CustomerApp: React.FC = () => {
                          <CancelOrderButton order={order} onCancelClick={(o) => setOrderToCancel(o)} />
 
                          {/* تفاصيل التوصيل */}
-                         <div className="pt-3 border-t border-slate-50 flex items-center gap-2 min-w-0 w-full">
-                            <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
-                               <MapPin size={12} />
+                         <div className="pt-3 border-t border-slate-50 flex flex-col gap-2 min-w-0 w-full">
+                            <div className="flex items-center gap-2">
+                              <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
+                                 <MapPin size={12} />
+                              </div>
+                              <span className="text-[11px] font-bold text-slate-500 whitespace-normal break-words flex-1" title={`عنوان التوصيل: ${order.customerProvince} - ${order.customerAddress}`}>
+                                 عنوان التوصيل: {order.customerProvince} - {order.customerAddress}
+                              </span>
                             </div>
-                            <span className="text-[11px] font-bold text-slate-500 whitespace-normal break-words flex-1" title={`عنوان التوصيل: ${order.customerProvince} - ${order.customerAddress}`}>
-                               عنوان التوصيل: {order.customerProvince} - {order.customerAddress}
-                            </span>
+                            {adminSettings?.enableMaps !== false && (order as any).customerLat && (order as any).customerLng && (
+                              <div className="w-full h-24 rounded-xl overflow-hidden border border-slate-200 pointer-events-none relative mt-1 z-0">
+                                <MapContainer 
+                                  center={[(order as any).customerLat, (order as any).customerLng]} 
+                                  zoom={14} 
+                                  style={{ height: "100%", width: "100%", zIndex: 0 }}
+                                  zoomControl={false}
+                                  attributionControl={false}
+                                  dragging={false}
+                                  scrollWheelZoom={false}
+                                  doubleClickZoom={false}
+                                >
+                                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                                  <Marker position={[(order as any).customerLat, (order as any).customerLng]} />
+                                </MapContainer>
+                                <div className="absolute inset-0 z-[400] bg-transparent"></div>
+                              </div>
+                            )}
                          </div>
                       </div>
 
@@ -3322,6 +3451,19 @@ export const CustomerApp: React.FC = () => {
                  </div>
               </div>
 
+              {/* قائمة الفيديوهات المحفوظة والمعجب بها التفاعلية الجديدة */}
+              <ReelsProfileList 
+                currentCustomer={currentCustomer}
+                onAddToCart={(p) => addToCart(p, 1)}
+                onShareReel={(reel) => openShareModal('reel', reel)}
+                onVisitStore={(storeId) => {
+                  const foundStore = stores.find(s => s.id === storeId);
+                  if (foundStore) {
+                    setSelectedStore(foundStore);
+                  }
+                }}
+              />
+
               {/* أقسام البيانات والإعدادات */}
               <div className="space-y-4">
                   {/* 1. البيانات الشخصية */}
@@ -3532,10 +3674,12 @@ export const CustomerApp: React.FC = () => {
         </main>
         </>
         )}
-        <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200/60 z-50 shadow-[0_-5px_20px_rgba(0,0,0,0.03)] select-none">
+        {activeTab !== 'reels' && (
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200/60 z-50 shadow-[0_-5px_20px_rgba(0,0,0,0.03)] select-none">
           <div className="max-w-4xl mx-auto w-full flex justify-around items-center px-4 py-3">
             {[
               { id: 'stores', label: 'الرئيسية', icon: Home },
+              { id: 'reels', label: 'الفيديو', icon: Tv },
               { id: 'merchants', label: 'المتاجر', icon: StoreIcon },
               { id: 'orders', label: 'طلباتي', icon: ClipboardList, badge: customerOrders.filter(o => o.status === 'pending').length },
               { id: 'wallet', label: 'المحفظة', icon: Wallet, gift: currentCustomer.points >= 100 },
@@ -3572,6 +3716,7 @@ export const CustomerApp: React.FC = () => {
             })}
           </div>
         </nav>
+        )}
 
         {/* زر عائم تفاعلي للرجوع للمتاجر عند التصفح كلياً */}
         {selectedStore && (
@@ -3579,10 +3724,10 @@ export const CustomerApp: React.FC = () => {
             <button 
               onClick={() => setSelectedStore(null)}
               className="px-4 py-3 bg-gradient-to-r from-[#4D2980] to-[#9952FF] text-white hover:from-[#381a66] hover:to-[#4D2980] rounded-full flex items-center gap-2 shadow-xl shadow-purple-500/30 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer font-black text-xs border border-white/20 font-tajawal"
-              title="رجوع للمتاجر"
+              title="رجوع"
             >
               <ChevronRight size={16} />
-              <span>رجوع للمتاجر</span>
+              <span>رجوع</span>
             </button>
           </div>
         )}
@@ -3629,25 +3774,47 @@ export const CustomerApp: React.FC = () => {
 
                   <div className="flex-1 overflow-y-auto p-3 space-y-3">
                     {/* معلومات العنوان المختار داخل السلة مع إمكانية التغيير */}
-                    <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-100 flex items-center justify-between shadow-2xs">
-                      <div className="flex items-center gap-2">
-                         <div className="p-1.5 bg-white text-[#9952FF] rounded-lg shadow-3xs border border-slate-100 shrink-0">
-                            <MapPin size={14} />
-                         </div>
-                         <div className="text-right min-w-0">
-                            <p className="text-[8.5px] font-black text-slate-400 mb-0.5">عنوان التوصيل الحالي</p>
-                            <p className="text-[9.5px] font-black text-slate-700 leading-tight whitespace-normal break-words">
-                              {currentCustomer?.province} {currentCustomer?.address ? `- ${currentCustomer.address}` : ''}
-                            </p>
-                         </div>
+                    <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-100 shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                           <div className="p-1.5 bg-white text-[#9952FF] rounded-lg shadow-3xs border border-slate-100 shrink-0">
+                              <MapPin size={14} />
+                           </div>
+                           <div className="text-right min-w-0">
+                              <p className="text-[8.5px] font-black text-slate-400 mb-0.5">عنوان التوصيل الحالي</p>
+                              <p className="text-[9.5px] font-black text-slate-700 leading-tight whitespace-normal break-words">
+                                {currentCustomer?.province} {currentCustomer?.address ? `- ${currentCustomer.address}` : ''}
+                              </p>
+                           </div>
+                        </div>
+                        <button 
+                          onClick={() => { setShowCart(false); setActiveTab('profile'); }}
+                          className="p-1.5 text-[#9952FF] hover:bg-[#f5eeff] rounded-lg transition-all shrink-0"
+                          title="تغيير العنوان"
+                        >
+                           <RefreshCw size={14} />
+                        </button>
                       </div>
-                      <button 
-                        onClick={() => { setShowCart(false); setActiveTab('profile'); }}
-                        className="p-1.5 text-[#9952FF] hover:bg-[#f5eeff] rounded-lg transition-all shrink-0"
-                        title="تغيير العنوان"
-                      >
-                         <RefreshCw size={14} />
-                      </button>
+                      
+                      {/* الخريطة المصغرة في السلة */}
+                      {adminSettings?.enableMaps !== false && currentCustomer?.lat && currentCustomer?.lng && (
+                        <div className="w-full h-24 rounded-xl overflow-hidden border border-slate-200 pointer-events-none relative mt-2 z-0">
+                          <MapContainer 
+                            center={[currentCustomer.lat, currentCustomer.lng]} 
+                            zoom={14} 
+                            style={{ height: "100%", width: "100%", zIndex: 0 }}
+                            zoomControl={false}
+                            attributionControl={false}
+                            dragging={false}
+                            scrollWheelZoom={false}
+                            doubleClickZoom={false}
+                          >
+                            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                            <Marker position={[currentCustomer.lat, currentCustomer.lng]} />
+                          </MapContainer>
+                          <div className="absolute inset-0 z-[400] bg-transparent"></div>
+                        </div>
+                      )}
                     </div>
 
                     {/* عرض المنتجات مجمعة حسب المتجر */}
@@ -4226,12 +4393,21 @@ export const CustomerApp: React.FC = () => {
                     >
                       تتبع طلبي الآن
                     </button>
-                    <button 
-                      onClick={() => { setShowOrderSuccess(false); handleTabChange('stores'); setSelectedStore(null); }}
-                      className="py-4 bg-white text-[#9952FF] border border-[#e9daff] font-black rounded-2xl shadow-sm hover:bg-[#f5eeff] transition-all active:scale-95 text-[10px] sm:text-xs"
-                    >
-                      إكمال التسوق
-                    </button>
+                    {activeTab === 'reels' ? (
+                      <button 
+                        onClick={() => { setShowOrderSuccess(false); }}
+                        className="py-4 bg-white text-[#9952FF] border border-[#e9daff] font-black rounded-2xl shadow-sm hover:bg-[#f5eeff] transition-all active:scale-95 text-[10px] sm:text-xs"
+                      >
+                        العودة للفيديو
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => { setShowOrderSuccess(false); handleTabChange('stores'); setSelectedStore(null); }}
+                        className="py-4 bg-white text-[#9952FF] border border-[#e9daff] font-black rounded-2xl shadow-sm hover:bg-[#f5eeff] transition-all active:scale-95 text-[10px] sm:text-xs"
+                      >
+                        إكمال التسوق
+                      </button>
+                    )}
                   </div>
                 </div>
               </motion.div>

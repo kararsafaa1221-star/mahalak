@@ -17,6 +17,8 @@ export interface Customer {
   tier: 'Silver' | 'Gold' | 'Platinum' | 'Diamond'; 
   followedStores: string[]; 
   storeNotifications: string[]; 
+  savedReels?: string[];
+  likedReels?: string[];
   isBlocked: boolean; 
   objectId?: string; 
   lat?: number; 
@@ -51,3 +53,18 @@ export interface AppNotification {
 }
 export interface FlashSale { id: string; title: string; description: string; startTime: string; endTime: string; status: 'upcoming' | 'active' | 'ended' | 'paused'; objectId?: string; }
 export interface FlashSaleRequest { id: string; flashSaleId: string; storeId: string; productId: string; status: 'pending' | 'approved' | 'rejected'; promotionalPrice: number; quantityLimit?: number; objectId?: string; }
+
+export interface Reel {
+  id: string;
+  videoUrl: string;
+  linkedProductId: string;
+  merchantId: string;
+  createdAt: any;
+  likesCount?: number;
+  viewsCount?: number;
+  commentsCount?: number;
+  sharesCount?: number;
+  savesCount?: number;
+  objectId?: string;
+}
+
