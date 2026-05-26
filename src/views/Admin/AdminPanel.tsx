@@ -278,19 +278,26 @@ const DatabasePanel: React.FC = () => {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-slate-50 p-5 rounded-2xl border border-slate-100">
                     <div className="space-y-2">
-                        <label className="text-xs font-bold text-slate-700 block text-right">عدد المتاجر الافتراضية المراد توليدها:</label>
-                        <div className="flex items-center gap-3">
+                        <label className="text-xs font-bold text-slate-700 block text-right">عدد المتاجر الافتراضية المراد توليدها (عدد غير محدود):</label>
+                        <div className="flex items-center gap-2">
                             <input
                                 type="range"
                                 min="1"
-                                max="30"
-                                value={numStores}
+                                max="100"
+                                value={numStores <= 100 ? numStores : 100}
                                 onChange={(e) => setNumStores(parseInt(e.target.value))}
                                 className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#9952FF]"
                             />
-                            <span className="text-sm font-black text-slate-800 w-8 text-center">{numStores}</span>
+                            <input
+                                type="number"
+                                min="1"
+                                max="1000"
+                                value={numStores}
+                                onChange={(e) => setNumStores(Math.max(1, parseInt(e.target.value) || 1))}
+                                className="w-16 bg-white border border-slate-200 px-2 py-1 rounded-xl font-bold font-mono text-xs text-center focus:outline-none focus:ring-1 focus:ring-[#9952FF]"
+                            />
                         </div>
-                        <p className="text-[10px] text-slate-400 text-right">اختر من ١ إلى ٣٠ متجراً لتوليدها دفعة واحدة</p>
+                        <p className="text-[10px] text-slate-400 text-right">توليد أي عدد (١، ١٠، ٥٠، ١٠٠+) من المتاجر دفعة واحدة</p>
                     </div>
 
                     <div className="space-y-2">
@@ -599,14 +606,20 @@ const WhatsappRetargetingPanel: React.FC = () => {
         const expiryString = promoExpiryDays > 0 ? `\n\nصالح لمدة ${promoExpiryDays} أيام للتسوق من أي متجر! 🚀` : `\n\nصالح دائماً للتسوق من أي متجر! 🚀`;
         const message = `مرحباً ${customer.name} من منصة محلك! اشتقنالك 💙\n\nلأنك زبون مميز، نهيدك كود خصم بقيمة ${discountString} لطلبك الجاي.\n\nاستخدم الكود:\n${promoCodeString}${expiryString}`;
         
-        const success = await sendWhatsAppMessage(customer.phone, message);
-        if (success) {
-          setSentCount(c => c + 1);
-          addLog(`✅ نجاح الإرسال للزبون: ${customer.name}`);
-        } else {
-          addLog(`❌ فشل الإرسال للزبون: ${customer.name} (قد يكون بسبب حد الـ API)`);
+        try {
+          const success = await sendWhatsAppMessage(customer.phone, message);
+          if (success) {
+            setSentCount(c => c + 1);
+            addLog(`✅ نجاح الإرسال للزبون: ${customer.name}`);
+          } else {
+            addLog(`❌ فشل الإرسال للزبون: ${customer.name}`);
+          }
+        } catch (msgErr: any) {
+          addLog(`❌ فشل الإرسال للزبون: ${customer.name} - ${msgErr.message}`);
         }
-        await new Promise(r => setTimeout(r, 1000));
+        
+        // Delay of 5.5 seconds between messages due to Account Protection limit on Wasender API
+        await new Promise(r => setTimeout(r, 5500));
       }
 
       addLog(`🎉 اكتملت الحملة بنجاح! الإجمالي: ${targetCustomers.length}`);
@@ -1883,6 +1896,7 @@ export const AdminPanel: React.FC = () => {
           </button>
 
           {/* ريلز */}
+          {/* إدارة الريلز (مخفية مؤقتاً)
           <button 
             onClick={() => handleTabSelect('reels')}
             className={`w-full flex items-center space-x-3 space-x-reverse px-4 py-2.5 rounded-xl transition text-sm ${
@@ -1892,6 +1906,7 @@ export const AdminPanel: React.FC = () => {
             <Film size={18} className="text-blue-400" />
             <span className="font-semibold">إدارة الريلز</span>
           </button>
+          */}
 
           {/* الإعدادات */}
           <button 
@@ -2071,6 +2086,7 @@ export const AdminPanel: React.FC = () => {
 
             {/* الإحصائيات الإضافية (ريلز وتقييمات ومنتجات) */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {/*
               <div 
                 onClick={() => handleTabSelect('reels')}
                 className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
@@ -2089,6 +2105,7 @@ export const AdminPanel: React.FC = () => {
                   <span className="text-pink-500">إعجابات: {(stats.totalReelLikes || 0).toLocaleString()}</span>
                 </div>
               </div>
+              */}
 
               <div 
                 onClick={() => handleTabSelect('reviews')}

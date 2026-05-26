@@ -6,12 +6,12 @@ import firebaseConfigData from '../../firebase-applet-config.json';
 
 // Configuration from applet config or environment variables
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfigData.apiKey || "dummy-api-key",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigData.authDomain || "dummy-auth-domain",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfigData.projectId || "dummy-project-id",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigData.storageBucket || "dummy-storage-bucket",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigData.messagingSenderId || "dummy-sender-id",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfigData.appId || "dummy-app-id",
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfigData.apiKey || "dummy-api-key").trim(),
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigData.authDomain || "dummy-auth-domain").trim(),
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfigData.projectId || "dummy-project-id").trim(),
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigData.storageBucket || "dummy-storage-bucket").trim(),
+  messagingSenderId: (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigData.messagingSenderId || "dummy-sender-id").trim(),
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfigData.appId || "dummy-app-id").trim(),
 };
 
 // Use the database ID from config or env
@@ -22,16 +22,7 @@ console.log("Configuring Firestore for project:", firebaseConfig.projectId, "usi
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-// Use initializeFirestore with settings optimized for proxy environments
-let firestoreDb;
-try {
-  firestoreDb = initializeFirestore(app, {
-    experimentalForceLongPolling: true
-  });
-} catch (e) {
-  firestoreDb = getFirestore(app);
-}
-export const db = firestoreDb;
+export const db = getFirestore(app);
 
 export const auth = getAuth(app);
 

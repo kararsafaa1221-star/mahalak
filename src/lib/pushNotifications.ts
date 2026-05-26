@@ -25,71 +25,62 @@ export async function registerServiceWorker() {
 export async function createNotificationChannels() {
   if (Capacitor.getPlatform() === 'android') {
     try {
-      // ==== Customer App Channels ====
-      
-      // 1. Order Updates (Sound)
+      // ==== 1. قنوات تطبيق الزبون ====
       await PushNotifications.createChannel({
         id: 'customer_order_updates_sound',
-        name: 'تحديثات الطلبات (عالي)',
+        name: 'تحديثات الطلبات (صوتي)',
         description: 'إشعارات قبول أو رفض الطلبات',
-        importance: 5, // High
-        visibility: 1, // Public
+        importance: 5,
+        visibility: 1,
         vibration: true,
       });
 
-      // 2. Order Updates (Silent)
       await PushNotifications.createChannel({
         id: 'customer_order_updates_silent',
         name: 'حالة الطلب (صامت)',
         description: 'تغير حالة الطلب إلى قيد التجهيز أو مع المندوب',
-        importance: 2, // Low (Silent)
+        importance: 2,
         visibility: 1,
         vibration: false,
       });
 
-      // 3. Promo Codes
       await PushNotifications.createChannel({
         id: 'customer_promos_sound',
         name: 'العروض ورموز الخصم',
         description: 'عند إطلاق كود خصم جديد',
-        importance: 4, // Default (Sound)
-        visibility: 1,
-        vibration: true,
-      });
-
-      // 4. Store Products
-      await PushNotifications.createChannel({
-        id: 'customer_products_sound',
-        name: 'المنتجات الجديدة',
-        description: 'إشعارات من المتاجر التي تتابعها',
         importance: 4,
         visibility: 1,
         vibration: true,
       });
 
-      // ==== Merchant App Channels ====
-      
-      // 5. New Orders (Sound)
       await PushNotifications.createChannel({
-        id: 'merchant_orders_sound',
-        name: 'طلبات جديدة',
-        description: 'تصلك طلبات جديدة من الزبائن',
-        importance: 5, // High
+        id: 'customer_products_sound',
+        name: 'المنتجات الجديدة',
+        description: 'إشعارات من M المتاجر التي تتابعها',
+        importance: 4,
         visibility: 1,
         vibration: true,
       });
 
-      // 6. Customer Activity (Silent)
+      // ==== 2. قنوات مركز التجارة ====
+      await PushNotifications.createChannel({
+        id: 'merchant_orders_sound',
+        name: 'طلبات جديدة',
+        description: 'تصلك طلبات جديدة من الزبائن',
+        importance: 5,
+        visibility: 1,
+        vibration: true,
+      });
+
       await PushNotifications.createChannel({
         id: 'merchant_activity_silent',
         name: 'نشاط الزبائن (صامت)',
         description: 'تصفح وإضافة للسلة',
-        importance: 2, // Low
+        importance: 2,
         visibility: 1,
         vibration: false,
       });
 
-      // 7. Social / Follows (Silent)
       await PushNotifications.createChannel({
         id: 'merchant_social_silent',
         name: 'المتابعين الجدد',
@@ -99,13 +90,11 @@ export async function createNotificationChannels() {
         vibration: false,
       });
 
-      // ==== Shared Admin Panel Channel ====
-      
-      // 8. Admin Broadcasts
+      // ==== 3. قناة لوحة الإدارة العامة (محلك) ====
       await PushNotifications.createChannel({
         id: 'admin_broadcasts_sound',
         name: 'إشعارات الإدارة',
-        description: 'إعلانات وإشعارات عامة',
+        description: 'إعلانات وإشعارات عامة من لوحة الأدمن',
         importance: 5,
         visibility: 1,
         vibration: true,
@@ -119,7 +108,7 @@ export async function createNotificationChannels() {
 }
 
 export async function sendExternalPush(
-  targetUserId: string,
+  targetUserId: string | string[],
   title: string,
   message: string,
   channelId: string
@@ -132,20 +121,23 @@ export async function sendExternalPush(
     return;
   }
 
+  const externalIds = Array.isArray(targetUserId) ? targetUserId : [targetUserId];
+
   try {
     const payload = {
       app_id: appId,
-      include_aliases: { external_id: [targetUserId] },
+      include_aliases: { external_id: externalIds },
       target_channel: "push",
       headings: { en: title, ar: title },
       contents: { en: message, ar: message },
       existing_android_channel_id: channelId,
-      // We can also target "android_sound": "nil" dynamically if needed, 
-      // but Android 8+ relies primarily on the channel config.
     };
 
     if (channelId.includes('silent')) {
       (payload as any).android_sound = "nil";
+      (payload as any).ios_sound = "nil";
+    } else {
+      (payload as any).ios_sound = "alert_sound.wav";
     }
 
     const response = await fetch('https://onesignal.com/api/v1/notifications', {
@@ -164,62 +156,14 @@ export async function sendExternalPush(
   }
 }
 
-/*
-1. Customer App: Order Accepted (Sound)
---------------------------------------
-{
-  "app_id": "YOUR_ONESIGNAL_APP_ID",
-  "include_external_user_ids": ["customer_123"],
-  "headings": {"en": "محلك", "ar": "محلك"},
-  "contents": {"en": "Your order has been accepted!", "ar": "تم قبول طلبك!"},
-  "existing_android_channel_id": "customer_order_updates_sound"
-}
-
-2. Customer App: Order Processing / With Driver (Silent)
-------------------------------------------------------
-{
-  "app_id": "YOUR_ONESIGNAL_APP_ID",
-  "include_external_user_ids": ["customer_123"],
-  "headings": {"en": "محلك", "ar": "محلك"},
-  "contents": {"en": "Your order is now on the way.", "ar": "طلبك الآن مع سائق التوصيل."},
-  "existing_android_channel_id": "customer_order_updates_silent",
-  "android_sound": "nil"
-}
-
-3. Merchant App: New Order Received (Sound)
------------------------------------------
-{
-  "app_id": "YOUR_ONESIGNAL_APP_ID",
-  "include_external_user_ids": ["merchant_456"],
-  "headings": {"en": "محلك", "ar": "محلك"},
-  "contents": {"en": "New Order Received!", "ar": "لقد استلمت طلباً جديداً!"},
-  "existing_android_channel_id": "merchant_orders_sound"
-}
-
-4. General: Admin Broadcast (Target all or specific users)
---------------------------------------------------------
-{
-  "app_id": "YOUR_ONESIGNAL_APP_ID",
-  "included_segments": ["All"],
-  "headings": {"en": "محلك", "ar": "محلك"},
-  "contents": {"en": "Big Sale Today!", "ar": "عرض كبير اليوم بمناسبة العيد!"},
-  "existing_android_channel_id": "admin_broadcasts_sound"
-}
-
-* NOTE: The requirement strictly stating that the sender/app name must be "محلك" 
-  is fulfilled by setting the "headings" object (which corresponds to the Notification Title) 
-  to "محلك".
-===========================================================================
-*/
-
 export async function setupPushNotifications(
-  userId: string, 
+  userId: string,
   targetCollection: 'customers' | 'stores' | 'admins',
   onNotification?: (notification: any) => void,
   onAction?: (action: any) => void
 ) {
   const appId = import.meta.env.VITE_ONESIGNAL_APP_ID || "";
-  
+
   await createNotificationChannels();
 
   if (Capacitor.isNativePlatform()) {
@@ -228,7 +172,7 @@ export async function setupPushNotifications(
         console.warn("OneSignal App ID is missing or invalid. Skipping native initialization.");
         return;
       }
-      
+
       let OneSignalNative;
       try {
         const module = await import('onesignal-cordova-plugin');
@@ -237,9 +181,9 @@ export async function setupPushNotifications(
         console.error("Failed to load onesignal-cordova-plugin", err);
         return;
       }
-      
+
       OneSignalNative.initialize(appId);
-      
+
       OneSignalNative.Notifications.addEventListener('foregroundWillDisplay', (event: any) => {
         if (onNotification && event.notification) {
           try {
@@ -255,22 +199,21 @@ export async function setupPushNotifications(
       });
 
       OneSignalNative.login(userId);
-      
+
       OneSignalNative.User.pushSubscription.addEventListener('change', (event: any) => {
         if (event.current && event.current.id) {
-           setDoc(doc(db, targetCollection, userId), { 
+           setDoc(doc(db, targetCollection, userId), {
              fcmToken: event.current.id,
-             oneSignalId: event.current.id 
+             oneSignalId: event.current.id
            }, { merge: true }).catch(e => console.error("Failed to save OneSignal ID", e));
         }
       });
-      
-      // try to catch existing subscription immediately
-      OneSignalNative.User.pushSubscription.getIdAsync().then((osId) => {
+
+      OneSignalNative.User.pushSubscription.getIdAsync().then((osId: string | null) => {
         if(osId) {
-          setDoc(doc(db, targetCollection, userId), { 
+          setDoc(doc(db, targetCollection, userId), {
             fcmToken: osId,
-            oneSignalId: osId 
+            oneSignalId: osId
           }, { merge: true }).catch(e => console.error("Failed to save OneSignal ID", e));
         }
       });
@@ -284,7 +227,7 @@ export async function setupPushNotifications(
         console.warn("OneSignal (Web) App ID missing.");
         return;
       }
-      
+
       window.OneSignalDeferred = window.OneSignalDeferred || [];
       window.OneSignalDeferred.push(async function(OneSignal: any) {
         await OneSignal.init({
@@ -301,14 +244,13 @@ export async function setupPushNotifications(
         OneSignal.Notifications.addEventListener('click', (event: any) => {
            if (onAction) onAction(event.notification);
         });
-        
-        // Save push subscription if available
+
         if (OneSignal.User && OneSignal.User.PushSubscription) {
            const osId = OneSignal.User.PushSubscription.id;
            if (osId) {
-              setDoc(doc(db, targetCollection, userId), { 
+              setDoc(doc(db, targetCollection, userId), {
                 fcmToken: osId,
-                oneSignalId: osId 
+                oneSignalId: osId
               }, { merge: true }).catch(e => console.error("Failed to save OneSignal ID", e));
            }
         }
@@ -321,10 +263,10 @@ export async function setupPushNotifications(
 
 export async function requestNotificationPermission() {
   const appId = import.meta.env.VITE_ONESIGNAL_APP_ID || "";
-  
+
   if (Capacitor.isNativePlatform()) {
     if (!appId || appId.length < 10) return false;
-    
+
     return import('onesignal-cordova-plugin')
       .then(module => {
         const OneSignalNative = module.default;
@@ -337,7 +279,6 @@ export async function requestNotificationPermission() {
         return false;
       });
   } else {
-    // Web Push & Native Browser Notifications request
     if (typeof window !== 'undefined' && 'Notification' in window) {
       try {
         Notification.requestPermission().then(perm => {
@@ -375,6 +316,3 @@ export async function showLocalNotification(title: string, body: string, data?: 
     });
   }
 }
-
-
-

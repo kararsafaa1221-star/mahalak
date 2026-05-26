@@ -72,6 +72,7 @@ export interface AppContextType {
   updateOrder: (id: string, data: Partial<Order>) => Promise<void>;
   updateOrderStatus: (id: string, status: string, reason?: string) => void;
   addNotification: (notif: any) => void;
+  addBulkNotifications: (notifs: any[]) => Promise<void>;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: (userId: string, role: 'customer' | 'merchant' | 'admin') => void;
   sendAdminNotification: (t: string, m: string, target: string) => void;
@@ -420,18 +421,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // We should send a notification to customers who enabled notifications for this store
       if (customers.length > 0) {
         const storeName = stores.find(s => s.id === data.storeId)?.shopName || 'متجر';
-        customers.forEach(async (c) => {
-          if (c.storeNotifications?.includes(data.storeId)) {
-            await addNotification({
-              userId: c.id,
-              role: 'customer',
-              title: `منتج جديد من ${storeName} ✨`,
-              message: `تمت إضافة منتج جديد: ${data.name}. سارع بالشراء الآن!`,
-              type: 'product',
-              targetId: id
-            });
-          }
-        });
+        const notifs = customers
+          .filter(c => c.storeNotifications?.includes(data.storeId))
+          .map(c => ({
+            userId: c.id,
+            role: 'customer',
+            title: `منتج جديد من ${storeName} ✨`,
+            message: `تمت إضافة منتج جديد: ${data.name}. سارع بالشراء الآن!`,
+            type: 'product',
+            targetId: id
+          }));
+        
+        if (notifs.length > 0) addBulkNotifications(notifs);
       }
 
     } catch (e) {
@@ -529,32 +530,57 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // إشعار المتابعين بإطلاق بروموكود
       if (data.storeId && data.storeId !== 'ALL_STORES' && customers.length > 0) {
         const storeName = stores.find(s => s.id === data.storeId)?.shopName || 'متجر';
-        customers.forEach(async (c) => {
-          if (c.followedStores?.includes(data.storeId)) {
-            await addNotification({
+        const notifs = customers
+          .filter(c => c.followedStores?.includes(data.storeId))
+          .map(c => ({
+            userId: c.id,
+            role: 'customer',
+            title: `بروموكود جديد من ${storeName} 🎁`,
+            message: `تم إطلاق كود خصم جديد: ${data.code}. استفد منه الآن!`,
+            type: 'promo',
+            targetId: id,
+            sound: true
+          }));
+        if (notifs.length > 0) addBulkNotifications(notifs);
+      } else if (data.storeId === 'ALL_STORES') {
+        const notifs = [];
+        
+        // Notify customers
+        for (const c of customers) {
+          let shouldNotify = true;
+          if (data.targetProvinces?.length > 0 && !data.targetProvinces.includes(c.province)) shouldNotify = false;
+          if (shouldNotify) {
+            notifs.push({
               userId: c.id,
               role: 'customer',
-              title: `بروموكود جديد من ${storeName} 🎁`,
-              message: `تم إطلاق كود خصم جديد: ${data.code}. استفد منه الآن!`,
+              title: `محلك 🎁`,
+              message: `عرض جديد بمناسبة العيد أو الفعاليات الخاصة! كود الخصم: ${data.code}`,
               type: 'promo',
               targetId: id,
               sound: true
             });
           }
-        });
-      } else if (data.storeId === 'ALL_STORES' && customers.length > 0) {
-        // إشعار جميع المستخدمين بالبروموكود العام
-        customers.forEach(async (c) => {
-          await addNotification({
-            userId: c.id,
-            role: 'customer',
-            title: `محلك 🎁`,
-            message: `عرض جديد بمناسبة العيد أو الفعاليات الخاصة! كود الخصم: ${data.code}`,
-            type: 'promo',
-            targetId: id,
-            sound: true
-          });
-        });
+        }
+
+        // Notify merchants
+        for (const s of stores) {
+          let shouldNotify = true;
+          if (data.targetProvinces?.length > 0 && !data.targetProvinces.includes(s.province)) shouldNotify = false;
+          if (data.targetStores?.length > 0 && !data.targetStores.includes(s.id)) shouldNotify = false;
+          if (shouldNotify) {
+            notifs.push({
+              userId: s.id,
+              role: 'merchant',
+              title: `محلك 🎁`,
+              message: `تم إطلاق كود خصم جديد لزيادة مبيعاتك! كود الخصم: ${data.code}`,
+              type: 'system',
+              targetId: id,
+              sound: true
+            });
+          }
+        }
+        
+        if (notifs.length > 0) addBulkNotifications(notifs);
       }
 
     } catch (e) {
@@ -702,7 +728,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const addNotification = async (data: any) => {
-    const id = 'notif_' + Date.now();
+    const id = 'notif_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
     // Default sound to true unless explicitly false
     const soundEnabled = data.sound !== undefined ? data.sound : true;
     const n = { ...data, id, read: false, sound: soundEnabled, createdAt: serverTimestamp() };
@@ -712,13 +738,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // Determine correct OneSignal Channel based on business rules
       let channelId = 'admin_broadcasts_sound'; // Default fallback
       
-      if (data.role === 'customer') {
+      const isFromAdmin = data.title?.includes('محلك') || !data.type || data.title?.includes('تحديث حالة المتجر');
+
+      if (isFromAdmin) {
+        channelId = 'admin_broadcasts_sound';
+      } else if (data.role === 'customer') {
         if (data.type === 'order') {
            channelId = soundEnabled ? 'customer_order_updates_sound' : 'customer_order_updates_silent';
         } else if (data.type === 'promo') {
            channelId = 'customer_promos_sound';
         } else if (data.type === 'product') {
            channelId = 'customer_products_sound';
+        } else if (data.type === 'system' && data.title?.includes('شحن محفظة نقاطك')) {
+           channelId = 'customer_promos_sound'; // Reward points is customer specific
+        } else {
+           channelId = soundEnabled ? 'customer_order_updates_sound' : 'customer_order_updates_silent';
         }
       } else if (data.role === 'merchant') {
         if (data.type === 'order') {
@@ -727,18 +761,101 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
            channelId = soundEnabled ? 'merchant_orders_sound' : 'merchant_activity_silent';
         } else if (data.type === 'social') {
            channelId = 'merchant_social_silent';
+        } else {
+           channelId = soundEnabled ? 'merchant_orders_sound' : 'merchant_activity_silent';
         }
       }
 
-      // Check if this is explicitly an admin broadcast (usually no specific type or type='system')
-      if (!data.type && data.title === 'محلك') {
-         channelId = 'admin_broadcasts_sound';
-      }
+      const pushTitle = data.title || 'محلك';
 
-      await sendExternalPush(data.userId, data.title || "محلك", data.message, channelId);
+      await sendExternalPush(data.userId, pushTitle, data.message, channelId);
 
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'notifications/' + id);
+    }
+  };
+
+  const addBulkNotifications = async (notifications: any[]) => {
+    try {
+      const batches = [];
+      let batch = writeBatch(db);
+      let count = 0;
+
+      for (const data of notifications) {
+        const id = 'notif_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+        const soundEnabled = data.sound !== undefined ? data.sound : true;
+        const n = { ...data, id, read: false, sound: soundEnabled, createdAt: serverTimestamp() };
+        
+        batch.set(doc(db, 'notifications', id), n);
+        count++;
+
+        if (count >= 400) {
+          batches.push(batch);
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+      
+      if (count > 0) {
+        batches.push(batch);
+      }
+
+      for (const b of batches) {
+        await b.commit();
+        await new Promise(r => setTimeout(r, 500)); // space out batches
+      }
+
+      const pushesByChannel: Record<string, { userIds: string[], title: string, message: string, channelId: string }> = {};
+      
+      for (const data of notifications) {
+        let channelId = 'admin_broadcasts_sound'; 
+        const soundEnabled = data.sound !== undefined ? data.sound : true;
+        const isFromAdmin = data.title?.includes('محلك') || !data.type || data.title?.includes('تحديث حالة المتجر');
+
+        if (isFromAdmin) {
+            channelId = 'admin_broadcasts_sound';
+        } else if (data.role === 'customer') {
+            if (data.type === 'order') {
+                channelId = soundEnabled ? 'customer_order_updates_sound' : 'customer_order_updates_silent';
+            } else if (data.type === 'promo') {
+                channelId = 'customer_promos_sound';
+            } else if (data.type === 'product') {
+                channelId = 'customer_products_sound';
+            } else if (data.type === 'system' && data.title?.includes('شحن محفظة نقاطك')) {
+                channelId = 'customer_promos_sound';
+            } else {
+                channelId = soundEnabled ? 'customer_order_updates_sound' : 'customer_order_updates_silent';
+            }
+        } else if (data.role === 'merchant') {
+            if (data.type === 'order') {
+                channelId = 'merchant_orders_sound';
+            } else if (data.type === 'activity' || data.type === 'system') {
+                channelId = soundEnabled ? 'merchant_orders_sound' : 'merchant_activity_silent';
+            } else if (data.type === 'social') {
+                channelId = 'merchant_social_silent';
+            } else {
+                channelId = soundEnabled ? 'merchant_orders_sound' : 'merchant_activity_silent';
+            }
+        }
+
+        const pushTitle = data.title || 'محلك';
+        const key = `${channelId}_${pushTitle}_${data.message}`;
+
+        pushesByChannel[key] = pushesByChannel[key] || { userIds: [], title: pushTitle, message: data.message, channelId };
+        pushesByChannel[key].userIds.push(data.userId);
+      }
+
+      for (const key in pushesByChannel) {
+         const info = pushesByChannel[key];
+         for(let i = 0; i < info.userIds.length; i+=2000) {
+             const chunk = info.userIds.slice(i, i+2000);
+             await sendExternalPush(chunk, info.title, info.message, info.channelId);
+             await new Promise(r => setTimeout(r, 100)); // space out network calls
+         }
+      }
+
+    } catch (e) {
+      console.error('Bulk notification error', e);
     }
   };
 
@@ -1015,23 +1132,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const sendAdminNotification = (_t: string, m: string, target: string) => {
-    // Collect all valid targets
-    const allUsers = [
-      ...customers.map(c => ({ id: c.id, role: 'customer' })),
-      ...stores.map(s => ({ id: s.id, role: 'merchant' }))
-    ];
+  const sendAdminNotification = (t: string, m: string, target: string) => {
+    // Determine the array of target customers based on the dropdown selection
+    const isAll = target === 'all' || target === 'ALL';
+    const targetCustomers = isAll ? customers : customers.filter(c => c.province === target);
     
-    const targets = target === 'ALL' ? allUsers : allUsers.filter(u => u.id === target);
+    // We only target customers because this is the "Customer Broadcast" form
+    const targets = targetCustomers.map(c => ({ id: c.id, role: 'customer' }));
     
-    targets.forEach(t => {
-      addNotification({
-        userId: t.id,
-        role: t.role,
-        title: 'محلك',
+    const notificationsToProcess = targets.map(userTarget => ({
+        userId: userTarget.id,
+        role: userTarget.role,
+        title: t || 'محلك',
         message: m
-      });
-    });
+    }));
+
+    addBulkNotifications(notificationsToProcess);
   };
 
   const toggleAutoApprove = () => updateAdminSettings({ autoApproveStores: !adminSettings.autoApproveStores });
@@ -1216,18 +1332,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await setDoc(doc(db, 'flash_sales', id), { ...data, id, createdAt: serverTimestamp() });
       
       // Notify all active merchants
-      stores.filter(s => s.status === 'active' && !s.isBanned).forEach(async store => {
-        try {
-          await addNotification({
-            userId: store.id,
-            role: 'merchant',
-            title: 'محلك',
-            message: `فعالية جديدة معلنة! "${data.title}"، يمكنك الآن طلب المشاركة بمنتجاتك!`,
-            type: 'system',
-            targetId: id
-          });
-        } catch(_e) { /* ignore */ }
-      });
+      const activeStores = stores.filter(s => s.status === 'active' && !s.isBanned);
+      const notifs = activeStores.map(store => ({
+        userId: store.id,
+        role: 'merchant',
+        title: 'محلك',
+        message: `فعالية جديدة معلنة! "${data.title}"، يمكنك الآن طلب المشاركة بمنتجاتك!`,
+        type: 'system',
+        targetId: id
+      }));
+      
+      if (notifs.length > 0) addBulkNotifications(notifs);
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'flash_sales/' + id);
     }
@@ -1239,18 +1354,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await updateDoc(doc(db, 'flash_sales', id), { status });
       
       if (status === 'active' && sale) {
-        customers.filter(c => !c.isBlocked).forEach(async customer => {
-          try {
-            await addNotification({
-              userId: customer.id,
-              role: 'customer',
-              title: 'محلك',
-              message: `بدأت الآن الفعالية الكبرى "${sale.title}"! تصفح أفضل العروض والخصومات.`,
-              type: 'system',
-              targetId: id
-            });
-          } catch(_e) { /* ignore */ }
-        });
+        const activeCustomers = customers.filter(c => !c.isBlocked);
+        const notifs = activeCustomers.map(customer => ({
+            userId: customer.id,
+            role: 'customer',
+            title: 'محلك',
+            message: `بدأت الآن الفعالية الكبرى "${sale.title}"! تصفح أفضل العروض والخصومات.`,
+            type: 'system',
+            targetId: id
+        }));
+        if (notifs.length > 0) addBulkNotifications(notifs);
       }
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, 'flash_sales/' + id);
@@ -2323,7 +2436,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       provinces: IRAQ_PROVINCES, stores, products, customers, orders, promoCodes, notifications, currentCustomer, currentMerchant, currentAdmin, adminSettings, subscriptionPlans, flashSales, flashSaleRequests, storeReviews,
       getCustomerSeqId, getOrderSeqId,
       setOrders,
-      setCurrentCustomer, setCurrentMerchant, setCurrentAdmin, registerCustomer, updateCustomerProfile, toggleFollowStore, toggleStoreNotification, placeOrder, convertPointsToPromo, addCustomerPoints, submitStoreReview, updateStoreReview, deleteStoreReview, registerMerchant, updateStoreProfile, addProduct, updateProduct, deleteProduct, createPromoCode, updatePromoCode, togglePromoCodeStatus, updateOrder, updateOrderStatus, addNotification, markNotificationAsRead, markAllNotificationsAsRead, sendAdminNotification,
+      setCurrentCustomer, setCurrentMerchant, setCurrentAdmin, registerCustomer, updateCustomerProfile, toggleFollowStore, toggleStoreNotification, placeOrder, convertPointsToPromo, addCustomerPoints, submitStoreReview, updateStoreReview, deleteStoreReview, registerMerchant, updateStoreProfile, addProduct, updateProduct, deleteProduct, createPromoCode, updatePromoCode, togglePromoCodeStatus, updateOrder, updateOrderStatus, addNotification, addBulkNotifications, markNotificationAsRead, markAllNotificationsAsRead, sendAdminNotification,
       rechargeCodes, generateRechargeCodes, redeemRechargeCode, deleteRechargeCode,
       toggleAutoApprove, updateSubscriptionPrice, updateStoreStatus, updateStoreBadges, adminUpdateStore, toggleCustomerBlock, deleteCustomer, toggleStoreBan, deleteStore, deletePromoCode, updateAdminSettings,
       createFlashSale, updateFlashSaleStatus, updateFlashSaleDates, deleteFlashSale, requestJoinFlashSale, updateFlashSaleRequestStatus, seedDatabase,

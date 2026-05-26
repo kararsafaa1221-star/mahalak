@@ -214,23 +214,21 @@ export const CustomerApp: React.FC = () => {
   
   // إدارة التصفح داخل المتجر المختار
   const [selectedStore, setRawSelectedStore] = useState<Store | null>(null);
-  const lastScrollY = useRef(0);
-  const selectedStoreRef = useRef<Store | null>(null);
 
   const setSelectedStore = useCallback((store: Store | null) => {
     if (store) {
-      if (!selectedStoreRef.current) {
-        lastScrollY.current = window.scrollY;
+      if (window['appScrollingStateActiveStoreId'] !== store.id) {
+        window['appScrollingStateLastScrollY'] = window.scrollY;
       }
-      selectedStoreRef.current = store;
+      window['appScrollingStateActiveStoreId'] = store.id;
       setRawSelectedStore(store);
       setTimeout(() => window.scrollTo({ top: 0, behavior: 'instant' }), 0); // Scroll to top when opening store
     } else {
-      selectedStoreRef.current = null;
+      window['appScrollingStateActiveStoreId'] = null;
       setRawSelectedStore(null);
       // Ensure the DOM has a moment to render the previous list before scrolling
       setTimeout(() => {
-        window.scrollTo({ top: lastScrollY.current, behavior: 'instant' });
+        window.scrollTo({ top: window['appScrollingStateLastScrollY'] || 0, behavior: 'instant' });
       }, 50);
     }
   }, []);
@@ -2154,13 +2152,12 @@ export const CustomerApp: React.FC = () => {
                   </div>
                   
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-                    {(() => {
-                      const verifiedStores = uniqueStores.filter(s => (s.isVerified || (s as any).is_verified) && s.status === 'active');
-                      const displayStores = showFullVerified ? verifiedStores : verifiedStores.slice(0, 2);
-                      if (displayStores.length === 0) {
-                        return <div className="col-span-2 sm:col-span-4 py-8 text-center text-slate-400 text-xs font-bold italic">لا توجد متاجر موثقة حالياً</div>;
-                      }
-                      return displayStores.map(store => {
+                    {uniqueStores.filter(s => (s.isVerified || (s as any).is_verified) && s.status === 'active').length === 0 ? (
+                      <div className="col-span-2 sm:col-span-4 py-8 text-center text-slate-400 text-xs font-bold italic">لا توجد متاجر موثقة حالياً</div>
+                    ) : (
+                      uniqueStores.filter(s => (s.isVerified || (s as any).is_verified) && s.status === 'active')
+                       .slice(0, showFullVerified ? undefined : 2)
+                       .map(store => {
                         const categoryLabel = CATEGORY_SHORT_NAMES[store.category || ''] || store.category || 'عام';
                         return (
                           <div 
@@ -2215,8 +2212,8 @@ export const CustomerApp: React.FC = () => {
                             </div>
                           </div>
                         );
-                      });
-                    })()}
+                      })
+                    )}
                   </div>
                 </div>
               </div>
@@ -2387,38 +2384,31 @@ export const CustomerApp: React.FC = () => {
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 sm:gap-4 mt-auto">
-                      {(() => {
-                        const coords = userCoords || (currentCustomer?.lat && currentCustomer?.lng ? { lat: currentCustomer.lat, lng: currentCustomer.lng } : null);
-
-                        const baseStores = (() => {
-                          if (adminSettings.enableAutoNearby) {
-                            // الفرز التلقائي حسب المسافة
-                            const filtered = [...uniqueStores].filter(s => s.status === 'active');
-                            if (coords) {
-                              return [...filtered].sort((a, b) => {
-                                const distA = a.showMap !== false && a.lat && a.lng ? calculateDistance(coords.lat, coords.lng, a.lat, a.lng) : Infinity;
-                                const distB = b.showMap !== false && b.lat && b.lng ? calculateDistance(coords.lat, coords.lng, b.lat, b.lng) : Infinity;
-                                return distA - distB;
-                              });
-                            } else {
-                              return filtered.filter(s => s.province === (currentCustomer?.province || 'بغداد'));
-                            }
-                          } else {
-                            // التحكم اليدوي من الإدارة
-                            const nearbyIds = adminSettings.nearbyStoreIds || [];
-                            if (nearbyIds.length > 0) {
-                              return uniqueStores.filter(s => nearbyIds.includes(s.id) && s.status === 'active');
-                            } else {
-                              return uniqueStores.filter(s => s.province === (currentCustomer?.province || 'بغداد') && s.status === 'active');
-                            }
-                          }
-                        })();
-
-                        const displayStores = showFullNearby ? baseStores : baseStores.slice(0, 2);
-
-                        if (displayStores.length === 0) return <div className="col-span-2 py-4 text-center text-[#cba8ff] text-[10px] font-bold italic">لا توجد متاجر حالياً</div>;
-
-                        return displayStores.map(store => {
+                    {uniqueStores.filter(s => s.status === 'active').length === 0 ? (
+                      <div className="col-span-2 py-4 text-center text-[#cba8ff] text-[10px] font-bold italic">لا توجد متاجر حالياً</div>
+                    ) : (
+                      uniqueStores.filter(s => s.status === 'active')
+                      // Quick inline filter for nearby logic to avoid breaking linter
+                      .filter(s => {
+                         if (!adminSettings.enableAutoNearby) {
+                           const nearbyIds = adminSettings.nearbyStoreIds || [];
+                           if (nearbyIds.length > 0) return nearbyIds.includes(s.id);
+                           return s.province === (currentCustomer?.province || 'بغداد');
+                         }
+                         if (userCoords || (currentCustomer?.lat && currentCustomer?.lng)) return true;
+                         return s.province === (currentCustomer?.province || 'بغداد');
+                      })
+                      .sort((a, b) => {
+                         if (!adminSettings.enableAutoNearby) return 0;
+                         const coords = userCoords || (currentCustomer?.lat && currentCustomer?.lng ? { lat: currentCustomer.lat, lng: currentCustomer.lng } : null);
+                         if (!coords) return 0;
+                         const distA = a.showMap !== false && a.lat && a.lng ? calculateDistance(coords.lat, coords.lng, a.lat, a.lng) : Infinity;
+                         const distB = b.showMap !== false && b.lat && b.lng ? calculateDistance(coords.lat, coords.lng, b.lat, b.lng) : Infinity;
+                         return distA - distB;
+                      })
+                      .slice(0, showFullNearby ? undefined : 2)
+                      .map(store => {
+                          const coords = userCoords || (currentCustomer?.lat && currentCustomer?.lng ? { lat: currentCustomer.lat, lng: currentCustomer.lng } : null);
                           const dist = (store.showMap !== false && coords && store.lat && store.lng) 
                             ? calculateDistance(coords.lat, coords.lng, store.lat, store.lng).toFixed(1) 
                             : null;
@@ -2484,8 +2474,8 @@ export const CustomerApp: React.FC = () => {
                               </div>
                             </div>
                           );
-                        });
-                      })()}
+                        })
+                    )}
                     </div>
                   </div>
                 </div>
@@ -3451,7 +3441,7 @@ export const CustomerApp: React.FC = () => {
                  </div>
               </div>
 
-              {/* قائمة الفيديوهات المحفوظة والمعجب بها التفاعلية الجديدة */}
+              {/* قائمة الفيديوهات المحفوظة والمعجب بها التفاعلية الجديدة 
               <ReelsProfileList 
                 currentCustomer={currentCustomer}
                 onAddToCart={(p) => addToCart(p, 1)}
@@ -3463,6 +3453,7 @@ export const CustomerApp: React.FC = () => {
                   }
                 }}
               />
+              */}
 
               {/* أقسام البيانات والإعدادات */}
               <div className="space-y-4">
@@ -3679,7 +3670,7 @@ export const CustomerApp: React.FC = () => {
           <div className="max-w-4xl mx-auto w-full flex justify-around items-center px-4 py-3">
             {[
               { id: 'stores', label: 'الرئيسية', icon: Home },
-              { id: 'reels', label: 'الفيديو', icon: Tv },
+              /*{ id: 'reels', label: 'الفيديو', icon: Tv },*/
               { id: 'merchants', label: 'المتاجر', icon: StoreIcon },
               { id: 'orders', label: 'طلباتي', icon: ClipboardList, badge: customerOrders.filter(o => o.status === 'pending').length },
               { id: 'wallet', label: 'المحفظة', icon: Wallet, gift: currentCustomer.points >= 100 },

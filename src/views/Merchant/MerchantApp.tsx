@@ -82,6 +82,46 @@ const notificationSound = new Audio(
 );
 
 // ==========================================
+// دالة لفتح الخرائط في الموبايل
+// ==========================================
+const openNativeMapApp = (lat: number, lng: number, appType: 'google' | 'waze' = 'google') => {
+  if (!lat || !lng) {
+    alert('عذراً، إحداثيات موقع الزبون غير متوفرة لهذا الطلب.');
+    return;
+  }
+
+  if (appType === 'google') {
+    const mapUrl = `geo:${lat},${lng}?q=${lat},${lng}(موقع الزبون)`;
+    const fallbackUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+    
+    try {
+      window.location.href = mapUrl;
+      setTimeout(() => {
+        if (document.hasFocus()) {
+          window.open(fallbackUrl, '_system');
+        }
+      }, 500);
+    } catch (e) {
+      window.open(fallbackUrl, '_system');
+    }
+  } else if (appType === 'waze') {
+    const mapUrl = `waze://?ll=${lat},${lng}&navigate=yes`;
+    const fallbackWazeUrl = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+
+    try {
+      window.location.href = mapUrl;
+      setTimeout(() => {
+        if (document.hasFocus()) {
+          window.open(fallbackWazeUrl, '_system');
+        }
+      }, 500);
+    } catch (e) {
+      window.open(fallbackWazeUrl, '_system');
+    }
+  }
+};
+
+// ==========================================
 // لوحة التاجر - منصة محلك
 // ==========================================
 
@@ -197,13 +237,26 @@ export const MerchantApp: React.FC = () => {
     
     // التحقق إذا كان الاشتراك ينتهي خلال 3 أيام
     if (diffDays <= 3 && diffDays > 0) {
-      const alreadyNotified = notifications.some(n => 
-        n.userId === currentMerchant.id && 
-        n.type === 'subscription' && 
-        new Date(n.createdAt).toDateString() === today.toDateString()
-      );
+      const alreadyNotified = notifications.some(n => {
+        if (n.userId !== currentMerchant.id || n.type !== 'subscription') return false;
+        
+        let notifDate = new Date();
+        if (n.createdAt) {
+          if (typeof n.createdAt.toDate === 'function') {
+            notifDate = n.createdAt.toDate();
+          } else if (n.createdAt.seconds) {
+            notifDate = new Date(n.createdAt.seconds * 1000);
+          } else {
+            notifDate = new Date(n.createdAt);
+          }
+        }
+        
+        return notifDate.toDateString() === today.toDateString();
+      });
       
-      if (!alreadyNotified) {
+      const localKey = `sub_notif_sent_${currentMerchant.id}_${today.toDateString()}`;
+      if (!alreadyNotified && !localStorage.getItem(localKey)) {
+        localStorage.setItem(localKey, 'true');
         addNotification({
           userId: currentMerchant.id,
           role: 'merchant',
@@ -1565,7 +1618,7 @@ https://mahallak.app/store/${data.id}`
             {[
               { id: "home", icon: StoreIcon, label: "الرئيسية" },
               { id: "products", icon: Package, label: "المنتجات" },
-              { id: "reels", icon: Film, label: "ريلز التسوق" },
+              /*{ id: "reels", icon: Film, label: "ريلز التسوق" },*/
               { id: "orders", icon: ClipboardList, label: "الطلبات" },
               { id: "customers", icon: Users, label: "زبائني" },
               { id: "profile", icon: User, label: "حسابي" },
@@ -1599,7 +1652,7 @@ https://mahallak.app/store/${data.id}`
           {[
             { id: "home", icon: StoreIcon, label: "الرئيسية" },
             { id: "products", icon: Package, label: "المنتجات" },
-            { id: "reels", icon: Film, label: "ريلز" },
+            /*{ id: "reels", icon: Film, label: "ريلز" },*/
             { id: "orders", icon: ClipboardList, label: "الطلبات" },
             { id: "customers", icon: Users, label: "زبائني" },
             { id: "profile", icon: User, label: "حسابي" },
@@ -1872,12 +1925,12 @@ https://mahallak.app/store/${data.id}`
                     color: "text-emerald-600",
                     tab: "home"
                   },
-                  {
+                  /*{
                     label: "الريلز المرفوعة",
                     val: merchantReels.filter(r => r.merchantId === currentMerchant.id).length || 0,
                     color: "text-blue-500",
                     tab: "reels"
-                  },
+                  },*/
                   {
                     label: "التقييمات",
                     val: currentMerchant.rating ? `${currentMerchant.rating.toFixed(1)} / 5` : "0",
@@ -2939,24 +2992,20 @@ https://mahallak.app/store/${data.id}`
                                       <div className="absolute inset-0 z-[400] bg-transparent"></div>
                                     </div>
                                     <div className="flex gap-2">
-                                      <a 
-                                        href={`https://www.google.com/maps/search/?api=1&query=${(o as any).customerLat},${(o as any).customerLng}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex items-center gap-1 text-[8px] font-black bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded shadow-sm hover:bg-slate-50 transition-colors"
+                                      <button 
+                                        onClick={(e) => { e.preventDefault(); openNativeMapApp((o as any).customerLat, (o as any).customerLng, 'google'); }}
+                                        className="flex-1 flex items-center justify-center gap-1 text-[8px] font-black bg-white border border-slate-200 text-slate-600 px-2 py-2 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"
                                       >
                                         <MapPin size={10} className="text-red-500" />
                                         Maps
-                                      </a>
-                                      <a 
-                                        href={`https://waze.com/ul?ll=${(o as any).customerLat},${(o as any).customerLng}&navigate=yes`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex items-center gap-1 text-[8px] font-black bg-[#f2fcfed9] border border-[#c2f2ff] text-[#00a9e0] px-2 py-1 rounded shadow-sm hover:bg-[#e6faff] transition-colors"
+                                      </button>
+                                      <button 
+                                        onClick={(e) => { e.preventDefault(); openNativeMapApp((o as any).customerLat, (o as any).customerLng, 'waze'); }}
+                                        className="flex-1 flex items-center justify-center gap-1 text-[8px] font-black bg-[#f2fcfed9] border border-[#c2f2ff] text-[#00a9e0] px-2 py-2 rounded-lg shadow-sm hover:bg-[#e6faff] transition-colors"
                                       >
                                         <Car size={10} />
                                         Waze
-                                      </a>
+                                      </button>
                                     </div>
                                   </div>
                                 )}
@@ -5007,25 +5056,19 @@ https://mahallak.app/store/${data.id}`
                         </p>
                         <p className="text-xs font-bold text-slate-400 leading-relaxed italic mb-2">{selectedInvoice.customerProvince} - {selectedInvoice.customerAddress}</p>
                         {(selectedInvoice as any).customerLat && (selectedInvoice as any).customerLng && (
-                          <div className="flex gap-2">
-                            <a 
-                              href={`https://www.google.com/maps/search/?api=1&query=${(selectedInvoice as any).customerLat},${(selectedInvoice as any).customerLng}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 text-[9px] font-black bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"
+                          <div className="flex gap-2 mt-3 font-tajawal">
+                            <button
+                              onClick={() => openNativeMapApp((selectedInvoice as any).customerLat, (selectedInvoice as any).customerLng, 'google')}
+                              className="flex-1 py-3.5 bg-[#9952FF] hover:bg-[#853df2] text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg active:scale-95 transition print:hidden"
                             >
-                              <MapPin size={12} className="text-red-500" />
-                              خرائط جوجل (Google Maps)
-                            </a>
-                            <a 
-                              href={`https://waze.com/ul?ll=${(selectedInvoice as any).customerLat},${(selectedInvoice as any).customerLng}&navigate=yes`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 text-[9px] font-black bg-[#f2fcfed9] border border-[#c2f2ff] text-[#00a9e0] px-2 py-1 rounded-lg shadow-sm hover:bg-[#e6faff] transition-colors"
+                              <span>فتح عبر Google Maps</span>
+                            </button>
+                            <button
+                              onClick={() => openNativeMapApp((selectedInvoice as any).customerLat, (selectedInvoice as any).customerLng, 'waze')}
+                              className="flex-1 py-3.5 bg-sky-500 hover:bg-sky-600 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg active:scale-95 transition print:hidden"
                             >
-                              <Car size={12} />
-                              خرائط ويز (Waze)
-                            </a>
+                              <span>فتح عبر Waze</span>
+                            </button>
                           </div>
                         )}
                       </div>

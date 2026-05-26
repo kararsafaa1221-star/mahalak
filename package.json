@@ -12,9 +12,10 @@
   "dependencies": {
     "@capacitor/android": "^8.3.1",
     "@capacitor/cli": "^7.6.2",
-    "@capacitor/core": "^8.3.1",
+    "@capacitor/core": "^8.3.4",
     "@capacitor/geolocation": "^8.2.0",
     "@capacitor/push-notifications": "^8.1.1",
+    "@capacitor/share": "^8.0.1",
     "@eslint/js": "^10.0.1",
     "@imgly/background-removal": "^1.7.0",
     "@types/cors": "^2.8.19",
