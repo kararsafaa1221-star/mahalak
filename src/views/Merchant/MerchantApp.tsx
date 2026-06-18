@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useApp } from "../../context/useApp";
-<<<<<<< HEAD
 import { validateUserStatus } from "../../utils/userValidation";
 import { useNavigate } from 'react-router-dom';
 import { auth } from '../../lib/firebase';
@@ -17,16 +16,6 @@ import { useReactToPrint } from "react-to-print";
 import { QRCodeSVG } from "qrcode.react";
 import { MerchantOnboarding } from "../../components/MerchantOnboarding";
 import { MerchantDashboardTour } from "../../components/MerchantDashboardTour";
-=======
-import { Product, Order } from "../../types";
-import { STORE_CATEGORIES } from "../../constants";
-import { StorageService } from "../../services/storageService";
-import { showLocalNotification, requestNotificationPermission, setupPushNotifications } from "../../lib/pushNotifications";
-import { formatSafeDate, formatSafeTimeString, formatSafeDateTimeString } from "../../utils/date";
-import { motion, AnimatePresence } from "framer-motion";
-import { useReactToPrint } from "react-to-print";
-import { QRCodeSVG } from "qrcode.react";
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 import { MapContainer, TileLayer, Marker } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -57,10 +46,7 @@ import {
   Send,
   Camera,
   ChevronRight,
-<<<<<<< HEAD
   ChevronLeft,
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   ChevronDown,
   ChevronUp,
   LogOut,
@@ -81,7 +67,6 @@ import {
   MoreVertical,
   Car,
   Sparkles,
-<<<<<<< HEAD
   Printer,
   ShoppingBag,
   TrendingUp,
@@ -103,24 +88,6 @@ import { BackgroundRemover } from "../../components/BackgroundRemover";
 import { LocationPicker } from "../../components/LocationPicker";
 import { CopyButton } from "../../components/CopyButton";
 import { authService } from "../../services/authService";
-=======
-  Film,
-  Eye,
-  Heart,
-  Play,
-  Pause,
-  Loader2,
-} from "lucide-react";
-import { collection, doc, query, where, getDocs, deleteDoc } from "firebase/firestore";
-import { db } from "../../lib/firebase";
-import { Reel } from "../../types";
-import { ImageUploader } from "../../components/ImageUploader";
-import { UploadReel } from "../../components/UploadReel";
-import { BackgroundRemover } from "../../components/BackgroundRemover";
-import { LocationPicker } from "../../components/LocationPicker";
-import { CopyButton } from "../../components/CopyButton";
-import { sendOTP } from "../../services/otpService";
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 import { Html5QrcodeScanner } from "html5-qrcode";
 import QRCode from "react-qr-code";
 
@@ -168,29 +135,19 @@ const openNativeMapApp = (lat: number, lng: number, appType: 'google' | 'waze' =
   }
 };
 
-<<<<<<< HEAD
 import { PushPermissionPrompt } from "../../components/PushPermissionPrompt";
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 // ==========================================
 // لوحة التاجر - منصة محلك
 // ==========================================
 
 export const MerchantApp: React.FC = () => {
-<<<<<<< HEAD
   const navigate = useNavigate();
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const {
     currentMerchant,
     setCurrentMerchant,
     setCurrentCustomer,
-    setCurrentAdmin,
-=======
-  const {
-    currentMerchant,
-    setCurrentMerchant,
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     registerMerchant,
     updateStoreProfile,
     products,
@@ -219,11 +176,8 @@ export const MerchantApp: React.FC = () => {
     updateCustomerProfile,
     getCustomerSeqId,
     getOrderSeqId,
-<<<<<<< HEAD
     payoutRequests,
     requestPayout
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   } = useApp();
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -233,7 +187,6 @@ export const MerchantApp: React.FC = () => {
     setTimeout(() => setIsSyncing(false), 1000);
   };
 
-<<<<<<< HEAD
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [notificationTitle, setNotificationTitle] = useState("");
   const [notificationBody, setNotificationBody] = useState("");
@@ -287,8 +240,6 @@ export const MerchantApp: React.FC = () => {
     }
   };
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   // فتح الروابط الخارجية مباشرة وبدون فتح نافذة جديدة في الموبايل أو كاباسيتور
   const openExternalUrl = (url: string) => {
     if (!url) return;
@@ -342,7 +293,6 @@ export const MerchantApp: React.FC = () => {
     setIframeUrl(url);
   };
 
-<<<<<<< HEAD
   const handleWhatsAppShare = (order: any) => {
     if (!order) return;
     const phoneNum = order.customerPhone || "";
@@ -413,15 +363,12 @@ export const MerchantApp: React.FC = () => {
     openExternalUrl(whatsappUrl);
   };
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   // ==========================================
   // الحالات (States)
   // ==========================================
 
   // واجهات التطبيق
   const [view, setView] = useState<
-<<<<<<< HEAD
     "login" | "signup" | "otp" | "forgot" | "dashboard" | "onboarding" | "terms-agreement"
   >("login");
   // التحقق من حالة الاشتراك عند فتح التطبيق والتنبيه قبل الانتهاء
@@ -438,36 +385,15 @@ export const MerchantApp: React.FC = () => {
     
     // إشعار في الأيام: 7, 3, 1
     if ([7, 3, 1].includes(diffDays) || diffDays <= 0) {
-=======
-    "login" | "signup" | "otp" | "forgot" | "dashboard"
-  >("login");
-  // التحقق من حالة الاشتراك عند فتح التطبيق
-  useEffect(() => {
-    if (!currentMerchant || !currentMerchant.subscriptionExpiry) return;
-    
-    const expiryDate = new Date(currentMerchant.subscriptionExpiry);
-    const today = new Date();
-    const diffDays = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    
-    // التحقق إذا كان الاشتراك ينتهي خلال 3 أيام
-    if (diffDays <= 3 && diffDays > 0) {
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       const alreadyNotified = notifications.some(n => {
         if (n.userId !== currentMerchant.id || n.type !== 'subscription') return false;
         
         let notifDate = new Date();
         if (n.createdAt) {
-<<<<<<< HEAD
           if (typeof (n.createdAt as any).toDate === 'function') {
             notifDate = (n.createdAt as any).toDate();
           } else if ((n.createdAt as any).seconds) {
             notifDate = new Date((n.createdAt as any).seconds * 1000);
-=======
-          if (typeof n.createdAt.toDate === 'function') {
-            notifDate = n.createdAt.toDate();
-          } else if (n.createdAt.seconds) {
-            notifDate = new Date(n.createdAt.seconds * 1000);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           } else {
             notifDate = new Date(n.createdAt);
           }
@@ -476,17 +402,12 @@ export const MerchantApp: React.FC = () => {
         return notifDate.toDateString() === today.toDateString();
       });
       
-<<<<<<< HEAD
       const localKey = diffDays <= 0 ? `sub_notif_expired_${currentMerchant.id}_${today.toDateString()}` : `sub_notif_sent_${currentMerchant.id}_${diffDays}_days`;
-=======
-      const localKey = `sub_notif_sent_${currentMerchant.id}_${today.toDateString()}`;
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       if (!alreadyNotified && !localStorage.getItem(localKey)) {
         localStorage.setItem(localKey, 'true');
         addNotification({
           userId: currentMerchant.id,
           role: 'merchant',
-<<<<<<< HEAD
           title: diffDays <= 0 ? 'انتهى الاشتراك ⚠️' : 'تنبيه الاشتراك ⚠️',
           message: diffDays <= 0 ? 'لقد انتهت صلاحية اشتراكك! متجرك الآن مخفي عن الزبائن، بادر بتجديد الاشتراك للعودة لحركة المبيعات.' : `اشتراكك ينتهي خلال ${diffDays} يوم. يرجى التجديد لضمان استمرارية الخدمة وعدم تقييد المبيعات.`,
           type: 'subscription',
@@ -503,25 +424,10 @@ export const MerchantApp: React.FC = () => {
     | "products"
     | "orders"
     | "delivery"
-=======
-          title: 'تنبيه الاشتراك ⚠️',
-          message: `اشتراكك ينتهي خلال ${diffDays} أيام. يرجى التجديد لضمان استمرارية الخدمة.`,
-          type: 'subscription'
-        });
-      }
-    }
-  }, [currentMerchant, notifications, addNotification]);
-
-  const [activeTab, setActiveTab] = useState<
-    | "home"
-    | "products"
-    | "orders"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     | "promo"
     | "customers"
     | "profile"
     | "flashsales"
-<<<<<<< HEAD
     | "marketing"
   >("home");
 
@@ -569,13 +475,6 @@ export const MerchantApp: React.FC = () => {
     }));
   };
 
-=======
-    | "reels"
-  >("home");
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [iframeUrl, setIframeUrl] = useState<string | null>(null);
-
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   // ==========================================
   // نظام التزامن مع تاريخ المتصفح لدعم رجوع الأندرويد وإيماءات اليد (للتاجر)
   // ==========================================
@@ -629,11 +528,7 @@ export const MerchantApp: React.FC = () => {
           setView(state.view);
         }
         if (state.activeTab !== undefined && state.activeTab !== activeTab) {
-<<<<<<< HEAD
           handleTabChange(state.activeTab);
-=======
-          setActiveTab(state.activeTab);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
         }
         if (state.showNotifications !== undefined) {
           setShowNotifications(state.showNotifications);
@@ -683,7 +578,6 @@ export const MerchantApp: React.FC = () => {
   } | null>(null);
   const [shareText, setShareText] = useState("");
 
-<<<<<<< HEAD
   // Marketing Tab States
   const [promoBannerData, setPromoBannerData] = useState({
     title: currentMerchant?.promoBanner?.title || "عرض خاص!",
@@ -731,7 +625,6 @@ export const MerchantApp: React.FC = () => {
         return; // Success
       }
     } catch (shareErr) {
-      console.warn("Native share cancelled or failed:", shareErr);
     }
 
     // Fallback: Copy to Clipboard and prompt the user
@@ -742,21 +635,9 @@ export const MerchantApp: React.FC = () => {
         return;
       }
     } catch (_clipErr) {
-      console.warn("Clipboard copy failed, opening share modal as last resort.");
     }
 
     // Fallback to traditional modal
-=======
-  const openShareModal = (type: "store" | "product", data: any) => {
-    const text = type === "store"
-      ? `أهلاً بكم في متجراً الرسمي "${data.shopName}"! يمكنكم تصفح أحدث المنتجات والطلب مباشرة من الرابط التالي:
-https://mahallak.app/store/${data.id}`
-      : `متوفر الآن في متجرنا: "${data.name}" بسعر ${data.price.toLocaleString()} د.ع.
-سارع بالطلب الآن عبر تطبيق محلك: https://mahallak.app/product/${data.id}`;
-    
-    setShareText(text);
-    setShareConfig({ type, data });
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     setShowShareModal(true);
   };
 
@@ -803,7 +684,6 @@ https://mahallak.app/store/${data.id}`
     if (shareUrl) openExternalUrl(shareUrl);
   };
 
-<<<<<<< HEAD
   const merchantNotifications = React.useMemo(
     () =>
       notifications
@@ -811,15 +691,6 @@ https://mahallak.app/store/${data.id}`
         .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt)),
     [notifications, currentMerchant?.id]
   );
-=======
-  const merchantNotifications = notifications
-    .filter((n) => n.userId === currentMerchant?.id && n.role === "merchant")
-    .sort((a, b) => {
-      const timeA = (a.createdAt as any)?.toMillis ? (a.createdAt as any).toMillis() : Date.parse((a.createdAt as string) || '');
-      const timeB = (b.createdAt as any)?.toMillis ? (b.createdAt as any).toMillis() : Date.parse((b.createdAt as string) || '');
-      return (Number(timeB) || 0) - (Number(timeA) || 0);
-    });
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const unreadNotifsCount = merchantNotifications.filter((n) => !n.read).length;
   const [lastNotifCount, setLastNotifCount] = useState(unreadNotifsCount);
 
@@ -827,7 +698,6 @@ https://mahallak.app/store/${data.id}`
     if (unreadNotifsCount > lastNotifCount) {
       const latestNotif = merchantNotifications[0];
       if (latestNotif && !latestNotif.read) {
-        notificationSound.play().catch((e) => console.log("Sound error:", e));
         if (view === "dashboard") {
           // alert or local handling
         }
@@ -870,11 +740,8 @@ https://mahallak.app/store/${data.id}`
   const [showArea, setShowArea] = useState(true);
   const [showLandmark, setShowLandmark] = useState(true);
   const [showMap, setShowMap] = useState(true);
-<<<<<<< HEAD
   const [isTermsAccepted, setIsTermsAccepted] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const [showPhone, setShowPhone] = useState(true);
   const [categoryId, setCategoryId] = useState("fashion");
   const [logoUrl, setLogoUrl] = useState("");
@@ -886,13 +753,10 @@ https://mahallak.app/store/${data.id}`
 
   const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
-<<<<<<< HEAD
   const [showShippingLabelModal, setShowShippingLabelModal] = useState(false);
   const [selectedCustomProvince, setSelectedCustomProvince] = useState<string | null>(null);
   const [editingCustomPrice, setEditingCustomPrice] = useState<number>(5000);
   const [isCustomFree, setIsCustomFree] = useState<boolean>(false);
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 
   // Profile Form state
   const [profileForm, setProfileForm] = useState({
@@ -905,15 +769,12 @@ https://mahallak.app/store/${data.id}`
     landmark: "",
     deliveryPrice: 5000,
     isFreeDelivery: false,
-<<<<<<< HEAD
     localProvinceDeliveryPrice: 5000,
     otherProvincesDeliveryPrice: 8000,
     localProvinceFreeDelivery: false,
     otherProvincesFreeDelivery: false,
     provinceDeliveryPrices: {} as Record<string, number>,
     provinceFreeDelivery: {} as Record<string, boolean>,
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     logo: "",
     lat: undefined as number | undefined,
     lng: undefined as number | undefined,
@@ -921,11 +782,8 @@ https://mahallak.app/store/${data.id}`
     showLandmark: true,
     showMap: true,
     showPhone: true,
-<<<<<<< HEAD
     zainCashNumber: "",
     mastercardNumber: ""
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   });
 
   const handleProfileFormChange = (updates: Partial<typeof profileForm>) => {
@@ -933,17 +791,6 @@ https://mahallak.app/store/${data.id}`
     setIsProfileDirty(true);
   };
 
-<<<<<<< HEAD
-=======
-  const handleTabChange = (newTab: any) => {
-    if (activeTab === "profile" && isProfileDirty) {
-      setPendingTab(newTab);
-      setShowUnsavedModal(true);
-    } else {
-      setActiveTab(newTab);
-    }
-  };
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const [showPasswordChange, setShowPasswordChange] = useState(false);
   const [pwStep, setPwStep] = useState(1);
   const [otpPwCode, setOtpPwCode] = useState("");
@@ -974,10 +821,7 @@ https://mahallak.app/store/${data.id}`
   const [prodBarcode, setProdBarcode] = useState("");
   const [prodInventory, setProdInventory] = useState<number | "">("");
   const [showScanner, setShowScanner] = useState(false);
-<<<<<<< HEAD
   const [scannerMode, setScannerMode] = useState<"inventory" | "search">("inventory");
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 
   // States for sponsored delivery and media ads sliders
   const [deliveryAdIndex, setDeliveryAdIndex] = useState(0);
@@ -1062,10 +906,7 @@ https://mahallak.app/store/${data.id}`
   const [pDiscount, setPDiscount] = useState(0);
   const [pMaxUses, setPMaxUses] = useState(10);
   const [pMaxUsesPerUser, setPMaxUsesPerUser] = useState(1);
-<<<<<<< HEAD
   const [pTargetAudience, setPTargetAudience] = useState<"ALL" | "FOLLOWERS" | "PAST_BUYERS" | "FOLLOWERS_AND_PAST_BUYERS">("ALL");
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const [pExpiryType, setPExpiryType] = useState<"days" | "date">("days");
   const [pStartDate, setPStartDate] = useState("");
   const [pEndDate, setPEndDate] = useState("");
@@ -1088,18 +929,13 @@ https://mahallak.app/store/${data.id}`
   const [giftProductId, setGiftProductId] = useState("");
 
   const invoiceRef = useRef<HTMLDivElement>(null);
-<<<<<<< HEAD
   const shippingLabelRef = useRef<HTMLDivElement>(null);
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 
   const handlePrint = useReactToPrint({
     contentRef: invoiceRef,
     documentTitle: `فاتورة_طلب_${selectedInvoice?.id || ""}`,
-<<<<<<< HEAD
     suppressErrors: true,
     onPrintError: (errorLocation, error) => {
-      console.warn('Print error', errorLocation, error);
       alert("الطباعة غير مدعومة داخل وضع المعاينة. يرجى فتح التطبيق في علامة تبويب جديدة للطباعة.");
     }
   });
@@ -1109,11 +945,8 @@ https://mahallak.app/store/${data.id}`
     documentTitle: `بوليصة_شحن_${selectedInvoice?.id || ""}`,
     suppressErrors: true,
     onPrintError: (errorLocation, error) => {
-      console.warn('Print error', errorLocation, error);
       alert("الطباعة غير مدعومة داخل وضع المعاينة. يرجى فتح التطبيق في علامة تبويب جديدة للطباعة.");
     }
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   });
 
   const handleShareWhatsAppInvoice = (order: Order) => {
@@ -1213,68 +1046,9 @@ https://mahallak.app/store/${data.id}`
   const [selectedAudienceId, setSelectedAudienceId] = useState<string | null>(null);
 
   // ==========================================
-<<<<<<< HEAD
-=======
-  // نظام إدارة مقاطع الريلز الخاصة بالتاجر
-  // ==========================================
-  const [merchantReels, setMerchantReels] = useState<Reel[]>([]);
-  const [loadingReels, setLoadingReels] = useState(false);
-  const [reelsTabMode, setReelsTabMode] = useState<"list" | "create" | "edit">("list");
-  const [editingReel, setEditingReel] = useState<Reel | null>(null);
-
-  const fetchMerchantReels = React.useCallback(async () => {
-    if (!currentMerchant?.id) return;
-    setLoadingReels(true);
-    try {
-      const reelsRef = collection(db, "reels");
-      const q = query(reelsRef, where("merchantId", "==", currentMerchant.id));
-      const querySnapshot = await getDocs(q);
-      const fetched: Reel[] = [];
-      querySnapshot.forEach((docSnap) => {
-        fetched.push({ id: docSnap.id, ...docSnap.data() } as Reel);
-      });
-      fetched.sort((a, b) => {
-        const timeA = a.createdAt?.seconds ? a.createdAt.seconds : 0;
-        const timeB = b.createdAt?.seconds ? b.createdAt.seconds : 0;
-        return timeB - timeA;
-      });
-      setMerchantReels(fetched);
-    } catch (err) {
-      console.error("Error fetching merchant reels:", err);
-    } finally {
-      setLoadingReels(false);
-    }
-  }, [currentMerchant]);
-
-  useEffect(() => {
-    if (activeTab === "reels" && currentMerchant?.id) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchMerchantReels();
-    }
-  }, [activeTab, currentMerchant?.id, fetchMerchantReels]);
-
-  const handleDeleteReel = async (reelId: string) => {
-    if (!window.confirm("هل أنت متأكد من حذف هذا الريل نهائياً؟")) return;
-    try {
-      await deleteDoc(doc(db, "reels", reelId));
-      setMerchantReels((prev) => prev.filter((r) => r.id !== reelId));
-    } catch (err) {
-      console.error("Error deleting reel:", err);
-      alert("فشل حذف مقطع الريل. يرجى المحاولة لاحقاً.");
-    }
-  };
-
-  const handleStartEditReel = (reel: Reel) => {
-    setEditingReel(reel);
-    setReelsTabMode("edit");
-  };
-
-  // ==========================================
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   // التحديث اللحظي للطلبات (Placeholder)
   // ==========================================
   useEffect(() => {
-    // Note: Live Query removed as per user request to delete Back4App
   }, [currentMerchant, view]);
 
   // Auto-slide for merchant sponsored ads
@@ -1324,19 +1098,14 @@ https://mahallak.app/store/${data.id}`
     area.trim() !== "" &&
     landmark.trim() !== "" &&
     lat !== undefined &&
-<<<<<<< HEAD
     lng !== undefined &&
     isTermsAccepted;
-=======
-    lng !== undefined;
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 
   // ==========================================
   // تحديث الجلسة
   // ==========================================
 
   useEffect(() => {
-<<<<<<< HEAD
     if (currentMerchant && stores.length > 0) {
       const updatedStore = stores.find(s => s.id === currentMerchant.id);
       
@@ -1350,25 +1119,6 @@ https://mahallak.app/store/${data.id}`
           }, 0);
           return;
         }
-=======
-    if (currentMerchant) {
-      const updatedStore = stores.find(s => s.id === currentMerchant.id);
-      if (!updatedStore) {
-        setTimeout(() => {
-           setCurrentMerchant(null);
-           setView("login");
-           setLoginError("تم حذف بيانات حسابك والمتجر نهائياً من قبل الإدارة.");
-        }, 0);
-        return;
-      }
-      if (updatedStore && updatedStore.isBanned) {
-        setTimeout(() => {
-           setCurrentMerchant(null);
-           setView("login");
-           setLoginError("تم حظر هذا الحساب من قبل الإدارة و تم تسجيل خروجك.");
-        }, 0);
-        return;
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       }
 
       setTimeout(() => {
@@ -1383,15 +1133,12 @@ https://mahallak.app/store/${data.id}`
           landmark: currentMerchant.landmark,
           deliveryPrice: currentMerchant.deliveryPrice || 5000,
           isFreeDelivery: currentMerchant.isFreeDelivery || false,
-<<<<<<< HEAD
           localProvinceDeliveryPrice: (currentMerchant as any).localProvinceDeliveryPrice !== undefined ? (currentMerchant as any).localProvinceDeliveryPrice : (currentMerchant.deliveryPrice || 5000),
           otherProvincesDeliveryPrice: (currentMerchant as any).otherProvincesDeliveryPrice !== undefined ? (currentMerchant as any).otherProvincesDeliveryPrice : 8000,
           localProvinceFreeDelivery: (currentMerchant as any).localProvinceFreeDelivery || false,
           otherProvincesFreeDelivery: (currentMerchant as any).otherProvincesFreeDelivery || false,
           provinceDeliveryPrices: (currentMerchant as any).provinceDeliveryPrices || {},
           provinceFreeDelivery: (currentMerchant as any).provinceFreeDelivery || {},
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           logo: currentMerchant.logo || "",
           lat: currentMerchant.lat,
           lng: currentMerchant.lng,
@@ -1399,11 +1146,8 @@ https://mahallak.app/store/${data.id}`
           showLandmark: currentMerchant.showLandmark !== false,
           showMap: currentMerchant.showMap !== false,
           showPhone: currentMerchant.showPhone !== false,
-<<<<<<< HEAD
           zainCashNumber: currentMerchant.payoutMethods?.zainCashNumber || "",
           mastercardNumber: currentMerchant.payoutMethods?.mastercardNumber || "",
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
         });
       }, 0);
     } else {
@@ -1455,7 +1199,6 @@ https://mahallak.app/store/${data.id}`
       setLoginError(loginMethod === 'phone' ? "الرقم غير مسجل. أنشئ حساباً جديداً." : "اسم المستخدم غير موجود.");
       return;
     }
-<<<<<<< HEAD
     
     const validation = validateUserStatus(found, 'merchant');
     if (!validation.valid) {
@@ -1463,13 +1206,10 @@ https://mahallak.app/store/${data.id}`
       return;
     }
     
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     if (found.password !== loginPassword) {
       setLoginError("كلمة المرور غير صحيحة.");
       return;
     }
-<<<<<<< HEAD
     setCurrentMerchant(found);
     setShowPushPrompt(true);
     if (!found.terms_accepted) {
@@ -1479,15 +1219,6 @@ https://mahallak.app/store/${data.id}`
     } else {
       setView("dashboard");
     }
-=======
-    if (found.isBanned) {
-      setLoginError("تم حظر هذا الحساب من قبل الإدارة.");
-      return;
-    }
-    setCurrentMerchant(found);
-    requestNotificationPermission();
-    setView("dashboard");
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     setLoginError("");
   };
 
@@ -1532,22 +1263,15 @@ https://mahallak.app/store/${data.id}`
       subscriptionId: selectedPlan,
       deliveryPrice: 5000,
       isFreeDelivery: false,
-<<<<<<< HEAD
       terms_accepted: true,
       signed_at: new Date().toISOString()
     });
-=======
-    });
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setSentOtpCode(code);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     setOtpMode("signup");
     setOtpCode("");
     setOtpTimer(60);
     setCanResendOtp(false);
     setView("otp");
     try {
-<<<<<<< HEAD
       const ok = await authService.requestOTP(normalized, "signup");
       if (ok) {
         showToast("success", "تم إرسال الرمز", "تحقق من رقمك على الواتساب");
@@ -1556,17 +1280,6 @@ https://mahallak.app/store/${data.id}`
       }
     } catch (err: any) {
       showModal("error", "خطأ في الاتصال", err.message || "فشل الإرسال. تأكد من الإنترنت.");
-=======
-      console.log(`🔒 OTP DEBUG (Signup): The code is ${code}`);
-      const ok = await sendOTP(normalized, code, "signup");
-      if (ok) {
-        alert("تم إرسال رمز OTP إلى واتساب!");
-      } else {
-        alert("فشل الإرسال. يرجى المحاولة لاحقاً");
-      }
-    } catch {
-      alert("⚠️ فشل إرسال رمز التحقق. يرجى التأكد من اتصالك بالإنترنت أو المحاولة لاحقاً");
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     }
   };
 
@@ -1588,18 +1301,12 @@ https://mahallak.app/store/${data.id}`
       setLoginError("الرقم غير مسجل");
       return;
     }
-<<<<<<< HEAD
-=======
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setSentOtpCode(code);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     setOtpMode("forgot");
     setOtpCode("");
     setOtpTimer(60);
     setCanResendOtp(false);
     setView("otp");
     try {
-<<<<<<< HEAD
       const ok = await authService.requestOTP(normalized, "forgot");
       if (ok) {
         showToast("success", "تم إرسال الرمز", "تحقق من رقمك على الواتساب");
@@ -1608,23 +1315,11 @@ https://mahallak.app/store/${data.id}`
       }
     } catch (err: any) {
       showModal("error", "خطأ في الاتصال", err.message || "فشل الإرسال. تأكد من الإنترنت.");
-=======
-      console.log(`🔒 OTP DEBUG (Forgot): The code is ${code}`);
-      const ok = await sendOTP(normalized, code, "forgot");
-      if (ok) {
-        alert("تم إرسال رمز OTP إلى واتساب!");
-      } else {
-        alert("فشل الإرسال. يرجى المحاولة لاحقاً");
-      }
-    } catch {
-      alert("⚠️ فشل إرسال رمز التحقق. يرجى التأكد من اتصالك بالإنترنت أو المحاولة لاحقاً");
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     }
   };
 
   const handleOtpConfirm = async (e: React.FormEvent) => {
     e.preventDefault();
-<<<<<<< HEAD
 
     if (!otpCode || otpCode.length < 6) {
       showToast("warning", "رمز ناقص", "يرجى إدخال رمز التحقق بالكامل.");
@@ -1645,29 +1340,16 @@ https://mahallak.app/store/${data.id}`
       return;
     }
 
-=======
-    if (otpCode !== sentOtpCode) {
-      alert("الرمز غير صحيح!");
-      return;
-    }
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     if (otpMode === "signup" && pendingData) {
       const res = await registerMerchant(pendingData);
       if (res?.success) {
         const fresh = stores.find((s) => s.username === pendingData.username);
         if (fresh) setCurrentMerchant(fresh);
-<<<<<<< HEAD
         showModal("success", "تم إنشاء متجرك مبدئياً! أكمل الخطوات لإنهائه 🎉");
         setView("onboarding");
         setShowPushPrompt(true);
       } else {
         showModal("error", "خطأ", res?.message || 'Empty response');
-=======
-        alert("تم إنشاء متجرك بنجاح! 🎉");
-        setView("dashboard");
-      } else {
-        alert(res?.message || 'Empty response');
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
         setView("signup");
       }
     } else if (otpMode === "forgot") {
@@ -1679,12 +1361,8 @@ https://mahallak.app/store/${data.id}`
         updateStoreProfile({ ...found, password: forgotNewPassword });
         setCurrentMerchant({ ...found, password: forgotNewPassword } as any);
         setView("dashboard");
-<<<<<<< HEAD
         setShowPushPrompt(true);
         setTimeout(() => showToast("success", "تم تغيير كلمة المرور بنجاح!"), 400);
-=======
-        setTimeout(() => alert("تم تغيير كلمة المرور بنجاح!"), 100);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       }
     }
   };
@@ -1692,11 +1370,6 @@ https://mahallak.app/store/${data.id}`
   const handleResendOtp = async () => {
     if (!canResendOtp) return;
     
-<<<<<<< HEAD
-=======
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setSentOtpCode(code);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     setOtpTimer(60);
     setCanResendOtp(false);
     setOtpCode("");
@@ -1705,7 +1378,6 @@ https://mahallak.app/store/${data.id}`
     const normalized = normalizeIraqiPhone(targetPhone);
     
     try {
-<<<<<<< HEAD
       const ok = await authService.requestOTP(normalized, otpMode);
       if (ok) {
         showToast("success", "تم إعادة إرسال رمز OTP بنجاح!");
@@ -1714,12 +1386,6 @@ https://mahallak.app/store/${data.id}`
       }
     } catch (err: any) {
       showModal("error", "خطأ في الاتصال", err.message);
-=======
-      const ok = await sendOTP(normalized, code, otpMode);
-      alert(ok ? "تم إعادة إرسال رمز OTP بنجاح!" : "فشل الإرسال. يرجى المحاولة لاحقاً");
-    } catch (err: any) {
-      alert("❌ خطأ في الاتصال: " + err.message);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     }
   };
 
@@ -1740,7 +1406,6 @@ https://mahallak.app/store/${data.id}`
     e.preventDefault();
     if (pwStep === 1) {
       if (!currentMerchant) return;
-<<<<<<< HEAD
       try {
         const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
         if (ok) {
@@ -1766,20 +1431,6 @@ https://mahallak.app/store/${data.id}`
         }
       } catch (error: any) {
         showModal("error", "خطأ في التحقق", error.message || "الرمز غير صحيح!");
-=======
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setSentOtpCode(code);
-      const ok = await sendOTP(currentMerchant.phone, code, "forgot");
-      if (ok) {
-        setPwStep(2);
-        alert("تم إرسال رمز OTP لتغيير كلمة المرور إلى واتساب!");
-      } else {
-        alert("فشل إرسال الرمز. حاول مرة أخرى.");
-      }
-    } else {
-      if (otpPwCode !== sentOtpCode) {
-        alert("رمز OTP غير صحيح!");
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
         return;
       }
       if (newPassword.length < 8) {
@@ -1796,7 +1447,6 @@ https://mahallak.app/store/${data.id}`
     }
   };
 
-<<<<<<< HEAD
   const [reportDateRange, setReportDateRange] = useState<"7_days" | "30_days" | "this_month" | "custom">("7_days");
   const [reportCustomStartDate, setReportCustomStartDate] = useState("");
   const [reportCustomEndDate, setReportCustomEndDate] = useState("");
@@ -1824,15 +1474,12 @@ https://mahallak.app/store/${data.id}`
     }
   };
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const handleSaveProfile = async () => {
     if (profileForm.lat === undefined || profileForm.lng === undefined) {
       alert("يرجى تحديد موقعك على الخريطة أولاً 📍");
       return;
     }
     try {
-<<<<<<< HEAD
       const dbPayload = {
          ...profileForm,
          payoutMethods: {
@@ -1841,9 +1488,6 @@ https://mahallak.app/store/${data.id}`
          }
       };
       await updateStoreProfile(dbPayload);
-=======
-      await updateStoreProfile(profileForm);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       setIsProfileDirty(false);
       alert("تم حفظ التعديلات ✅");
     } catch (e: any) {
@@ -1851,28 +1495,18 @@ https://mahallak.app/store/${data.id}`
     }
   };
 
-<<<<<<< HEAD
   const handleLogout = async () => {
     try {
       await signOut(auth);
     } catch (e) {
-      console.error("Sign out error", e);
     }
     StorageService.clearAll();
     setCurrentMerchant(null);
     setCurrentCustomer(null);
-    setCurrentAdmin(false);
     setView("login");
     handleTabChange("home");
     setIsProfileDirty(false);
     navigate('/', { replace: true });
-=======
-  const handleLogout = () => {
-    setCurrentMerchant(null);
-    setView("login");
-    setActiveTab("home");
-    setIsProfileDirty(false);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   };
 
   // Available Tags based on Merchant Category
@@ -1891,15 +1525,12 @@ https://mahallak.app/store/${data.id}`
         (decodedText) => {
           scanner.clear();
           setShowScanner(false);
-<<<<<<< HEAD
           
           if (scannerMode === "search") {
             setProductSearchQuery(decodedText);
             return;
           }
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           // Find if product exists in merchantProducts
           const merchProducts = products.filter(
             (p) => p.storeId === currentMerchant?.id,
@@ -1993,14 +1624,9 @@ https://mahallak.app/store/${data.id}`
       );
 
       return () => {
-        scanner.clear().catch((e) => console.error("Scanner clear error", e));
       };
     }
-<<<<<<< HEAD
   }, [showScanner, products, currentMerchant, scannerMode]);
-=======
-  }, [showScanner, products, currentMerchant]);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 
   const handleSaveProduct = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2124,7 +1750,6 @@ https://mahallak.app/store/${data.id}`
     e.preventDefault();
     if (!pCode.trim()) return;
 
-<<<<<<< HEAD
     let finalEndDate: string | null = pEndDate || null;
     if (pExpiryType === "days") {
       if (pExpiryDays === 0) {
@@ -2134,20 +1759,12 @@ https://mahallak.app/store/${data.id}`
         expDate.setDate(expDate.getDate() + pExpiryDays);
         finalEndDate = expDate.toISOString().split("T")[0];
       }
-=======
-    let finalEndDate = pEndDate;
-    if (pExpiryType === "days") {
-      const expDate = new Date();
-      expDate.setDate(expDate.getDate() + pExpiryDays);
-      finalEndDate = expDate.toISOString().split("T")[0];
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     }
 
     const finalStartDate = pStartDate || new Date().toISOString().split("T")[0];
 
     const data = {
       storeId: currentMerchant!.id,
-<<<<<<< HEAD
       merchantId: currentMerchant!.id,
       code: pCode.toUpperCase().trim(),
       discountType: pDiscountType === 'amount' ? 'FIXED' : 'PERCENTAGE',
@@ -2165,16 +1782,6 @@ https://mahallak.app/store/${data.id}`
       expirationDate: finalEndDate || null, // legacy
       source: "merchant",
       sponsor: "MERCHANT",
-=======
-      code: pCode.toUpperCase().trim(),
-      discountType: pDiscountType,
-      discountValue: pDiscount,
-      maxUses: pMaxUses,
-      maxUsesPerUser: pMaxUsesPerUser,
-      startDate: finalStartDate,
-      expiresAt: finalEndDate,
-      source: "merchant",
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     };
 
     try {
@@ -2185,16 +1792,12 @@ https://mahallak.app/store/${data.id}`
       setPDiscount(0);
       setPMaxUses(10);
       setPMaxUsesPerUser(1);
-<<<<<<< HEAD
       setPTargetAudience("ALL");
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       setPExpiryType("days");
       setPStartDate("");
       setPEndDate("");
       setPExpiryDays(30);
     } catch (err) {
-      console.error("Error creating promo code:", err);
     }
   };
 
@@ -2261,7 +1864,6 @@ https://mahallak.app/store/${data.id}`
       setGiftExpiryDays(30);
       setGiftProductId("");
     } catch (err) {
-      console.error("Error sending gift:", err);
       alert("حدث خطأ أثناء إرسال الهدية. يرجى المحاولة لاحقاً.");
     }
   };
@@ -2280,15 +1882,9 @@ https://mahallak.app/store/${data.id}`
           // Background Click
           const data = action.notification.data;
           if (data?.type === 'new_order') {
-<<<<<<< HEAD
             handleTabChange('orders');
           } else if (data?.type === 'ratings') {
             handleTabChange('home');
-=======
-            setActiveTab('orders');
-          } else if (data?.type === 'ratings') {
-            setActiveTab('home');
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           }
         }
       );
@@ -2300,7 +1896,6 @@ https://mahallak.app/store/${data.id}`
   // لوحة التحكم (Dashboard)
   // ==========================================
 
-<<<<<<< HEAD
   if (view === "onboarding" && currentMerchant) {
     return (
       <MerchantOnboarding 
@@ -2313,8 +1908,6 @@ https://mahallak.app/store/${data.id}`
     );
   }
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   if (view === "dashboard" && currentMerchant) {
     const merchantProducts = products.filter(
       (p) => p.storeId === currentMerchant.id,
@@ -2322,21 +1915,17 @@ https://mahallak.app/store/${data.id}`
     const merchantOrders = orders.filter(
       (o) => o.storeId === currentMerchant.id,
     );
-<<<<<<< HEAD
     const lowStockProducts = merchantProducts.filter(
       (p) => p.status === 'published' && p.inventory !== undefined && p.inventory < 3 && p.inventory > 0
     );
     const outOfStockProducts = merchantProducts.filter(
       (p) => p.status === 'published' && p.inventory === 0
     );
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     const pendingOrders = merchantOrders.filter((o) => o.status === "pending");
     const merchantPromos = promoCodes.filter(
       (p) => p.storeId === currentMerchant.id,
     );
 
-<<<<<<< HEAD
     // Calculate top selling products this month
     const thisMonth = new Date().getMonth();
     const thisYear = new Date().getFullYear();
@@ -2368,10 +1957,6 @@ https://mahallak.app/store/${data.id}`
       <div className="min-h-screen bg-slate-50 flex">
         <MerchantDashboardTour merchantId={currentMerchant.id} />
         {showPushPrompt && <PushPermissionPrompt userType="merchant" onComplete={() => setShowPushPrompt(false)} />}
-=======
-    return (
-      <div className="min-h-screen bg-slate-50 flex">
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
         {/* Sidebar Desktop */}
         <aside className="hidden md:flex w-64 bg-gradient-to-b from-[#4D2980] to-[#381a66] text-white flex-col fixed right-0 top-0 h-screen z-30 shadow-2xl transition-all">
           <div className="p-6 border-b border-[#9952FF] flex items-center space-x-3 space-x-reverse">
@@ -2391,27 +1976,17 @@ https://mahallak.app/store/${data.id}`
             {[
               { id: "home", icon: StoreIcon, label: "الرئيسية" },
               { id: "products", icon: Package, label: "المنتجات" },
-<<<<<<< HEAD
               { id: "marketing", icon: Megaphone, label: "التسويق" },
               /*{ id: "reels", icon: Film, label: "ريلز التسوق" },*/
               { id: "orders", icon: ClipboardList, label: "الطلبات" },
               { id: "reports", icon: TrendingUp, label: "التقارير" },
               { id: "delivery", icon: Truck, label: "التوصيل" },
-=======
-              { id: "reels", icon: Film, label: "ريلز التسوق" },
-              { id: "orders", icon: ClipboardList, label: "الطلبات" },
-              { id: "customers", icon: Users, label: "زبائني" },
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               { id: "profile", icon: User, label: "حسابي" },
             ].map((item) => (
               <button
                 key={item.id}
                 onClick={() => handleTabChange(item.id as any)}
-<<<<<<< HEAD
                 className={`w-full flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl transition tour-step-desktop-${item.id} ${activeTab === item.id ? "bg-[#9952FF] text-white shadow-md" : "text-slate-300 hover:bg-[#4D2980]"}`}
-=======
-                className={`w-full flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl transition ${activeTab === item.id ? "bg-[#9952FF] text-white shadow-md" : "text-slate-300 hover:bg-[#4D2980]"}`}
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               >
                 <item.icon size={20} />
                 <span className="font-semibold">{item.label}</span>
@@ -2437,27 +2012,17 @@ https://mahallak.app/store/${data.id}`
           {[
             { id: "home", icon: StoreIcon, label: "الرئيسية" },
             { id: "products", icon: Package, label: "المنتجات" },
-<<<<<<< HEAD
             { id: "marketing", icon: Megaphone, label: "التسويق" },
             /*{ id: "reels", icon: Film, label: "ريلز" },*/
             { id: "orders", icon: ClipboardList, label: "الطلبات" },
             { id: "reports", icon: TrendingUp, label: "التقارير" },
             { id: "delivery", icon: Truck, label: "التوصيل" },
-=======
-            { id: "reels", icon: Film, label: "ريلز" },
-            { id: "orders", icon: ClipboardList, label: "الطلبات" },
-            { id: "customers", icon: Users, label: "زبائني" },
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
             { id: "profile", icon: User, label: "حسابي" },
           ].map((item) => (
             <button
               key={item.id}
               onClick={() => handleTabChange(item.id as any)}
-<<<<<<< HEAD
               className={`flex flex-col items-center px-2 py-1.5 rounded-xl transition-all tour-step-mobile-${item.id} ${activeTab === item.id ? "text-[#9952FF]" : "text-slate-400 hover:text-slate-600"}`}
-=======
-              className={`flex flex-col items-center px-2 py-1.5 rounded-xl transition-all ${activeTab === item.id ? "text-[#9952FF]" : "text-slate-400 hover:text-slate-600"}`}
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
             >
               <div className={`p-1.5 rounded-lg mb-1 transition-all ${activeTab === item.id ? 'bg-[#9952FF] text-white shadow-md' : 'bg-transparent'}`}>
                 <item.icon size={18} className="w-5 h-5" />
@@ -2479,7 +2044,6 @@ https://mahallak.app/store/${data.id}`
                   <ChevronRight size={20} />
                 </button>
               )}
-<<<<<<< HEAD
               <div className="text-right flex flex-col items-start gap-1">
                 <div className="flex items-center gap-2">
                   <h1 className="text-sm font-black text-[#4D2980]">
@@ -2512,12 +2076,6 @@ https://mahallak.app/store/${data.id}`
                     ينتهي في: {new Date(currentMerchant.subscriptionValidUntil).toLocaleDateString('ar-IQ')}
                   </p>
                 )}
-=======
-              <div className="md:hidden text-right">
-                <h1 className="text-sm font-black text-[#4D2980]">
-                  {currentMerchant.shopName}
-                </h1>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               </div>
               <div className="hidden md:block text-right">
                 <span className="text-xs font-bold text-slate-400">
@@ -2541,19 +2099,11 @@ https://mahallak.app/store/${data.id}`
                   }
                   setShowNotifications(!showNotifications);
                 }}
-<<<<<<< HEAD
                 className="p-2.5 bg-amber-50/80 text-amber-500 rounded-full hover:bg-amber-100/70 transition relative shadow-sm border border-amber-100/40 flex items-center justify-center"
               >
                 <BellRing size={20} strokeWidth={1.75} />
                 {unreadNotifsCount > 0 && (
                   <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-white shadow-sm animate-bounce">
-=======
-                className="p-2.5 bg-slate-50 text-slate-500 rounded-2xl hover:bg-slate-50 hover:text-[#9952FF] transition relative"
-              >
-                <BellRing size={20} />
-                {unreadNotifsCount > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-white shadow-sm animate-bounce">
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                     {unreadNotifsCount}
                   </span>
                 )}
@@ -2580,11 +2130,7 @@ https://mahallak.app/store/${data.id}`
                           <div key={notif.id} className="p-3 hover:bg-slate-50 transition-colors text-right relative cursor-pointer" onClick={() => {
                             if (!notif.read) markNotificationAsRead(notif.id);
                             if (notif.type === 'order') {
-<<<<<<< HEAD
                                handleTabChange('orders');
-=======
-                               setActiveTab('orders');
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                             }
                             setShowNotifications(false);
                           }}>
@@ -2593,7 +2139,6 @@ https://mahallak.app/store/${data.id}`
                               {!notif.read && <span className="w-1.5 h-1.5 rounded-full bg-[#9952FF] mt-1 shrink-0"></span>}
                             </div>
                             <p className="text-[10px] text-slate-500 font-bold leading-relaxed">{notif.message}</p>
-<<<<<<< HEAD
                             {notif.actionLink && notif.actionText && (
                               <button 
                                 onClick={(e) => {
@@ -2605,8 +2150,6 @@ https://mahallak.app/store/${data.id}`
                                 {notif.actionText}
                               </button>
                             )}
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                             <span className="text-[8px] text-slate-400 block mt-1">
                               {formatSafeDateTimeString(notif.createdAt, "ar-IQ", { dateStyle: 'short', timeStyle: 'short' })}
                             </span>
@@ -2620,7 +2163,6 @@ https://mahallak.app/store/${data.id}`
             </div>
           </div>
 
-<<<<<<< HEAD
           {/* الرئيسية أو التوصيل */}
           {(activeTab === "home" || activeTab === "delivery") && (
             <div className="space-y-6">
@@ -3284,188 +2826,39 @@ https://mahallak.app/store/${data.id}`
                     </div>
                   </div>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 sm:gap-5">
-=======
-          {/* الرئيسية */}
-          {activeTab === "home" && (
-            <div className="space-y-6">
-
-
-              {/* قسم الإعلانات الممولة للشركات والخدمات */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* القسم الأول: شركات التوصيل */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-3 text-[#4D2980]">
-                      <Truck size={20} className="stroke-[2.5]" />
-                      <h4 className="text-sm font-black text-[#4D2980]">
-                        شركات التوصيل الشريكة 🚚
-                      </h4>
-                      <span className="text-[9px] font-bold bg-slate-50 text-[#4D2980] px-2 py-0.5 rounded-full mr-auto">ممولة</span>
-                    </div>
-
-                    {(adminSettings.merchantDeliveryAds || []).length > 0 ? (
-                      <div className="relative overflow-hidden rounded-2xl bg-slate-50 aspect-[2/1] border border-slate-100/50">
-                        {(adminSettings.merchantDeliveryAds || []).map((ad: any, idx: number) => (
-                          <div
-                            key={ad.id}
-                            className={`absolute inset-0 transition-opacity duration-500 flex flex-col justify-end ${idx === deliveryAdIndex ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-                          >
-                            <img src={ad.url || undefined} className="absolute inset-0 w-full h-full object-cover" alt={ad.title} />
-                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
-                            <div className="relative p-4 text-white text-right z-10">
-                              <h5 className="font-black text-sm mb-0.5 drop-shadow-md">{ad.title}</h5>
-                              <p className="text-[10px] text-gray-200 line-clamp-2 leading-relaxed mb-2 drop-shadow-sm">{ad.desc}</p>
-                              {ad.link && (
-                                <a
-                                  href={ad.link.startsWith('http') ? ad.link : `tel:${ad.link}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#9952FF] hover:bg-[#9952FF] text-white rounded-lg text-[10px] font-black transition-all active:scale-95"
-                                >
-                                  <span>تواصل الآن</span>
-                                  <MessageCircle size={10} />
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                        {/* Indicators */}
-                        {(adminSettings.merchantDeliveryAds || []).length > 1 && (
-                          <div className="absolute bottom-2 right-2 flex gap-1 z-15">
-                            {(adminSettings.merchantDeliveryAds || []).map((_: any, idx: number) => (
-                              <button
-                                key={idx}
-                                onClick={() => setDeliveryAdIndex(idx)}
-                                className={`w-1.5 h-1.5 rounded-full transition-all ${idx === deliveryAdIndex ? 'bg-white w-3' : 'bg-white/40'}`}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      // Empty state
-                      <div className="flex flex-col items-center justify-center p-6 bg-slate-50/50 border border-dashed border-gray-150 rounded-2xl aspect-[2/1]">
-                        <div className="w-8 h-8 bg-white shadow-sm border border-slate-100 rounded-full flex items-center justify-center text-slate-400 mb-2">
-                          <Truck size={14} />
-                        </div>
-                        <span className="text-[10px] font-black text-slate-400">لا توجد إعلانات نشطة حالياً</span>
-                        <span className="text-[8px] text-gray-300 mt-1">تواصل مع الإدارة لإضافة عرضك المميز</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* القسم الثاني: شركات التصوير والاعلانات */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-3 text-emerald-600">
-                      <Camera size={20} className="stroke-[2.5]" />
-                      <h4 className="text-sm font-black text-[#4D2980]">
-                        تصوير المنتجات وصناعة المحتوى 📸
-                      </h4>
-                      <span className="text-[9px] font-bold bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full mr-auto">ممولة</span>
-                    </div>
-
-                    {(adminSettings.merchantMediaAds || []).length > 0 ? (
-                      <div className="relative overflow-hidden rounded-2xl bg-slate-50 aspect-[2/1] border border-slate-100/50">
-                        {(adminSettings.merchantMediaAds || []).map((ad: any, idx: number) => (
-                          <div
-                            key={ad.id}
-                            className={`absolute inset-0 transition-opacity duration-500 flex flex-col justify-end ${idx === mediaAdIndex ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-                          >
-                            <img src={ad.url || undefined} className="absolute inset-0 w-full h-full object-cover" alt={ad.title} />
-                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
-                            <div className="relative p-4 text-white text-right z-10">
-                              <h5 className="font-black text-sm mb-0.5 drop-shadow-md">{ad.title}</h5>
-                              <p className="text-[10px] text-gray-200 line-clamp-2 leading-relaxed mb-2 drop-shadow-sm">{ad.desc}</p>
-                              {ad.link && (
-                                <a
-                                  href={ad.link.startsWith('http') ? ad.link : `tel:${ad.link}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-black transition-all active:scale-95"
-                                >
-                                  <span>تواصل الآن</span>
-                                  <MessageCircle size={10} />
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                        {/* Indicators */}
-                        {(adminSettings.merchantMediaAds || []).length > 1 && (
-                          <div className="absolute bottom-2 right-2 flex gap-1 z-15">
-                            {(adminSettings.merchantMediaAds || []).map((_: any, idx: number) => (
-                              <button
-                                key={idx}
-                                onClick={() => setMediaAdIndex(idx)}
-                                className={`w-1.5 h-1.5 rounded-full transition-all ${idx === mediaAdIndex ? 'bg-white w-3' : 'bg-white/40'}`}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      // Empty state
-                      <div className="flex flex-col items-center justify-center p-6 bg-slate-50/50 border border-dashed border-gray-150 rounded-2xl aspect-[2/1]">
-                        <div className="w-8 h-8 bg-white shadow-sm border border-slate-100 rounded-full flex items-center justify-center text-slate-400 mb-2">
-                          <Camera size={14} />
-                        </div>
-                        <span className="text-[10px] font-black text-slate-400">لا توجد إعلانات نشطة حالياً</span>
-                        <span className="text-[8px] text-gray-300 mt-1">تواصل مع الإدارة لإضافة عرضك المميز</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                 {[
                   {
                     label: "إجمالي الطلبات",
                     val: merchantOrders.length,
                     color: "text-[#9952FF]",
-<<<<<<< HEAD
                     tab: "orders",
                     bg: "bg-white",
                     icon: <ShoppingBag size={18} className="stroke-[2.5]" />,
                     iconBg: "bg-purple-50 text-[#9952FF]"
-=======
-                    tab: "orders"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   },
                   {
                     label: "بانتظار التحضير",
                     val: pendingOrders.length,
                     color: "text-amber-500",
-<<<<<<< HEAD
                     tab: "orders",
                     bg: "bg-white",
                     icon: <RefreshCw size={18} className="stroke-[2.5]" />,
                     iconBg: "bg-amber-50 text-amber-500"
-=======
-                    tab: "orders"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   },
                   {
                     label: "المتابعين",
                     val: customers.filter(c => c.followedStores.includes(currentMerchant.id)).length,
                     color: "text-[#4D2980]",
-<<<<<<< HEAD
                     tab: "customers",
                     bg: "bg-white",
                     icon: <Users size={18} className="stroke-[2.5]" />,
                     iconBg: "bg-indigo-50 text-indigo-500"
-=======
-                    tab: "customers"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   },
                   {
                     label: "إجمالي المبيعات",
                     val:
                       merchantOrders
                         .filter((o) => o.status === "delivered")
-<<<<<<< HEAD
                         .reduce((a, b) => a + ((b.subtotal || 0) - (b.discountSponsor === 'MERCHANT' ? (b.discountAmount || 0) : 0)), 0)
                         .toLocaleString() + " د.ع",
                     color: "text-emerald-600",
@@ -3473,49 +2866,28 @@ https://mahallak.app/store/${data.id}`
                     bg: "bg-white",
                     icon: <TrendingUp size={18} className="stroke-[2.5]" />,
                     iconBg: "bg-emerald-50 text-emerald-600"
-=======
-                        .reduce((a, b) => a + b.total, 0)
-                        .toLocaleString() + " د.ع",
-                    color: "text-emerald-600",
-                    tab: "home"
-                  },
-                  {
-                    label: "الريلز المرفوعة",
-                    val: merchantReels.filter(r => r.merchantId === currentMerchant.id).length || 0,
-                    color: "text-blue-500",
-                    tab: "reels"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   },
                   {
                     label: "التقييمات",
                     val: currentMerchant.rating ? `${currentMerchant.rating.toFixed(1)} / 5` : "0",
                     color: "text-amber-500",
-<<<<<<< HEAD
                     tab: "home",
                     bg: "bg-white",
                     icon: <Star size={18} className="stroke-[2.5]" />,
                     iconBg: "bg-yellow-50 text-yellow-500"
-=======
-                    tab: "home"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   },
                   {
                     label: "عروض فلاش سيلز",
                     val: flashSales.filter(f => f.itemStoreId === currentMerchant.id && f.status === "active").length,
                     color: "text-red-500",
-<<<<<<< HEAD
                     tab: "home",
                     bg: "bg-white",
                     icon: <Zap size={18} className="stroke-[2.5]" />,
                     iconBg: "bg-rose-50 text-rose-500"
-=======
-                    tab: "home"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   },
                 ].map((s, i) => (
                   <div
                     key={i}
-<<<<<<< HEAD
                     onClick={() => { if (s.tab !== 'home') handleTabChange(s.tab as any); }}
                     className={`p-5 rounded-3xl shadow-sm border border-slate-100 bg-white group hover:border-slate-200 transition-all duration-350 hover:-translate-y-1 hover:shadow-md flex flex-col justify-between relative overflow-hidden ${s.tab !== 'home' ? 'cursor-pointer' : ''}`}
                   >
@@ -3536,22 +2908,10 @@ https://mahallak.app/store/${data.id}`
                         {s.val}
                       </span>
                     </div>
-=======
-                    onClick={() => { if (s.tab !== 'home') setActiveTab(s.tab as any); }}
-                    className={`p-4 rounded-2xl shadow-sm border border-slate-100 bg-white group hover:border-slate-100 transition-colors ${s.tab !== 'home' ? 'cursor-pointer hover:shadow-md' : ''}`}
-                  >
-                    <span className="text-[10px] font-bold text-slate-400 block mb-1">
-                      {s.label}
-                    </span>
-                    <span className={`text-xl font-black ${s.color}`}>
-                      {s.val}
-                    </span>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   </div>
                 ))}
               </div>
 
-<<<<<<< HEAD
               {/* رسم بياني لأكثر المنتجات مبيعاً خلال الشهر */}
               {topSellingProductsThisMonth.length > 0 && (
                 <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm relative overflow-hidden group">
@@ -3599,8 +2959,6 @@ https://mahallak.app/store/${data.id}`
                 </div>
               )}
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               {/* قسم مشاركة المتجر */}
               <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform">
@@ -3884,7 +3242,6 @@ https://mahallak.app/store/${data.id}`
                   )}
                 </div>
               </div>
-<<<<<<< HEAD
                 </>
               )}
             </div>
@@ -4654,142 +4011,6 @@ https://mahallak.app/store/${data.id}`
               </div>
             );
           })()}
-=======
-            </div>
-          )}
-
-          {activeTab === "reels" && (
-            <div className="space-y-6 animate-fade-in max-w-2xl mx-auto" dir="rtl">
-              {reelsTabMode === "list" ? (
-                <div className="space-y-5">
-                  <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                    <div>
-                      <h2 className="text-xl font-black text-slate-900 font-tajawal flex items-center gap-2">
-                        <Film className="text-[#9952FF]" size={22} />
-                        <span>منشورات الريلز الخاصة بك 🎬</span>
-                      </h2>
-                      <p className="text-xs text-slate-500 font-medium mt-1">إهتم بزيادة مبيعاتك بنشر مقاطع قصيرة تشرح جودة منتجاتك وتوفر تسوقاً مباشراً وسهلاً للمشترين!</p>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setEditingReel(null);
-                        setReelsTabMode("create");
-                      }}
-                      className="whitespace-nowrap px-5 py-3 bg-[#9952FF] hover:bg-[#853df2] text-white font-black rounded-2xl shadow-lg shadow-[#9952FF]/10 flex items-center gap-2 transition active:scale-95"
-                    >
-                      <Plus size={18} />
-                      <span>إضافة ريلز</span>
-                    </button>
-                  </div>
-
-                  {loadingReels ? (
-                    <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-3">
-                      <Loader2 size={32} className="animate-spin text-[#9952FF]" />
-                      <p className="text-xs text-slate-500 font-bold">جاري تحميل منشورات الريلز...</p>
-                    </div>
-                  ) : merchantReels.length === 0 ? (
-                    <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm text-center">
-                      <Film size={48} className="mx-auto text-slate-200 mb-4" />
-                      <h3 className="font-black text-base text-slate-800 font-tajawal">لم تقم بنشر أي ريلز بعد!</h3>
-                      <p className="text-xs text-slate-400 font-medium mt-2 max-w-xs mx-auto">
-                        سارع بنشر مقاطع فيديو قصيرة حول منتجاتك لتتحول لخيارات تسوق فورية لزبائن المتجر وتكسب انتشاراً أسرع!
-                      </p>
-                      <button
-                        onClick={() => {
-                          setEditingReel(null);
-                          setReelsTabMode("create");
-                        }}
-                        className="mt-5 px-5 py-2.5 bg-[#9952FF]/10 text-[#9952FF] font-black text-xs rounded-xl hover:bg-[#9952FF]/15 transition"
-                      >
-                        + انشر أول ريلز لمتجرك الآن
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {merchantReels.map((reel) => {
-                        const prod = products.find((p) => p.id === reel.linkedProductId);
-                        return (
-                          <div key={reel.id} className="bg-white overflow-hidden rounded-2xl border border-slate-100 shadow-sm flex gap-4 p-4 items-center">
-                            {/* Video container */}
-                            <div className="relative w-24 h-36 bg-slate-900 rounded-xl overflow-hidden shrink-0 group">
-                              <video
-                                src={reel.videoUrl}
-                                preload="metadata"
-                                className="w-full h-full object-cover"
-                                muted
-                                playsInline
-                              />
-                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition duration-200">
-                                <Play size={20} className="text-white fill-current" />
-                              </div>
-                            </div>
-
-                            {/* Reel Info */}
-                            <div className="flex-1 min-w-0 pr-1 flex flex-col justify-between h-36 py-1 text-right">
-                              <div>
-                                <h3 className="text-sm font-black text-slate-950 font-tajawal truncate mb-2">
-                                  {prod ? prod.name : "منتج غير موجود أو محذوف ⚠️"}
-                                </h3>
-                                {prod && (
-                                  <span className="text-xs font-bold text-[#9952FF] bg-[#9952FF]/5 px-2.5 py-1 rounded-lg">
-                                    {(prod.finalPrice || prod.price).toLocaleString()} د.ع
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* stats */}
-                              <div className="flex items-center gap-4 text-slate-500 text-xs font-semibold my-2">
-                                <div className="flex items-center gap-1">
-                                  <Eye size={14} className="text-slate-400" />
-                                  <span>{(reel.viewsCount || 0).toLocaleString()}</span>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  <Heart size={14} className="text-rose-500" />
-                                  <span>{(reel.likesCount || 0).toLocaleString()}</span>
-                                </div>
-                              </div>
-
-                              {/* Buttons */}
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleStartEditReel(reel)}
-                                  className="flex-1 py-2 bg-slate-50 hover:bg-[#9952FF]/5 hover:text-[#9952FF] text-slate-600 font-bold text-xs rounded-xl border border-slate-100 transition flex items-center justify-center gap-1.5"
-                                >
-                                  <Edit size={14} />
-                                  <span>تعديل</span>
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteReel(reel.id)}
-                                  className="py-2 px-3 bg-rose-50 hover:bg-rose-500 hover:text-white text-rose-600 font-bold text-xs rounded-xl border border-rose-100 transition flex items-center justify-center"
-                                  title="حذف"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="animate-fade-in">
-                  <UploadReel
-                    reelToEdit={editingReel}
-                    onSuccess={() => {
-                      setReelsTabMode("list");
-                      fetchMerchantReels();
-                    }}
-                    onCancel={() => {
-                      setReelsTabMode("list");
-                    }}
-                  />
-                </div>
-              )}
-            </div>
-          )}
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 
           {activeTab === "products" && (
             <div className="space-y-6">
@@ -4824,14 +4045,10 @@ https://mahallak.app/store/${data.id}`
                           
                           <div className="flex gap-2.5 w-full sm:w-auto">
                             <button
-<<<<<<< HEAD
                               onClick={() => {
                                 setScannerMode("inventory");
                                 setShowScanner(true);
                               }}
-=======
-                              onClick={() => setShowScanner(true)}
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                               className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-50 text-slate-700 font-black rounded-2xl flex items-center justify-center space-x-2 space-x-reverse shadow-xs hover:bg-slate-100 active:scale-95 transition-all text-xs"
                             >
                               <Camera size={16} />
@@ -4908,7 +4125,6 @@ https://mahallak.app/store/${data.id}`
                             onChange={(e) => setProductSearchQuery(e.target.value)}
                             className="w-full bg-slate-50 border-none rounded-xl text-xs py-2 px-4 focus:ring-1 focus:ring-slate-200 outline-none text-[#4D2980] font-bold"
                           />
-<<<<<<< HEAD
                           <button
                             onClick={() => {
                               setScannerMode("search");
@@ -4919,8 +4135,6 @@ https://mahallak.app/store/${data.id}`
                           >
                             <Camera size={18} />
                           </button>
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                         </div>
 
                                   {/* 4. ترتيب المنتجات في شبكة GridView متناسقة وسهلة التصفح */}
@@ -5241,7 +4455,6 @@ https://mahallak.app/store/${data.id}`
                   })()}
                 </div>
               </div>
-<<<<<<< HEAD
               
               {/* زر المسح العائم (FAB) للجرد السريع */}
               <button
@@ -5254,8 +4467,6 @@ https://mahallak.app/store/${data.id}`
               >
                 <Camera size={26} />
               </button>
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
             </div>
           )}
 
@@ -5362,7 +4573,6 @@ https://mahallak.app/store/${data.id}`
                   <p className="font-bold">لا توجد طلبات في هذا القسم حالياً</p>
                 </div>
               ) : (
-<<<<<<< HEAD
                 <motion.div 
                    className="flex flex-col gap-4 w-full"
                    initial="hidden"
@@ -5383,13 +4593,6 @@ https://mahallak.app/store/${data.id}`
                            visible: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
                         }}
                         className="bg-white rounded-[2rem] border border-slate-150/75 shadow-xs hover:shadow-md transition-all duration-300 hover:-translate-y-0.5 overflow-hidden flex flex-col min-w-0 w-full"
-=======
-                <div className="flex flex-col gap-4 w-full">
-                  {displayOrdersList.map((o) => (
-                      <div
-                        key={o.id}
-                        className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col transition-all hover:shadow-md min-w-0 w-full"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                       >
                         {/* ترويسة الفاتورة مدمجة لتوفير المساحة */}
                         <div className="p-3 sm:p-4 border-b border-slate-50 bg-slate-50/50 flex flex-wrap justify-between items-center gap-3 min-w-0 w-full">
@@ -5448,10 +4651,7 @@ https://mahallak.app/store/${data.id}`
                                   <div className="mt-2 space-y-2">
                                     <div className="w-full h-24 rounded-xl overflow-hidden border border-slate-200 shadow-sm relative pointer-events-none z-0">
                                       <MapContainer 
-<<<<<<< HEAD
                                         key={`order-map-${o.id}`}
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                                         center={[(o as any).customerLat, (o as any).customerLng]} 
                                         zoom={14} 
                                         style={{ height: "100%", width: "100%", zIndex: 0 }}
@@ -5512,7 +4712,6 @@ https://mahallak.app/store/${data.id}`
                                 </div>
                               ))}
                             </div>
-<<<<<<< HEAD
 
                             <div className="mt-3 pt-3 border-t border-slate-100 space-y-1.5 min-w-0">
                                 <div className="flex justify-between items-center text-[9px]">
@@ -5540,8 +4739,6 @@ https://mahallak.app/store/${data.id}`
                                 )}
                             </div>
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                             {(o.rejectionReason || o.returnReason || o.status === "cancelled") && (
                               <div className="mt-3 p-2 bg-rose-50 rounded-lg border border-rose-100 text-[9px] font-bold text-rose-600 truncate">
                                 {o.status === "cancelled" ? "تم إلغاء الطلب تلقائياً من قبل الزبون خلال 30 ثانية ⚠️" : o.rejectionReason ? `رفض: ${o.rejectionReason}` : `إرجاع/استبدال: ${o.returnReason}`}
@@ -5550,7 +4747,6 @@ https://mahallak.app/store/${data.id}`
                           </div>
 
                           {/* الأزرار (أفقية في الموبايل، عمودية في الشاشات الكبيرة) */}
-<<<<<<< HEAD
                           <div className="order-actions-container p-4 bg-slate-50/50 border-t md:border-t-0 md:border-r border-slate-100 flex flex-wrap md:flex-col gap-3 shrink-0 md:w-44 h-full content-center md:content-start justify-center md:justify-evenly items-stretch font-sans">
                             {o.status === "pending" && (
                               <>
@@ -5567,39 +4763,20 @@ https://mahallak.app/store/${data.id}`
                                 >
                                   <X className="group-hover:rotate-90 transition-transform duration-300 shrink-0" size={16} /> 
                                   <span>رفض الطلب</span>
-=======
-                          <div className="p-3 sm:p-4 bg-slate-50/50 border-t md:border-t-0 md:border-r border-slate-100 flex flex-row md:flex-col gap-2 shrink-0 md:w-32 justify-center">
-                            {o.status === "pending" && (
-                              <>
-                                <button onClick={() => updateOrderStatus(o.id, "accepted")} className="flex-1 py-2 bg-[#9952FF] text-white rounded-xl font-black text-[10px] flex items-center justify-center gap-1.5 hover:bg-slate-700 active:scale-95 transition-all w-full">
-                                  <Check size={14} /> قبول
-                                </button>
-                                <button onClick={() => setActionModal({ show: true, orderId: o.id, type: "rejected" })} className="flex-1 py-2 bg-white text-rose-500 border border-slate-200 rounded-xl font-black text-[10px] flex items-center justify-center gap-1.5 hover:bg-rose-50 active:scale-95 transition-all w-full">
-                                  <X size={14} /> رفض
-                                </button>
-                                <button onClick={() => { setSelectedInvoice(o); setShowInvoiceModal(true); }} className="flex-1 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl font-black text-[10px] flex items-center justify-center gap-1.5 hover:bg-slate-50 active:scale-95 transition-all w-full">
-                                  <FileText size={14} /> فاتورة
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                                 </button>
                               </>
                             )}
                             {o.status === "accepted" && (
-<<<<<<< HEAD
                               <button 
                                 onClick={() => updateOrderStatus(o.id, "shipped")} 
                                 className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl shadow-[0_4px_12px_rgba(245,158,11,0.25)] hover:shadow-[0_8px_20px_rgba(245,158,11,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                               >
                                 <Truck className="group-hover:translate-x-1 transition-transform duration-300 shrink-0" size={16} /> 
                                 <span>شحن الطلب 🚚</span>
-=======
-                              <button onClick={() => updateOrderStatus(o.id, "shipped")} className="flex-1 py-2 bg-amber-500 text-white rounded-xl font-black text-[10px] flex items-center justify-center gap-1.5 hover:bg-amber-600 active:scale-95 transition-all w-full">
-                                <Truck size={14} /> شحن
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                               </button>
                             )}
                             {o.status === "shipped" && (
                               <>
-<<<<<<< HEAD
                                 <button 
                                   onClick={() => updateOrderStatus(o.id, "delivered")} 
                                   className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-xl shadow-[0_4px_12px_rgba(16,185,129,0.25)] hover:shadow-[0_8px_20px_rgba(16,185,129,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
@@ -5647,24 +4824,6 @@ https://mahallak.app/store/${data.id}`
                       </motion.div>
                     ))}
                 </motion.div>
-=======
-                                <button onClick={() => updateOrderStatus(o.id, "delivered")} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl font-black text-[10px] flex items-center justify-center gap-1 hover:bg-emerald-600 active:scale-95 transition-all w-full">
-                                  <CheckCircle size={14} /> تم التوصيل
-                                </button>
-                                <button onClick={() => setReplacementModal({ show: true, orderId: o.id, originalItems: o.items })} className="flex-1 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl font-black text-[10px] hover:bg-slate-50 active:scale-95 transition-all w-full flex items-center justify-center">
-                                  تبديل
-                                </button>
-                                <button onClick={() => handleReturnOrder(o.id)} className="flex-1 py-2 bg-white text-rose-500 border border-rose-200 rounded-xl font-black text-[10px] hover:bg-rose-50 active:scale-95 transition-all w-full flex items-center justify-center">
-                                  إرجاع
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                </div>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               )}
             </div>
             );
@@ -5672,193 +4831,6 @@ https://mahallak.app/store/${data.id}`
 
 
 
-<<<<<<< HEAD
-=======
-          {/* زبائني */}
-          {activeTab === "customers" && (
-            <div className="space-y-6 text-right">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-white p-5 rounded-2xl border text-center shadow-sm">
-                  <Users size={24} className="text-[#4D2980] mx-auto mb-2" />
-                  <span className="text-2xl font-black">
-                    {
-                      customers.filter((c) =>
-                        c.followedStores.includes(currentMerchant.id),
-                      ).length
-                    }
-                  </span>
-                  <span className="text-xs text-slate-400 block font-bold">
-                    المتابعين
-                  </span>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border text-center shadow-sm">
-                  <BellRing size={24} className="text-rose-500 mx-auto mb-2" />
-                  <span className="text-2xl font-black">
-                    {
-                      customers.filter((c) =>
-                        c.storeNotifications.includes(currentMerchant.id),
-                      ).length
-                    }
-                  </span>
-                  <span className="text-xs text-slate-400 block font-bold">
-                    الإشعارات
-                  </span>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border text-center shadow-sm col-span-2">
-                  <ClipboardList
-                    size={24}
-                    className="text-emerald-500 mx-auto mb-2"
-                  />
-                  <span className="text-2xl font-black">
-                    {
-                      Array.from(
-                        new Set(
-                          orders
-                            .filter((o) => o.storeId === currentMerchant.id)
-                            .map((o) => o.customerId),
-                        ),
-                      ).length
-                    }
-                  </span>
-                  <span className="text-xs text-slate-400 block font-bold">
-                    زبائن قاموا بالطلب
-                  </span>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl border overflow-hidden shadow-sm">
-                <div className="p-4 border-b bg-slate-50 font-black text-[#4D2980] flex justify-between items-center sm:flex-row flex-col gap-3">
-                  <div className="flex items-center gap-3">
-                    <span>قائمة الجمهور (المتابعين والزبائن)</span>
-                    <span className="text-[10px] text-[#4D2980] bg-slate-50 px-3 py-1 rounded-full uppercase">
-                      إدارة الجمهور
-                    </span>
-                  </div>
-                  <div className="relative w-full sm:w-64">
-                    <Search
-                      size={18}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
-                    />
-                    <input
-                      type="text"
-                      placeholder="بحث بالاسم، الهاتف، المعرف..."
-                      className="w-full bg-white border border-slate-200 rounded-xl py-2 pr-10 pl-4 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-slate-500"
-                      value={audienceSearchQuery}
-                      onChange={(e) => setAudienceSearchQuery(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="p-4 flex flex-col gap-3.5">
-                  {(() => {
-                    const orderedCustomerIds = Array.from(
-                      new Set(
-                        orders
-                          .filter((o) => o.storeId === currentMerchant.id)
-                          .map((o) => o.customerId),
-                      ),
-                    );
-                    let audience = customers.filter(
-                      (c) =>
-                        c.followedStores.includes(currentMerchant.id) ||
-                        c.storeNotifications.includes(currentMerchant.id) ||
-                        orderedCustomerIds.includes(c.id),
-                    );
-                    
-                    if (audienceSearchQuery.trim()) {
-                       const q = audienceSearchQuery.toLowerCase();
-                       audience = audience.filter(c => 
-                         c.name.toLowerCase().includes(q) ||
-                         c.phone.includes(q) ||
-                         c.id.toLowerCase().includes(q)
-                       );
-                    }
-
-                    // ترتيب زبائن المتجر تصاعدياً حسب تسلسل تسجيلهم بالتطبيق من رقم 1 تصاعدياً
-                    audience.sort((a, b) => {
-                      const seqA = parseInt(getCustomerSeqId(a.id)) || 999999;
-                      const seqB = parseInt(getCustomerSeqId(b.id)) || 999999;
-                      return seqA - seqB;
-                    });
-
-                    if (audience.length === 0) {
-                      return (
-                        <div className="col-span-full p-10 text-center text-slate-400 font-bold bg-white rounded-xl border border-slate-100">
-                          لا يوجد نتائج مطابقة للبحث أو لا تملك جمهوراً حالياً.
-                        </div>
-                      );
-                    }
-
-                    return audience.map((c) => (
-                      <div
-                        key={c.id}
-                        className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 flex flex-col hover:shadow-md hover:border-slate-300 transition-all cursor-pointer min-w-0"
-                        onClick={() => setSelectedAudienceId(c.id)}
-                      >
-                        <div className="flex justify-between items-start mb-3 min-w-0">
-                          <div className="min-w-0 flex-1">
-                            <h4 className="font-black text-[#4D2980] text-sm truncate flex items-center gap-1" title={c.name}>
-                              <span>{c.name}</span>
-                              <CopyButton text={c.name} size={10} />
-                            </h4>
-                            <span className="text-[10px] font-mono text-purple-600 inline-flex items-center gap-1 leading-none mt-1 select-all" title={c.id}>
-                              <span>ID: #{getCustomerSeqId(c.id)}</span>
-                              <CopyButton text={getCustomerSeqId(c.id)} size={9} />
-                            </span>
-                            <span className="text-[10px] font-bold text-slate-400 line-clamp-1 truncate mt-1 flex items-center gap-1" title={c.phone}>
-                              <span>{c.phone}</span>
-                              <CopyButton text={c.phone} size={9} />
-                              <span>• {c.province}</span>
-                            </span>
-                          </div>
-                          <span
-                            className={`px-2.5 py-0.5 rounded-md font-black text-[9px] shadow-sm shrink-0 mr-2 ${
-                              c.tier === "Diamond"
-                                ? "bg-[#9952FF] text-white"
-                                : c.tier === "Platinum"
-                                  ? "bg-[#9952FF] text-white"
-                                  : c.tier === "Gold"
-                                    ? "bg-amber-400 text-amber-900"
-                                    : "bg-slate-100 text-slate-600"
-                            }`}
-                          >
-                            {c.tier}
-                          </span>
-                        </div>
-                        
-                        <div className="flex justify-between items-end mt-auto pt-3 border-t border-slate-50 min-w-0">
-                          <div className="text-[10px] text-slate-500 font-bold bg-slate-50 px-2 py-1 rounded truncate">
-                            {c.followedStores.includes(currentMerchant.id)
-                              ? "متابع للمتجر"
-                              : orderedCustomerIds.includes(c.id)
-                                ? "قام بالطلب مسبقاً"
-                                : "مهتم بالإشعارات"}
-                          </div>
-                          
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setGiftModal({
-                                show: true,
-                                customerId: c.id,
-                                customerName: c.name,
-                              });
-                            }}
-                            className="p-2 bg-rose-50 text-rose-500 rounded-lg hover:bg-rose-100 transition-all font-bold text-[9px] flex items-center justify-center gap-1.5 shrink-0"
-                            title="إرسال خصم خاص (هدية)"
-                          >
-                            <Gift size={14} />
-                            <span>هدية</span>
-                          </button>
-                        </div>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </div>
-            </div>
-          )}
-
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           {/* تغيير كلمة المرور - مودال */}
           {showPasswordChange && (
             <div className="fixed inset-0 bg-[#4D2980]/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto">
@@ -5946,7 +4918,6 @@ https://mahallak.app/store/${data.id}`
             </div>
           )}
 
-<<<<<<< HEAD
           {/* التسويق (Marketing) */}
           {activeTab === "marketing" && (
             <div className="space-y-6">
@@ -6208,206 +5179,10 @@ https://mahallak.app/store/${data.id}`
                         >
                           <Check size={16} />
                           <span>حفظ الحسابات البنكية</span>
-=======
-          {/* حسابي */}
-          {activeTab === "profile" && (
-            <div className="space-y-4">
-              <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
-                <div className="p-4 border-b bg-gradient-to-l from-slate-50 to-white flex items-center space-x-3 space-x-reverse">
-                  <div className="p-2 bg-slate-100 text-[#4D2980] rounded-xl">
-                    <User size={20} />
-                  </div>
-                  <div>
-                    <h3 className="font-black text-[#4D2980]">
-                      البيانات الشخصية
-                    </h3>
-                    <p className="text-[10px] text-slate-400">
-                      يمكنك تعديل أي شيء ما عدا رقم الهاتف واسم المستخدم
-                    </p>
-                  </div>
-                </div>
-                <div className="p-6 space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        اسم المالك *
-                      </label>
-                      <input
-                        type="text"
-                        value={profileForm.ownerName}
-                        onChange={(e) =>
-                          handleProfileFormChange({ ownerName: e.target.value })
-                        }
-                        className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        اسم المتجر *
-                      </label>
-                      <input
-                        type="text"
-                        value={profileForm.shopName}
-                        onChange={(e) =>
-                          handleProfileFormChange({ shopName: e.target.value })
-                        }
-                        className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm"
-                      />
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        صنف المتجر *
-                      </label>
-                      <select
-                        value={profileForm.category}
-                        onChange={(e) =>
-                          handleProfileFormChange({ category: e.target.value })
-                        }
-                        className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm bg-white"
-                      >
-                        {STORE_CATEGORIES.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        رقم الهاتف
-                      </label>
-                      <input
-                        type="tel"
-                        value={currentMerchant.phone}
-                        disabled
-                        className="w-full border bg-slate-50 p-2.5 rounded-2xl text-sm text-slate-400 font-mono mb-2"
-                      />
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={profileForm.showPhone} onChange={(e) => handleProfileFormChange({ showPhone: e.target.checked })} className="rounded text-[#9952FF] focus:ring-[#9952FF]" />
-                        <span className="text-xs">إظهار عند الزبون</span>
-                      </label>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        اسم المستخدم (يمكن تغييره مرة كل 30 يوماً)
-                      </label>
-                      <input
-                        type="text"
-                        value={profileForm.username}
-                        onChange={(e) => handleProfileFormChange({ username: e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, "") })}
-                        className="w-full border bg-white p-2.5 rounded-2xl text-sm font-mono"
-                        dir="ltr"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        المحافظة *
-                      </label>
-                      <select
-                        value={profileForm.province}
-                        onChange={(e) =>
-                          handleProfileFormChange({ province: e.target.value })
-                        }
-                        className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm bg-white"
-                      >
-                        {provinces.map((p) => (
-                          <option key={p.id} value={p.name}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        المنطقة / الحي *
-                      </label>
-                      <input
-                        type="text"
-                        value={profileForm.area}
-                        onChange={(e) =>
-                          handleProfileFormChange({ area: e.target.value })
-                        }
-                        className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm mb-2"
-                      />
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={profileForm.showArea} onChange={(e) => handleProfileFormChange({ showArea: e.target.checked })} className="rounded text-[#9952FF] focus:ring-[#9952FF]" />
-                        <span className="text-xs">إظهار عند الزبون</span>
-                      </label>
-                    </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-bold text-slate-500 mb-1">
-                        أقرب نقطة دالة *
-                      </label>
-                      <input
-                        type="text"
-                        value={profileForm.landmark}
-                        onChange={(e) =>
-                          handleProfileFormChange({ landmark: e.target.value })
-                        }
-                        className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm mb-2"
-                      />
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={profileForm.showLandmark} onChange={(e) => handleProfileFormChange({ showLandmark: e.target.checked })} className="rounded text-[#9952FF] focus:ring-[#9952FF]" />
-                        <span className="text-xs">إظهار عند الزبون</span>
-                      </label>
-                    </div>
-                    <div className="md:col-span-2 mt-2">
-                      <LocationPicker
-                        onLocationSelect={(lat, lng) =>
-                          handleProfileFormChange({ lat, lng })
-                        }
-                        initialLat={profileForm.lat}
-                        initialLng={profileForm.lng}
-                        label="تحديد الموقع على الخريطة (إجباري)"
-                        height="h-48"
-                        required={true}
-                      />
-                      <label className="flex items-center gap-2 cursor-pointer mt-2">
-                        <input type="checkbox" checked={profileForm.showMap} onChange={(e) => handleProfileFormChange({ showMap: e.target.checked })} className="rounded text-[#9952FF] focus:ring-[#9952FF]" />
-                        <span className="text-xs">إظهار عند الزبون</span>
-                      </label>
-                    </div>
-
-                    <div className="md:col-span-2 grid grid-cols-2 gap-4 pt-2 border-t border-slate-50">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">
-                          سعر التوصيل (د.ع)
-                        </label>
-                        <input
-                          type="number"
-                          value={profileForm.deliveryPrice}
-                          onChange={(e) =>
-                            handleProfileFormChange({
-                              deliveryPrice: parseInt(e.target.value) || 0,
-                            })
-                          }
-                          className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm"
-                        />
-                      </div>
-                      <div className="flex items-end pb-1">
-                        <button
-                          onClick={() =>
-                            handleProfileFormChange({
-                              isFreeDelivery: !profileForm.isFreeDelivery,
-                            })
-                          }
-                          className={`w-full py-2.5 rounded-2xl text-xs font-black transition-all border ${
-                            profileForm.isFreeDelivery
-                              ? "bg-emerald-500 text-white border-emerald-400"
-                              : "bg-white text-slate-400 border-slate-200"
-                          }`}
-                        >
-                          توصيل مجاني للكل:{" "}
-                          {profileForm.isFreeDelivery ? "مفعل ✅" : "معطل ❌"}
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                         </button>
                       </div>
                     </div>
                   </div>
-<<<<<<< HEAD
                 )}
               </div>
 
@@ -6825,41 +5600,6 @@ https://mahallak.app/store/${data.id}`
                     </div>
                   </div>
                 )}
-=======
-                  <div className="max-w-[120px] mx-auto">
-                    <ImageUploader
-                      value={profileForm.logo}
-                      onChange={(url) => handleProfileFormChange({ logo: url })}
-                      label="لوغو المحل (اختياري)"
-                    />
-                  </div>
-                  <button
-                    onClick={() => {
-                      setShowPasswordChange(true);
-                      setPwStep(1);
-                    }}
-                    className="w-full py-2.5 bg-slate-100 text-gray-700 font-bold rounded-2xl flex items-center justify-center space-x-2 space-x-reverse"
-                  >
-                    <Shield size={16} />
-                    <span>تغيير كلمة المرور</span>
-                  </button>
-                  <button
-                    onClick={() => setShowQRMenu(true)}
-                    className="w-full py-2.5 bg-slate-50 text-slate-700 font-bold rounded-2xl flex items-center justify-center space-x-2 space-x-reverse"
-                  >
-                    <Camera size={16} />
-                    <span>الهوية الرقمية (QR)</span>
-                  </button>
-
-                  <button
-                    onClick={handleSaveProfile}
-                    className="w-full py-3 bg-[#9952FF] text-white font-bold rounded-2xl shadow-lg flex items-center justify-center space-x-2 space-x-reverse"
-                  >
-                    <Check size={18} />
-                    <span>حفظ التعديلات</span>
-                  </button>
-                </div>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               </div>
 
               <div className="bg-white p-6 rounded-2xl border shadow-sm flex items-center justify-between">
@@ -7088,7 +5828,6 @@ https://mahallak.app/store/${data.id}`
                           await updateCustomerProfile({ id: blockConfirm.customerId, isBlocked: !blockConfirm.isBlocked });
                           alert(blockConfirm.isBlocked ? "تم إلغاء حظر الزبون بنجاح! ✅" : "تم حظر الزبون بنجاح! 🚫");
                         } catch (err) {
-                          console.error("Error blocking:", err);
                           alert("❌ حدث خطأ أثناء تعديل حالة الحظر");
                         } finally {
                           setBlockConfirm({ show: false, customerId: "", name: "", isBlocked: false });
@@ -7228,10 +5967,7 @@ https://mahallak.app/store/${data.id}`
                         type="button"
                         onClick={() => {
                           setProdModal({ ...prodModal, show: false });
-<<<<<<< HEAD
                           setScannerMode("inventory");
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                           setShowScanner(true);
                         }}
                         className="px-3 bg-violet-55 border border-slate-100 hover:bg-slate-100 text-violet-755 rounded-2xl flex items-center justify-center active:scale-95 transition shadow-xs"
@@ -7662,11 +6398,7 @@ https://mahallak.app/store/${data.id}`
             <div className="w-full max-w-sm bg-white rounded-2xl overflow-hidden shadow-2xl animate-fade-in relative">
               <div className="p-4 border-b flex justify-between items-center bg-slate-50">
                 <h3 className="font-black text-[#4D2980] flex items-center gap-2">
-<<<<<<< HEAD
                   <Camera size={18} /> {scannerMode === "search" ? "بحث بالباركود" : "الجرد الذكي"}
-=======
-                  <Camera size={18} /> الجرد الذكي
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                 </h3>
                 <button
                   onClick={() => setShowScanner(false)}
@@ -7683,11 +6415,7 @@ https://mahallak.app/store/${data.id}`
                 <p className="text-center text-xs text-slate-500 mt-4 font-bold">
                   وجه الكاميرا نحو باركود المنتج
                   <br />
-<<<<<<< HEAD
                   {scannerMode === "search" ? "سيتم كتابة الباركود في شريط البحث للعثور عليه" : "سيتم فتح صفحة المنتج تلقائياً للتعديل"}
-=======
-                  سيتم فتح صفحة المنتج تلقائياً للتعديل
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                 </p>
               </div>
             </div>
@@ -7833,7 +6561,6 @@ https://mahallak.app/store/${data.id}`
                     </div>
                   </div>
 
-<<<<<<< HEAD
                   <div>
                     <label className="block text-[11px] font-black text-slate-500 mb-1.5">
                       الجمهور المستهدف
@@ -7850,8 +6577,6 @@ https://mahallak.app/store/${data.id}`
                     </select>
                   </div>
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                   {/* الصلاحية */}
                   <div className="bg-slate-50/50 p-4 rounded-3xl border border-slate-100 space-y-3">
                     <div>
@@ -8309,7 +7034,6 @@ https://mahallak.app/store/${data.id}`
 
                 {/* محتوى الفاتورة القابل للطباعة */}
                 <div className="flex-1 overflow-y-auto no-scrollbar p-1">
-<<<<<<< HEAD
                   <style>
                     {`
                       @media print {
@@ -8341,11 +7065,6 @@ https://mahallak.app/store/${data.id}`
                   <div 
                     ref={invoiceRef}
                     className="invoice-container p-10 print:p-2 bg-white min-h-[600px] text-right font-sans"
-=======
-                  <div 
-                    ref={invoiceRef}
-                    className="p-10 bg-white min-h-[600px] text-right font-sans"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                     dir="rtl"
                   >
                     {/* Header */}
@@ -8465,11 +7184,7 @@ https://mahallak.app/store/${data.id}`
                       
                       <div className="w-64 space-y-3">
                         <div className="flex justify-between items-center text-xs">
-<<<<<<< HEAD
                           <span className="font-bold text-slate-400">سعر المنتجات:</span>
-=======
-                          <span className="font-bold text-slate-400">المجموع الفرعي:</span>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                           <span className="font-black text-slate-600">{(selectedInvoice.subtotal || 0).toLocaleString()} د.ع</span>
                         </div>
                         <div className="flex justify-between items-center text-xs">
@@ -8477,7 +7192,6 @@ https://mahallak.app/store/${data.id}`
                           <span className="font-black text-slate-600">{(selectedInvoice.deliveryPrice || 0).toLocaleString()} د.ع</span>
                         </div>
                         {selectedInvoice.discountAmount > 0 && (
-<<<<<<< HEAD
                           <div className="flex justify-between items-center text-xs">
                             <div className="flex items-center gap-2">
                               <span className="font-bold text-emerald-600">قيمة الخصم:</span>
@@ -8494,22 +7208,12 @@ https://mahallak.app/store/${data.id}`
                         )}
                         <div className="flex justify-between items-center p-4 bg-[#9952FF] rounded-2xl text-white shadow-xl shadow-slate-100 mt-2">
                           <span className="text-xs font-black uppercase">السعر الكلي المطلوب من الزبون:</span>
-=======
-                          <div className="flex justify-between items-center text-xs text-emerald-600">
-                            <span className="font-bold">خصم الكود:</span>
-                            <span className="font-black">- {selectedInvoice.discountAmount.toLocaleString()} د.ع</span>
-                          </div>
-                        )}
-                        <div className="flex justify-between items-center p-4 bg-[#9952FF] rounded-2xl text-white shadow-xl shadow-slate-100">
-                          <span className="text-xs font-black uppercase">الإجمالي النهائي:</span>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                           <span className="text-lg font-black">{(selectedInvoice.total || 0).toLocaleString()} د.ع</span>
                         </div>
                       </div>
                     </div>
 
                     {/* Footer Note */}
-<<<<<<< HEAD
                     <div className="mt-16 text-center pt-8 border-t border-slate-100 flex flex-col items-center">
                       <p className="text-[10px] font-bold text-slate-400 italic mb-6">شكراً لاختياركم {currentMerchant?.shopName || currentMerchant?.ownerName}! نأمل رؤيتكم مرة أخرى قريباً.</p>
                       
@@ -8525,11 +7229,6 @@ https://mahallak.app/store/${data.id}`
                       </div>
                       
                       <div className="w-16 h-1 bg-slate-100 mx-auto mt-6 rounded-full"></div>
-=======
-                    <div className="mt-16 text-center">
-                      <p className="text-[10px] font-bold text-slate-400 italic">شكراً لاختياركم {currentMerchant?.shopName || currentMerchant?.ownerName}! نأمل رؤيتكم مرة أخرى قريباً.</p>
-                      <div className="w-16 h-1 bg-slate-100 mx-auto mt-4 rounded-full"></div>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                     </div>
                   </div>
                 </div>
@@ -8537,7 +7236,6 @@ https://mahallak.app/store/${data.id}`
             </div>
           )}
         </AnimatePresence>
-<<<<<<< HEAD
 
         {/* Modal: ملصق الشحن الحراري */}
         <AnimatePresence>
@@ -8674,8 +7372,6 @@ https://mahallak.app/store/${data.id}`
           )}
         </AnimatePresence>
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
         {showPasswordChange && (
           <div className="fixed inset-0 bg-[#4D2980]/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-fade-in text-right">
@@ -8693,7 +7389,6 @@ https://mahallak.app/store/${data.id}`
                     </p>
                     <button
                       onClick={async () => {
-<<<<<<< HEAD
                         try {
                           const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
                           if (ok) {
@@ -8704,18 +7399,6 @@ https://mahallak.app/store/${data.id}`
                           }
                         } catch (err: any) {
                           showModal("error", "خطأ في الاتصال", err.message || "فشل الإرسال.");
-=======
-                        const code = Math.floor(
-                          100000 + Math.random() * 900000,
-                        ).toString();
-                        setSentOtpCode(code);
-                        const ok = await sendOTP(currentMerchant.phone, code, "forgot");
-                        if (ok) {
-                          setPwStep(2);
-                          alert("تم إرسال رمز التحقق إلى واتساب!");
-                        } else {
-                          alert("فشل الإرسال. يرجى المحاولة لاحقاً");
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                         }
                       }}
                       className="w-full py-3 bg-[#9952FF] text-white font-bold rounded-2xl shadow-md"
@@ -8744,7 +7427,6 @@ https://mahallak.app/store/${data.id}`
                       className="w-full border p-3 rounded-2xl text-sm"
                     />
                     <button
-<<<<<<< HEAD
                       onClick={async () => {
                         if (!otpPwCode || otpPwCode.length < 6) {
                           showToast("warning", "يرجى إكمال الرمز");
@@ -8768,19 +7450,6 @@ https://mahallak.app/store/${data.id}`
                           setTimeout(() => showToast("success", "تم التغيير ✅"), 400);
                         } catch (error: any) {
                           showModal("error", "خطأ في التحقق", error.message || "الرمز غير صحيح!");
-=======
-                      onClick={() => {
-                        if (
-                          otpPwCode === sentOtpCode &&
-                          newPassword.length >= 8
-                        ) {
-                          updateStoreProfile({ password: newPassword });
-                          setCurrentMerchant({ ...(currentMerchant as any), password: newPassword });
-                          setShowPasswordChange(false);
-                          setTimeout(() => alert("تم التغيير ✅"), 100);
-                        } else {
-                          alert("الرمز أو كلمة المرور غير صحيحة");
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                         }
                       }}
                       className="w-full py-3 bg-green-600 text-white font-bold rounded-2xl shadow-md"
@@ -9185,7 +7854,6 @@ https://mahallak.app/store/${data.id}`
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   <button
-<<<<<<< HEAD
                     onClick={async () => {
                       const dbPayload = {
                         ...profileForm,
@@ -9198,13 +7866,6 @@ https://mahallak.app/store/${data.id}`
                       setIsProfileDirty(false);
                       setShowUnsavedModal(false);
                       handleTabChange(pendingTab);
-=======
-                    onClick={() => {
-                      updateStoreProfile(profileForm);
-                      setIsProfileDirty(false);
-                      setShowUnsavedModal(false);
-                      setActiveTab(pendingTab);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                       setPendingTab(null);
                     }}
                     className="p-3 bg-[#9952FF] text-white rounded-2xl font-bold text-xs hover:bg-[#9952FF] transition"
@@ -9213,10 +7874,6 @@ https://mahallak.app/store/${data.id}`
                   </button>
                   <button
                     onClick={() => {
-<<<<<<< HEAD
-=======
-                      // Discard changes by restoring form from currentMerchant
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                       if (currentMerchant) {
                         setProfileForm({
                           ownerName: currentMerchant.ownerName,
@@ -9226,7 +7883,6 @@ https://mahallak.app/store/${data.id}`
                           province: currentMerchant.province,
                           area: currentMerchant.area,
                           landmark: currentMerchant.landmark,
-<<<<<<< HEAD
                           deliveryPrice: currentMerchant.deliveryPrice || 5000,
                           isFreeDelivery: currentMerchant.isFreeDelivery || false,
                           localProvinceDeliveryPrice: (currentMerchant as any).localProvinceDeliveryPrice !== undefined ? (currentMerchant as any).localProvinceDeliveryPrice : (currentMerchant.deliveryPrice || 5000),
@@ -9238,32 +7894,17 @@ https://mahallak.app/store/${data.id}`
                           logo: currentMerchant.logo || "",
                           lat: currentMerchant.lat,
                           lng: currentMerchant.lng,
-=======
-                          lat: currentMerchant.lat,
-                          lng: currentMerchant.lng,
-                          logo: currentMerchant.logo,
-                          deliveryPrice: currentMerchant.deliveryPrice || 0,
-                          isFreeDelivery:
-                            currentMerchant.isFreeDelivery || false,
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                           showArea: currentMerchant.showArea !== false,
                           showLandmark: currentMerchant.showLandmark !== false,
                           showMap: currentMerchant.showMap !== false,
                           showPhone: currentMerchant.showPhone !== false,
-<<<<<<< HEAD
                           zainCashNumber: (currentMerchant as any).payoutMethods?.zainCashNumber || "",
                           mastercardNumber: (currentMerchant as any).payoutMethods?.mastercardNumber || ""
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                         });
                       }
                       setIsProfileDirty(false);
                       setShowUnsavedModal(false);
-<<<<<<< HEAD
                       handleTabChange(pendingTab);
-=======
-                      setActiveTab(pendingTab);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
                       setPendingTab(null);
                     }}
                     className="p-3 bg-rose-50 text-rose-600 rounded-2xl font-bold text-xs hover:bg-rose-100 transition"
@@ -9451,7 +8092,6 @@ https://mahallak.app/store/${data.id}`
                         navigator.clipboard.writeText(iframeUrl);
                         alert('تم نسخ الرابط بنجاح! ✅');
                       } catch (err) {
-                        console.error(err);
                       }
                     }}
                     className="p-2 hover:bg-white/10 rounded-xl text-white transition-colors animate-pulse"
@@ -9481,7 +8121,6 @@ https://mahallak.app/store/${data.id}`
             </div>
           )}
         </AnimatePresence>
-<<<<<<< HEAD
 
         {/* مودال تقييد الوصول بسبب الاشتراك */}
         <AnimatePresence>
@@ -9527,8 +8166,6 @@ https://mahallak.app/store/${data.id}`
             </div>
           )}
         </AnimatePresence>
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       </div>
     );
   }
@@ -9664,34 +8301,6 @@ https://mahallak.app/store/${data.id}`
                 انشاء حساب جديد
               </button>
             </div>
-<<<<<<< HEAD
-            {/* Clear cache utility for development testing after database wipe */}
-            <div className="text-center pt-2 pb-4">
-              <button
-                type="button"
-                className="text-gray-400 text-xs underline"
-                onClick={async () => {
-                  if (window.confirm("سيتم مسح الذاكرة المؤقتة للتطبيق بالكامل لحل مشكلة 'الرقم مسجل مسبقاً'. هل توافق؟")) {
-                    try {
-                      localStorage.clear();
-                      if (window.indexedDB && window.indexedDB.databases) {
-                        const dbs = await window.indexedDB.databases();
-                        for (const db of dbs) {
-                          if (db.name) window.indexedDB.deleteDatabase(db.name);
-                        }
-                      }
-                      window.location.reload();
-                    } catch (e) {
-                      window.location.reload();
-                    }
-                  }
-                }}
-              >
-                مسح الذاكرة المؤقتة للإصلاح (Clear Cache)
-              </button>
-            </div>
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           </form>
         )}
 
@@ -9879,7 +8488,6 @@ https://mahallak.app/store/${data.id}`
                   label="لوغو المحل (اختياري)"
                 />
               </div>
-<<<<<<< HEAD
 
             </div>
 
@@ -9904,30 +8512,6 @@ https://mahallak.app/store/${data.id}`
               </label>
             </div>
 
-=======
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                <span className="text-[11px] font-black text-slate-700 block mb-3">
-                  باقة الاشتراك:
-                </span>
-                <div className="grid grid-cols-3 gap-2">
-                  {subscriptionPlans.map((p) => (
-                    <div
-                      key={p.id}
-                      onClick={() => setSelectedPlan(p.id)}
-                      className={`p-2 border rounded-2xl text-center cursor-pointer transition ${selectedPlan === p.id ? "border-[#9952FF] bg-white ring-4 ring-slate-50" : "border-slate-200 opacity-60"}`}
-                    >
-                      <span className="block text-[10px] font-bold text-[#4D2980]">
-                        {p.name}
-                      </span>
-                      <span className="block text-[11px] font-black text-[#4D2980]">
-                        {(p.price || 0).toLocaleString()}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
             {!isFormValid && (
               <p className="text-[10px] text-orange-500 text-center font-bold animate-pulse">
                 ⚠️ أكمل جميع الحقول المطلوبة
@@ -10079,7 +8663,6 @@ https://mahallak.app/store/${data.id}`
         )}
       </div>
 
-<<<<<<< HEAD
       {/* نافذة الشروط والأحكام */}
       <AnimatePresence>
         {showTermsModal && (
@@ -10199,8 +8782,6 @@ https://mahallak.app/store/${data.id}`
         )}
       </AnimatePresence>
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       {/* نافذة عرض الروابط الخارجية داخل التطبيق مع زر الرجوع للتطبيق */}
       <AnimatePresence>
         {iframeUrl && (
@@ -10224,7 +8805,6 @@ https://mahallak.app/store/${data.id}`
                       navigator.clipboard.writeText(iframeUrl);
                       alert('تم نسخ الرابط بنجاح! ✅');
                     } catch (err) {
-                      console.error(err);
                     }
                   }}
                   className="p-2 hover:bg-white/10 rounded-xl text-white transition-colors animate-pulse"
@@ -10254,7 +8834,6 @@ https://mahallak.app/store/${data.id}`
           </div>
         )}
       </AnimatePresence>
-<<<<<<< HEAD
 
       <AnimatePresence>
         {showNotificationModal && (
@@ -10346,8 +8925,6 @@ https://mahallak.app/store/${data.id}`
           </div>
         )}
       </AnimatePresence>
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     </div>
   );
 };

@@ -1,0 +1,13 @@
+{
+  "projectId": "mahalak-0",
+  "appNickname": "mahalak-web",
+  "appId": "1:405501753361:web:416d771d8ced065298d9b0",
+  "apiKey": "AIzaSyC5swHqwDCDgh_icSUkRLdjKvWNnGP2aEA",
+  "authDomain": "mahalak-0.firebaseapp.com",
+  "databaseURL": "https://mahalak-0-default-rtdb.europe-west1.firebasedatabase.app",
+  "firestoreDatabaseId": "default",
+  "storageBucket": "mahalak-0.firebasestorage.app",
+  "messagingSenderId": "405501753361",
+  "measurementId": "G-7REPLWRT98",
+  "oneSignalAppId": "72e9bba5-accd-4ee9-aa87-11d883b55748"
+}

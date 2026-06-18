@@ -64,7 +64,6 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
         
         setProducts(fetchedProds);
       } catch (err: any) {
-        console.error("Error fetching merchant products from Firestore:", err);
         setError("فشل تحميل قائمة المنتجات من Firestore. يرجى التحقق من الشبكة.");
       } finally {
         setLoadingProds(false);
@@ -175,7 +174,6 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
               setUploadProgress(Math.round(progress));
             },
             (err) => {
-              console.error("Storage upload error:", err);
               reject(new Error("حدث خطأ أثناء رفع الفيديو إلى التخزين السحابي."));
             },
             async () => {
@@ -198,7 +196,6 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
                 await setDoc(reelDocRef, reelData);
                 resolve();
               } catch (saveErr: any) {
-                console.error("Firestore save error:", saveErr);
                 reject(new Error("فشل حفظ بيانات المقطع في قاعدة البيانات."));
               }
             }

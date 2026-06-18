@@ -4,7 +4,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // إعدادات تحويل تطبيق محلك لتطبيق Android
 // ==========================================
 const config: CapacitorConfig = {
-  appId: 'com.mahalak.app',
+  appId: 'iq.mahalak.app',
   appName: 'محلك',
   webDir: 'dist',
   bundledWebRuntime: false,
@@ -25,12 +25,7 @@ const config: CapacitorConfig = {
     },
     SplashScreen: {
       launchShowDuration: 1500,
-<<<<<<< HEAD
-      backgroundColor: '#0B1320',
-=======
-      backgroundColor: '#6B21A8',
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
-      androidSplashResourceName: 'splash',
+      backgroundColor: '#0B1320',      androidSplashResourceName: 'splash',
       androidScaleType: 'CENTER_CROP',
       showSpinner: false,
       androidSpinnerStyle: 'large',

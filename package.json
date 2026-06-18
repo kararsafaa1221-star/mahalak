@@ -7,19 +7,21 @@
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "bootstrap-admin": "node scripts/bootstrap-admin.mjs",
+    "set-admin-permissions": "node scripts/set-admin-permissions.mjs",
+    "android:signing:setup": "powershell -ExecutionPolicy Bypass -File scripts/setup-android-signing.ps1",
+    "build:android:release": "powershell -ExecutionPolicy Bypass -File scripts/build-android-release.ps1"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.1",
     "@capacitor/cli": "^7.6.2",
     "@capacitor/core": "^8.3.4",
     "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/ios": "^8.4.0",
     "@capacitor/push-notifications": "^8.1.1",
     "@capacitor/share": "^8.0.1",
-<<<<<<< HEAD
     "@emotion/is-prop-valid": "^1.4.0",
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     "@eslint/js": "^10.0.1",
     "@imgly/background-removal": "^1.7.0",
     "@types/cors": "^2.8.19",
@@ -28,15 +30,10 @@
     "cheerio": "^1.2.0",
     "clsx": "2.1.1",
     "cors": "^2.8.6",
-<<<<<<< HEAD
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "firebase": "^12.13.0",
     "firebase-admin": "^13.10.0",
-=======
-    "express": "^5.2.1",
-    "firebase": "^12.13.0",
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     "globals": "^17.6.0",
     "html5-qrcode": "^2.3.8",
     "jimp": "^1.6.1",
@@ -48,7 +45,6 @@
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-<<<<<<< HEAD
     "react-joyride": "^3.1.0",
     "react-leaflet": "^5.0.0",
     "react-qr-code": "^2.0.21",
@@ -59,33 +55,19 @@
     "recharts": "^3.8.1",
     "sweetalert2": "^11.26.25",
     "sweetalert2-react-content": "^5.1.2",
-=======
-    "react-leaflet": "^5.0.0",
-    "react-qr-code": "^2.0.21",
-    "react-router-dom": "^7.15.0",
-    "react-to-print": "^3.3.0",
-    "react-webcam": "^7.2.0",
-    "sharp": "^0.34.5",
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     "tailwind-merge": "3.4.0",
     "tsx": "^4.21.0",
     "typescript-eslint": "^8.59.3"
   },
   "devDependencies": {
-<<<<<<< HEAD
     "@capacitor/assets": "^3.0.5",
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     "@tailwindcss/vite": "4.1.17",
     "@types/leaflet": "^1.9.21",
     "@types/leaflet.heat": "^0.2.5",
     "@types/node": "22.19.17",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
-<<<<<<< HEAD
     "@types/react-signature-canvas": "^1.0.7",
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     "@typescript-eslint/eslint-plugin": "^8.59.2",
     "@typescript-eslint/parser": "^8.59.2",
     "@vitejs/plugin-react": "5.1.1",
@@ -93,10 +75,7 @@
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
-<<<<<<< HEAD
     "sharp": "^0.34.5",
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "7.2.4",

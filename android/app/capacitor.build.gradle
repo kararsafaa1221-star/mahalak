@@ -12,11 +12,7 @@ dependencies {
     implementation project(':capacitor-geolocation')
     implementation project(':capacitor-push-notifications')
     implementation project(':capacitor-share')
-<<<<<<< HEAD
-    implementation "com.onesignal:OneSignal:5.9.1"
-=======
-    implementation "com.onesignal:OneSignal:5.9.2"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
+    implementation "com.onesignal:OneSignal:5.9.4"
 }
 apply from: "../../node_modules/onesignal-cordova-plugin/build-extras-onesignal.gradle"
 

@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/immutability */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../lib/firebase';
-import { collection, doc, getDoc, getDocs, query, updateDoc, increment, addDoc, where, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, updateDoc, increment, addDoc, where, arrayUnion, arrayRemove, limit } from 'firebase/firestore';
 import { Reel, Product, Store, Customer } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useApp } from '../context/useApp';
@@ -85,7 +85,6 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
         storedSaves.forEach((rid: string) => { savedMap[rid] = true; });
         setLikedReels(likedMap);
         setSavedReels(savedMap);
-      } catch (e) { console.warn(e); }
     }
   }, [currentCustomer]);
 
@@ -134,7 +133,6 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
             localStorage.setItem(viewStorageKey, JSON.stringify(currentViews));
             setReels(prev => prev.map((r, i) => i === index ? { ...r, viewsCount: (r.viewsCount || 0) + 1 } : r));
           }
-        } catch (e) { console.warn("Could not increment reel views: ", e); }
       }
 
       if (storeId && !lazyStoresRef.current[storeId]) {
@@ -146,7 +144,6 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
         }
       }
     } catch (err) {
-      console.error(`Error lazy loading Product ID: ${prodId}`, err);
     } finally {
       loadingProductMapRef.current[prodId] = false;
     }
@@ -156,7 +153,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const querySnapshot = await getDocs(collection(db, 'reels'));
+      const querySnapshot = await getDocs(query(collection(db, 'reels'), limit(50)));
       const fetchedReels: Reel[] = [];
       querySnapshot.forEach((docSnap) => {
         fetchedReels.push({ id: docSnap.id, ...docSnap.data() } as Reel);
@@ -290,7 +287,6 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
         const storedLikes = JSON.parse(localStorage.getItem('unregistered_liked_reels') || '[]');
         localStorage.setItem('unregistered_liked_reels', JSON.stringify(isLiked ? storedLikes.filter((id: string) => id !== reel.id) : [...storedLikes, reel.id]));
       }
-    } catch (err) { console.error(err); }
   };
 
   const handleToggleBookmark = async (index: number) => {
@@ -309,7 +305,6 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
         const storedSaves = JSON.parse(localStorage.getItem('unregistered_saved_reels') || '[]');
         localStorage.setItem('unregistered_saved_reels', JSON.stringify(isSaved ? storedSaves.filter((id: string) => id !== reel.id) : [...storedSaves, reel.id]));
       }
-    } catch (err) { console.error(err); }
   };
 
   const handleToggleFollow = (storeId: string) => {
@@ -346,12 +341,10 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
       }
 
     } catch (err) {
-      console.warn("Native share sheets issue or cancelled: ", err);
       // خطة احتياطية للـ Web والـ Browsers العادية
       try {
         await navigator.clipboard.writeText(reel.videoUrl);
         alert('تم نسخ رابط فيديو المنتج بنجاح لمشاركته! 🔗');
-      } catch (clipErr) { console.error(clipErr); }
     }
   };
 
@@ -365,13 +358,12 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
     setShowComments(true);
     setLoadingComments(true);
     try {
-      const q = query(collection(db, 'reel_comments'), where('reelId', '==', reelId));
+      const q = query(collection(db, 'reel_comments'), where('reelId', '==', reelId), limit(100));
       const snap = await getDocs(q);
       const list: any[] = [];
       snap.forEach((d) => { list.push({ id: d.id, ...d.data() }); });
       list.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setActiveComments(list);
-    } catch (err) { console.error(err); }
     finally { setLoadingComments(false); }
   };
 
@@ -391,7 +383,6 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
       setNewCommentText('');
       setActiveComments(prev => [commentDoc as any, ...prev]);
       setReels(prev => prev.map((r, i) => i === index ? { ...r, commentsCount: (r.commentsCount || 0) + 1 } : r));
-    } catch (err) { console.error(err); }
   };
 
   if (loading) {

@@ -1,19 +1,14 @@
-<<<<<<< HEAD
 /* ==========================================
    خطوط المنصة - Brand Typography
    Cairo (Arabic/Kufi) + Plus Jakarta Sans (English)
    are loaded via <link> in index.html for optimal performance.
    Legacy fonts kept for backward-compat utility classes.
    ========================================== */
-=======
-/* خط عربي مناسب */
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Tajawal:wght@300;400;500;700;800;900&display=swap');
 
 @import "tailwindcss";
 
 @theme {
-<<<<<<< HEAD
   /* ── Brand Colors (Mahalak Style Guide) ── */
   --color-mahalak-navy:   #0B1320;   /* Deep Navy  — main screen background */
   --color-mahalak-purple: #7B3DFF;   /* Vibrant Purple — brand primary */
@@ -45,16 +40,12 @@
   --shadow-brand-glow-lg:
     0 0 25px -5px rgba(123, 61, 255, 0.6),
     0 10px 10px -5px rgba(123, 61, 255, 0.3);
-=======
-  --font-tajawal: 'Tajawal', sans-serif;
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 }
 
 .font-tajawal {
   font-family: 'Tajawal', sans-serif;
 }
 
-<<<<<<< HEAD
 /* ── Arabic / Cairo typography helpers (Style Guide §2) ── */
 .font-arabic {
   font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
@@ -77,19 +68,13 @@
   font-feature-settings: "lnum" 1, "pnum" 1;
 }
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 /* ==========================================
    ملف الأنماط الرئيسي - منصة محلك
    ========================================== */
 
 /* تطبيق الخط على كامل التطبيق */
 body {
-<<<<<<< HEAD
   font-family: 'Plus Jakarta Sans', 'Cairo', 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-=======
-  font-family: 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   direction: rtl;
   text-align: right;
   -webkit-font-smoothing: antialiased;
@@ -180,15 +165,9 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
-<<<<<<< HEAD
 /* تحسين التركيز (Focus) للوصولية — Brand purple ring */
 *:focus {
   outline: 2px solid rgba(123, 61, 255, 0.5); /* mahalak-purple */
-=======
-/* تحسين التركيز (Focus) للوصولية */
-*:focus {
-  outline: 2px solid rgba(99, 102, 241, 0.5);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   outline-offset: 2px;
 }
 
@@ -219,7 +198,6 @@ input[type="number"] {
     transform: translateX(0) !important;
   }
 }
-<<<<<<< HEAD
 
 /* ==========================================
    التفاعلات الدقيقة والجمالية الفاخرة (Micro-Interactions & Premium Elements)
@@ -348,5 +326,3 @@ input[type="number"] {
   border-width: 1px;
   border-style: solid;
 }
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab

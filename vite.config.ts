@@ -12,6 +12,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
+      "trim-canvas": path.resolve(__dirname, "src/shims/trim-canvas.ts"),
     },
   },
   define: {
@@ -20,13 +21,19 @@ export default defineConfig({
   base: './',
   server: {
     allowedHosts: true,
-<<<<<<< HEAD
     hmr: false
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   },
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/functions', 'firebase/storage'],
+          motion: ['motion/react'],
+        },
+      },
+    },
   },
 });

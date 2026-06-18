@@ -1,16 +1,20 @@
 rules_version = '2';
 
-// Craft rules based on data in your Firestore database
-// allow write: if firestore.get(
-//    /databases/(default)/documents/users/$(request.auth.uid)
-// ).data.isAdmin;
 service firebase.storage {
   match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isDashboardStaff() {
+      return isSignedIn()
+        && firestore.exists(/databases/default/documents/admins/$(request.auth.uid));
+    }
+
     match /{allPaths=**} {
-      // Allow read and write access for all users
-      // Note: This is an open rule for development. For production, you should
-      // restrict this so only authenticated users (or specific roles) can read/write.
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isSignedIn();
+      allow delete: if isDashboardStaff();
     }
   }
 }

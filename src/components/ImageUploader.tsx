@@ -82,7 +82,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   const [dragActive, setDragActive] = useState(false);
   const [showChooser, setShowChooser] = useState(false);
 
-<<<<<<< HEAD
   // حالات نافذة التحكم بالصورة (التكبير والتصغير وتعديل الموضع)
   const [editingImage, setEditingImage] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -118,9 +117,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   }
 
   // تنسيق أبعاد الحاوية للعرض النهائي
-=======
-  // تنسيق أبعاد الحاوية
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const getAspectClass = () => {
     switch (aspectRatio) {
       case 'landscape': return 'aspect-video';
@@ -130,11 +126,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     }
   };
 
-<<<<<<< HEAD
   // معالجة اختيار الملف وقراءة أبعاده الأصلية لتمكين التكبير والتصغير
-=======
-  // معالجة اختيار الملف وضغطه
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const handleFileSelect = async (file: File) => {
     setError('');
     setIsLoading(true);
@@ -156,7 +148,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     }
 
     try {
-<<<<<<< HEAD
       const reader = new FileReader();
       reader.onload = (e) => {
         const result = e.target?.result as string;
@@ -183,19 +174,10 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       reader.readAsDataURL(file);
     } catch (err: any) {
       setError(err?.message || 'حدث خطأ أثناء تحميل الصورة.');
-=======
-      // استدعاء دالة الضغط والتقليص الذكي
-      const compressedBase64 = await resizeImage(file, 800, 800);
-      onChange(compressedBase64);
-    } catch (err: any) {
-      setError(err?.message || 'حدث خطأ أثناء معالجة وضغط الصورة المحددة.');
-    } finally {
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       setIsLoading(false);
     }
   };
 
-<<<<<<< HEAD
   // معالجة تأكيد تعديل الصورة وحفظها بعد القص والتعديل
   const handleCropConfirm = () => {
     if (!editingImage) return;
@@ -322,8 +304,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     setIsDragging(false);
   };
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   // معالجة تغيير ملف الاستوديو (الغاليري)
   const handleGalleryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -480,11 +460,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
           <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl border border-slate-100 animate-slide-up sm:animate-fade-in">
             {/* رأس النافذة */}
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-<<<<<<< HEAD
               <span className="text-xs font-black text-slate-800">إضافة صورة</span>
-=======
-              <span className="text-xs font-black text-slate-800">إضافة صورة المنتج</span>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               <button 
                 type="button" 
                 onClick={() => setShowChooser(false)}
@@ -496,11 +472,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
             {/* الخيارات المتوفرة */}
             <div className="p-5 space-y-3">
-<<<<<<< HEAD
               <p className="text-[11px] text-slate-400 font-black mb-1 text-center">اختر الوسيلة المفضلة لإضافة لقطة للصورة:</p>
-=======
-              <p className="text-[11px] text-slate-400 font-black mb-1 text-center">اختر الوسيلة المفضلة لإضافة لقطة للمنتج:</p>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               
               {/* خيار التقاط صورة الكاميرا */}
               <button
@@ -509,11 +481,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                   setError('');
                   cameraInputRef.current?.click();
                 }}
-<<<<<<< HEAD
                 className="w-full py-3.5 px-4 bg-[#9952FF]/10 text-[#9952FF] hover:bg-[#9952FF]/20 border border-[#9952FF]/20 rounded-2xl flex items-center justify-center gap-3 transition font-black text-xs animate-pulse-once"
-=======
-                className="w-full py-3.5 px-4 bg-[#9952FF]/10 text-[#9952FF] hover:bg-[#9952FF]/20 border border-[#9952FF]/20 rounded-2xl flex items-center justify-center gap-3 transition font-black text-xs"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               >
                 <Camera size={18} />
                 <span>التقاط لقطة فورية بالكاميرا 📸</span>
@@ -545,7 +513,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         </div>
       )}
 
-<<<<<<< HEAD
       {/* نافذة التحرير المتقدمة للتحكم في الصورة بالتكبير والتصغير والتحريك */}
       {editingImage && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[400] flex items-center justify-center p-4 animate-fade-in" dir="rtl">
@@ -679,8 +646,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         </div>
       )}
 
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
       {/* عرض تنبيهات الخطأ إن وجدت */}
       {error && (
         <div className="bg-rose-50 border border-rose-200 text-rose-600 text-xs p-3 rounded-2xl font-bold flex items-start gap-2 animate-fade-in leading-relaxed">

@@ -42,7 +42,6 @@ export const Wallet: React.FC<{
         setWithdrawAmount('');
       })
       .catch(e => {
-        console.error(e);
         alert("حدث خطأ أثناء الطلب.");
       });
   };

@@ -6,13 +6,12 @@ import { useApp } from '../context/useApp';
 
 export const WelcomeScreen: React.FC = () => {
   const navigate = useNavigate();
-  const { currentCustomer, currentMerchant, currentAdmin } = useApp();
+  const { currentCustomer, currentMerchant } = useApp();
   const [step, setStep] = useState(1);
 
   // If already logged in, no need to show welcome screen
   if (currentCustomer) return <Navigate to="/customer" replace />;
   if (currentMerchant) return <Navigate to="/merchant" replace />;
-  if (currentAdmin) return <Navigate to="/admin" replace />;
 
   const handleNext = () => {
     if (step < 3) {

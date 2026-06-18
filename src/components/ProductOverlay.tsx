@@ -135,7 +135,6 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
           targetId: orderId
         });
       } catch (notifErr) {
-        console.error("Failed to generate merchant notification:", notifErr);
       }
 
       setOrderSuccess(true);
@@ -144,7 +143,6 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
       }, 3500);
 
     } catch (err: any) {
-      console.error("Direct reels COD ordering error:", err);
       setError("فشل تسجيل الطلب الإقتراحي. يرجى تكرار المحاولة في غضون لحظات.");
     } finally {
       setLoading(false);
@@ -184,11 +182,7 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
             </div>
           </div>
 
-<<<<<<< HEAD
           <div className="product-price-section text-left shrink-0">
-=======
-          <div className="text-left shrink-0">
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
             {hasDiscount ? (
               <div className="flex flex-col items-end">
                 <span className="text-[10px] text-white/50 line-through font-bold">
@@ -197,13 +191,10 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                 <span className="text-[#00AA4F] text-xs sm:text-sm font-black drop-shadow-md">
                   {product.finalPrice.toLocaleString()} د.ع
                 </span>
-<<<<<<< HEAD
                 <div title="لا تفوت هذه الفرصة، وفر الآن!" className="bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 px-1 py-[2px] rounded-[4px] mt-1 flex items-center justify-center gap-0.5 w-fit">
                   <span className="text-[9px]">⚡</span>
                   <span className="text-[7.5px] font-black">توفير سريع: {(product.price - product.finalPrice).toLocaleString()} د.ع</span>
                 </div>
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
               </div>
             ) : (
               <span className="text-[#00AA4F] text-xs sm:text-sm font-black drop-shadow-md">

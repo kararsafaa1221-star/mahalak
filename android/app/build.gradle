@@ -1,33 +1,46 @@
 apply plugin: 'com.android.application'
 
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    def propsText = keystorePropertiesFile.getText('UTF-8')
+    if (propsText.startsWith('\uFEFF')) {
+        propsText = propsText.substring(1)
+    }
+    keystoreProperties.load(new StringReader(propsText))
+}
+
 android {
     namespace "com.mahalak"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
-<<<<<<< HEAD
-        applicationId "com.mahalak.app"
+        applicationId "iq.mahalak.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
-=======
-        applicationId "com.mahalak"
-        minSdkVersion rootProject.ext.minSdkVersion
-        targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
+        versionCode 5
+        versionName "1.0.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
-             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
-             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
         }
     }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
@@ -63,21 +76,8 @@ try {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }
 
-<<<<<<< HEAD
 configurations.all {
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
     exclude group: 'com.google.guava', module: 'listenablefuture'
-=======
-configurations {
-    all*.exclude group: 'com.google.guava', module: 'listenablefuture'
-}
-configurations.all {
-
-    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
-    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
-}
-configurations {
-    all*.exclude group: 'com.google.guava', module: 'listenablefuture'
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 }

@@ -23,94 +23,45 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // server.ts
-<<<<<<< HEAD
 var import_dotenv = __toESM(require("dotenv"), 1);
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 var import_express = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_axios = __toESM(require("axios"), 1);
 var import_cors = __toESM(require("cors"), 1);
-<<<<<<< HEAD
 import_dotenv.default.config();
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
 async function startServer() {
   const app = (0, import_express.default)();
   const PORT = 3e3;
+  const isProduction = process.env.NODE_ENV === "production";
   app.use((0, import_cors.default)());
   app.use(import_express.default.json());
-  app.get("/api/otp/health", (req, res) => {
+  app.get("/api/otp/health", (_req, res) => {
     res.json({ success: true, status: "Server is reachable", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
   });
-  app.post("/api/otp", async (req, res) => {
-<<<<<<< HEAD
-    const { phone, text, message } = req.body;
-=======
-    const { phone, text } = req.body;
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
-    const WAS_API_KEY = process.env.WASENDER_ACCESS_TOKEN || "61af7f2a07544f59a208444cf80d5ce717be01ad0b571a13a4f9c3ab5209af21";
-    const WAS_INSTANCE_ID = process.env.WASENDER_INSTANCE_ID || "83337";
-    const API_URL = "https://wasenderapi.com/api/send-message";
-    try {
-      let cleaned = phone.replace(/\D/g, "");
-      let formattedNumber = cleaned;
-      if (cleaned.startsWith("07")) {
-        formattedNumber = "964" + cleaned.substring(1);
-      } else if (cleaned.startsWith("7")) {
-        formattedNumber = "964" + cleaned;
-      } else if (!cleaned.startsWith("964")) {
-        formattedNumber = "964" + cleaned;
-      }
-      console.log(`\u{1F680} Sending OTP via Wasender to ${formattedNumber} (Session: ${WAS_INSTANCE_ID})`);
-      const response = await import_axios.default.post(API_URL, {
-        whatsapp_session: WAS_INSTANCE_ID,
-        to: formattedNumber,
-<<<<<<< HEAD
-        text: text || message
-=======
-        text
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
-      }, {
-        headers: {
-          "Authorization": `Bearer ${WAS_API_KEY}`,
-          "Accept": "application/json",
-          "Content-Type": "application/json"
-        },
-        timeout: 15e3
-      });
-      console.log("\u2705 Wasender Response:", response.data);
-      res.json({ success: true, data: response.data });
-    } catch (error) {
-      const errorData = error.response?.data || error.message;
-      console.error("\u274C Wasender Error Details:", errorData);
-      res.status(500).json({
-        success: false,
-        error: errorData,
-        hint: "\u062A\u0623\u0643\u062F \u0645\u0646 \u062A\u0648\u0627\u0641\u0642 \u0625\u0639\u062F\u0627\u062F\u0627\u062A WASender \u0645\u0639 \u0647\u0630\u0627 \u0627\u0644\u0631\u0642\u0645 \u0648\u0627\u0644\u062A\u0623\u0643\u062F \u0645\u0646 \u0627\u0634\u062A\u063A\u0627\u0644 \u0627\u0644\u0640 Instance"
-      });
-    }
-  });
-<<<<<<< HEAD
   app.post("/api/onesignal", async (req, res) => {
+    if (isProduction) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const restApiKey = process.env.ONESIGNAL_REST_API_KEY;
+    if (!restApiKey) {
+      res.status(503).json({ error: "OneSignal is not configured on the server" });
+      return;
+    }
     try {
-      const { _restApiKey, ...payload } = req.body;
-      const response = await import_axios.default.post("https://onesignal.com/api/v1/notifications", payload, {
+      const response = await import_axios.default.post("https://onesignal.com/api/v1/notifications", req.body, {
         headers: {
           "Content-Type": "application/json; charset=utf-8",
-          "Authorization": `Basic ${_restApiKey}`
+          Authorization: `Key ${restApiKey}`
         }
       });
       res.json(response.data);
     } catch (error) {
-      console.warn("OneSignal Push Warning (Likely invalid API Key or bad ID):", JSON.stringify(error.response?.data || error.message, null, 2));
       const status = error.response?.status === 403 ? 400 : error.response?.status || 400;
       res.status(status).json({ error: error.response?.data || error.message });
     }
   });
-=======
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -120,12 +71,11 @@ async function startServer() {
   } else {
     const distPath = import_path.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(import_path.default.join(distPath, "index.html"));
     });
   }
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 startServer();

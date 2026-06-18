@@ -1,0 +1,18 @@
+{
+  "projects": {
+    "default": "mahalak-0"
+  },
+  "targets": {
+    "mahalak-0": {
+      "hosting": {
+        "mahalak-app": [
+          "mahalak-0"
+        ],
+        "mahalak-admin": [
+          "mahalak-admin"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

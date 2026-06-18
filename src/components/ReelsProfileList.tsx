@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/immutability */
 import React, { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
-import { collection, doc, getDoc, getDocs, updateDoc, increment, arrayRemove, arrayUnion } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, updateDoc, increment, arrayRemove, arrayUnion, query, limit } from 'firebase/firestore';
 import { Reel, Product, Store, Customer } from '../types';
 import { 
   Heart, 
@@ -69,7 +69,6 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
         setLocalSaved(savedMap);
         setLocalLiked(likedMap);
       } catch (e) {
-        console.warn(e);
       }
     }
   }, [currentCustomer]);
@@ -79,7 +78,7 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
     const fetchReels = async () => {
       setLoading(true);
       try {
-        const querySnapshot = await getDocs(collection(db, 'reels'));
+        const querySnapshot = await getDocs(query(collection(db, 'reels'), limit(50)));
         const list: Reel[] = [];
         querySnapshot.forEach((docSnap) => {
           list.push({ id: docSnap.id, ...docSnap.data() } as Reel);
@@ -94,7 +93,6 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
 
         setReels(list);
       } catch (err) {
-        console.error("Error loading reels for profile list: ", err);
       } finally {
         setLoading(false);
       }
@@ -127,7 +125,6 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
           }
         }
       } catch (err) {
-        console.error("Error fetching modal reel items: ", err);
       } finally {
         setLoadingModalData(false);
       }
@@ -171,7 +168,6 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
         localStorage.setItem('unregistered_liked_reels', JSON.stringify(newLikes));
       }
     } catch (err) {
-      console.error(err);
     }
   };
 
@@ -209,7 +205,6 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
         localStorage.setItem('unregistered_saved_reels', JSON.stringify(newSaves));
       }
     } catch (err) {
-      console.error(err);
     }
   };
 
@@ -402,7 +397,6 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
                       await navigator.clipboard.writeText(selectedReel.videoUrl);
                       alert('تم نسخ رابط الفيديو لمشاركته! 🔗🎬');
                     } catch (err) {
-                      console.warn(err);
                     }
                   }
                   try {
@@ -413,7 +407,6 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
                     setReels(prev => prev.map(r => r.id === selectedReel.id ? { ...r, sharesCount: (r.sharesCount || 0) + 1 } : r));
                     setSelectedReel(prev => prev && prev.id === selectedReel.id ? { ...prev, sharesCount: (prev.sharesCount || 0) + 1 } : prev);
                   } catch (err) {
-                    console.warn(err);
                   }
                 }}
                 className="w-11 h-11 rounded-full backdrop-blur-md bg-black/50 border border-white/10 text-white hover:bg-black/60 flex items-center justify-center transition hover:scale-105 active:scale-95"

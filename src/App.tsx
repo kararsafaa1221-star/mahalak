@@ -1,19 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { HashRouter, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { useApp } from './context/useApp';
-import { MerchantApp } from './views/Merchant/MerchantApp';
-import { CustomerApp } from './views/Customer/CustomerApp';
-import { AdminPanel } from './views/Admin/AdminPanel';
-<<<<<<< HEAD
 import { WelcomeScreen } from './views/WelcomeScreen';
-import { registerServiceWorker, setupPushNotifications, resetPushNotificationSetup } from './lib/pushNotifications';
-import { Store, ShoppingBag, Shield, Smartphone, Globe, Zap, Heart, Award, WifiOff, Loader2, Bell } from 'lucide-react';
+import { registerServiceWorker, setupPushNotifications, resetPushNotificationSetup, preloadOneSignal } from './lib/pushNotifications';
+import { auth } from './lib/firebase';
+import { Store, ShoppingBag, Smartphone, Globe, Zap, Heart, Award, WifiOff, Loader2, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-=======
-import { registerServiceWorker, requestNotificationPermission, setupPushNotifications } from './lib/pushNotifications';
-import { Store, ShoppingBag, Shield, Smartphone, Globe, Zap, Heart, Award, WifiOff, Loader2, Bell } from 'lucide-react';
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
+import { ADMIN_DASHBOARD_URL } from './lib/consumerApp';
+
+const MerchantApp = lazy(() => import('./views/Merchant/MerchantApp').then(m => ({ default: m.MerchantApp })));
+const CustomerApp = lazy(() => import('./views/Customer/CustomerApp').then(m => ({ default: m.CustomerApp })));
+
+const RouteLoading: React.FC = () => (
+  <div className="min-h-screen flex items-center justify-center bg-[#0B1320]">
+    <Loader2 className="w-10 h-10 text-[#9952FF] animate-spin" />
+  </div>
+);
 
 // ==========================================
 // مكون حالة الاتصال والتحميل
@@ -77,7 +80,7 @@ const StatusIndicator: React.FC = () => {
 // ==========================================
 
 // مكون الصفحة الرئيسية للاختيار بين التطبيقات
-const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer' | 'admin') => void }> = ({ onSelect }) => {
+const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer') => void }> = ({ onSelect }) => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 text-white overflow-hidden relative">
       
@@ -93,32 +96,13 @@ const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer' | 'admin')
         
         {/* الهيدر العلوي */}
         <header className="p-4 md:p-6 flex justify-between items-center">
-<<<<<<< HEAD
           <div className="flex items-center">
             <img
               src="/mahalak-logo.png"
               alt="محلك"
               className="w-14 h-14 md:w-20 md:h-20 object-contain"
             />
-=======
-          <div className="flex items-center space-x-3 space-x-reverse">
-            <div className="p-2 bg-indigo-600 rounded-xl shadow-lg">
-              <Store className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-black leading-none">محلك</h1>
-              <span className="text-[10px] text-indigo-300">Mahalak Platform</span>
-            </div>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           </div>
-          
-          <button 
-            onClick={() => onSelect('admin')}
-            className="flex items-center space-x-2 space-x-reverse px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-sm font-bold transition backdrop-blur-sm"
-          >
-            <Shield size={16} />
-            <span>لوحة الأدمن</span>
-          </button>
         </header>
 
         {/* قسم البطل (Hero Section) */}
@@ -146,18 +130,12 @@ const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer' | 'admin')
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl w-full mb-12 animate-slide-up">
             
             {/* كارد تطبيق التاجر */}
-<<<<<<< HEAD
             <motion.button 
               whileHover={{ y: -6, scale: 1.025, boxShadow: "0 20px 40px rgba(99, 102, 241, 0.15)" }}
               whileTap={{ scale: 0.98 }}
               transition={{ type: "spring", stiffness: 300, damping: 20 }}
               onClick={() => onSelect('merchant')}
               className="order-2 md:order-1 group bg-white/5 hover:bg-white/10 border border-white/10 hover:border-indigo-500/50 rounded-3xl p-6 text-right cursor-pointer backdrop-blur-sm shadow-xl"
-=======
-            <button 
-              onClick={() => onSelect('merchant')}
-              className="order-2 md:order-1 group bg-white/5 hover:bg-white/10 border border-white/10 hover:border-indigo-500/50 rounded-3xl p-6 text-right transition-all duration-300 backdrop-blur-sm hover:shadow-2xl hover:shadow-indigo-500/10"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
             >
               <div className="flex items-start space-x-4 space-x-reverse">
                 <div className="p-4 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-lg group-hover:scale-110 transition-transform">
@@ -178,7 +156,6 @@ const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer' | 'admin')
                 <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-1 rounded-lg">أكواد الخصم</span>
                 <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-1 rounded-lg">إشعارات فورية</span>
               </div>
-<<<<<<< HEAD
             </motion.button>
 
             {/* كارد تطبيق الزبون */}
@@ -188,14 +165,6 @@ const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer' | 'admin')
               transition={{ type: "spring", stiffness: 300, damping: 20 }}
               onClick={() => onSelect('customer')}
               className="order-1 md:order-2 group bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-500/50 rounded-3xl p-6 text-right cursor-pointer backdrop-blur-sm shadow-xl"
-=======
-            </button>
-
-            {/* كارد تطبيق الزبون */}
-            <button 
-              onClick={() => onSelect('customer')}
-              className="order-1 md:order-2 group bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-500/50 rounded-3xl p-6 text-right transition-all duration-300 backdrop-blur-sm hover:shadow-2xl hover:shadow-green-500/10"
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
             >
               <div className="flex items-start space-x-4 space-x-reverse">
                 <div className="p-4 bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl shadow-lg group-hover:scale-110 transition-transform">
@@ -216,11 +185,7 @@ const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer' | 'admin')
                 <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-1 rounded-lg">المفضلة</span>
                 <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-1 rounded-lg">تتبع الطلبات</span>
               </div>
-<<<<<<< HEAD
             </motion.button>
-=======
-            </button>
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
           </div>
 
           {/* ميزات المنصة */}
@@ -275,14 +240,21 @@ const LandingPage: React.FC<{ onSelect: (app: 'merchant' | 'customer' | 'admin')
 // ==========================================
 // المكون الرئيسي للتطبيق مع التنقل
 // ==========================================
+const AdminExternalRedirect: React.FC = () => {
+  useEffect(() => {
+    window.location.replace(ADMIN_DASHBOARD_URL);
+  }, []);
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[#0B1320] text-white text-sm font-bold">
+      جاري التحويل إلى لوحة الإدارة...
+    </div>
+  );
+};
+
 const AppRoutes = () => {
-  const { currentCustomer, currentMerchant, currentAdmin } = useApp();
+  const { currentCustomer, currentMerchant } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
-<<<<<<< HEAD
-=======
-  const [showNotificationOnboarding, setShowNotificationOnboarding] = useState(false);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   const [foregroundNotification, setForegroundNotification] = useState<{title: string, body: string, data?: any} | null>(null);
 
   useEffect(() => {
@@ -295,18 +267,15 @@ const AppRoutes = () => {
   }, [foregroundNotification]);
 
   useEffect(() => {
-    // Register Service Worker for Push Notifications
+    preloadOneSignal();
     registerServiceWorker();
     
-    const isAuth = currentCustomer || currentMerchant || currentAdmin;
+    const isAuth = currentCustomer || currentMerchant;
     if (isAuth) {
-      const hasSeenOnboarding = localStorage.getItem('push_onboarding_shown');
-      
-      let role: 'customers' | 'stores' | 'admins' = 'customers';
-      let id = 'admin';
+      let role: 'customers' | 'stores' = 'customers';
+      let id = auth.currentUser?.uid || 'guest';
       if (currentCustomer) { role = 'customers'; id = currentCustomer.id; }
       else if (currentMerchant) { role = 'stores'; id = currentMerchant.id; }
-      else if (currentAdmin) { role = 'admins'; id = 'admin'; }
 
       const handleReceived = (notification: any) => {
         // الإشعارات الداخلية (In-App)
@@ -318,7 +287,6 @@ const AppRoutes = () => {
       };
 
       const handleAction = (action: any) => {
-<<<<<<< HEAD
         const data = action?.notification?.data || action?.data;
         if (data?.route) {
           navigate(data.route);
@@ -326,8 +294,6 @@ const AppRoutes = () => {
           navigate('/customer');
         } else if (role === 'stores') {
           navigate('/merchant');
-        } else if (role === 'admins') {
-          navigate('/admin');
         }
       };
 
@@ -335,87 +301,18 @@ const AppRoutes = () => {
     } else {
       resetPushNotificationSetup();
     }
-  }, [currentCustomer, currentMerchant, currentAdmin, navigate]);
+  }, [currentCustomer, currentMerchant, navigate]);
 
-  // استرجاع التطبيق الأخير تلقائياً من التخزين (اختياري، هنا سنعتمد على الحساب الحالي)
-  useEffect(() => {
-    // Redirection is handled in the Routing layer.
-  }, []);
-=======
-        // الإشعارات الخارجية وتوجيه المستخدم
-        const data = action.notification.data;
-        if (data && data.route) {
-          navigate(data.route);
-        } else {
-          if (role === 'customers') navigate('/customer');
-          else if (role === 'stores') navigate('/merchant');
-          else if (role === 'admins') navigate('/admin');
-        }
-      };
-
-      if (hasSeenOnboarding !== 'true') {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setShowNotificationOnboarding(true);
-      } else {
-        setupPushNotifications(id, role, handleReceived, handleAction);
-        requestNotificationPermission();
-      }
-    }
-  }, [currentCustomer, currentMerchant, currentAdmin, navigate]);
-
-  const handleGrantPermission = async () => {
-    let role: 'customers' | 'stores' | 'admins' = 'customers';
-    let id = 'admin';
-    if (currentCustomer) { role = 'customers'; id = currentCustomer.id; }
-    else if (currentMerchant) { role = 'stores'; id = currentMerchant.id; }
-    else if (currentAdmin) { role = 'admins'; id = 'admin'; }
-    
-    const handleReceived = (notification: any) => {
-      setForegroundNotification({
-        title: notification.title || 'إشعار جديد',
-        body: notification.body || '',
-        data: notification.data
-      });
-    };
-
-    const handleAction = (action: any) => {
-      const data = action.notification.data;
-      if (data && data.route) navigate(data.route);
-    };
-
-    await setupPushNotifications(id, role, handleReceived, handleAction);
-    await requestNotificationPermission();
-    localStorage.setItem('push_onboarding_shown', 'true');
-    setShowNotificationOnboarding(false);
-  };
-  
-  const handleSkipPermission = () => {
-    localStorage.setItem('push_onboarding_shown', 'true');
-    setShowNotificationOnboarding(false);
-  };
-
-  // استرجاع التطبيق الأخير تلقائياً من التخزين (اختياري، هنا سنعتمد على الحساب الحالي)
-  useEffect(() => {
-    if (currentCustomer && !location.pathname.startsWith('/customer')) navigate('/customer');
-    else if (currentMerchant && !location.pathname.startsWith('/merchant')) navigate('/merchant');
-    else if (currentAdmin && !location.pathname.startsWith('/admin')) navigate('/admin');
-  }, [currentCustomer, currentMerchant, currentAdmin, navigate, location.pathname]);
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
-
-  const handleSelectApp = (app: 'merchant' | 'customer' | 'admin') => {
+  const handleSelectApp = (app: 'merchant' | 'customer') => {
     navigate(`/${app}`);
   };
 
   const handleBackToLanding = () => {
-    if (currentCustomer || currentMerchant || currentAdmin) return;
-<<<<<<< HEAD
+    if (currentCustomer || currentMerchant) return;
     navigate('/select');
-=======
-    navigate('/');
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
   };
 
-  const isAnyAuthenticated = currentCustomer || currentMerchant || currentAdmin;
+  const isAnyAuthenticated = currentCustomer || currentMerchant;
 
   return (
     <div className="font-sans">
@@ -441,49 +338,8 @@ const AppRoutes = () => {
         </div>
       )}
 
-<<<<<<< HEAD
       {/* زر العودة للصفحة الرئيسية (يخفى تماماً إذا كان مسجلاً للدخول) */}
       {location.pathname !== '/' && location.pathname !== '/welcome' && !isAnyAuthenticated && (
-=======
-      {showNotificationOnboarding && (
-        <div className="fixed inset-0 z-[100000] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl relative w-full max-w-sm overflow-hidden animate-slide-up">
-            <div className="bg-gradient-to-br from-purple-600 to-indigo-600 p-8 flex justify-center pb-12">
-              <div className="bg-white/20 p-4 rounded-full backdrop-blur-md animate-pulse">
-                <Bell size={48} className="text-white" />
-              </div>
-            </div>
-            
-            <div className="px-6 pb-6 pt-0 text-center relative z-10 -mt-6">
-              <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
-                <h3 className="text-xl font-black text-slate-800 mb-2">لا تفوّت المبيعات والعروض!</h3>
-                <p className="text-sm text-slate-500 leading-relaxed font-semibold">
-                  قم بتفعيل الإشعارات الآن لتصلك تحديثات الطلبات ورسائل محلك فوراً، حتى وإن كان التطبيق مغلقاً.
-                </p>
-              </div>
-              
-              <div className="flex flex-col gap-3">
-                <button 
-                  onClick={handleGrantPermission}
-                  className="w-full bg-gradient-to-l from-purple-600 to-indigo-500 text-white font-black py-4 rounded-2xl shadow-lg shadow-purple-200 hover:shadow-xl hover:scale-[1.02] transition-all"
-                >
-                  تفعيل الإشعارات 🔔
-                </button>
-                <button 
-                  onClick={handleSkipPermission}
-                  className="w-full text-slate-400 font-bold py-3 hover:bg-slate-50 rounded-2xl transition"
-                >
-                  تخطي الآن
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* زر العودة للصفحة الرئيسية (يخفى تماماً إذا كان مسجلاً للدخول) */}
-      {location.pathname !== '/' && !isAnyAuthenticated && (
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
         <button 
           onClick={handleBackToLanding}
           className="fixed top-4 left-4 z-50 px-3 py-2 bg-slate-900/80 hover:bg-slate-800 text-white text-xs font-bold rounded-xl backdrop-blur-sm shadow-lg transition flex items-center space-x-2 space-x-reverse border border-slate-700"
@@ -495,20 +351,15 @@ const AppRoutes = () => {
 
       {/* عرض التطبيق المناسب */}
       <Routes>
-<<<<<<< HEAD
         <Route path="/" element={<WelcomeScreen />} />
         <Route path="/select" element={
           currentCustomer ? <Navigate to="/customer" replace /> :
           currentMerchant ? <Navigate to="/merchant" replace /> :
-          currentAdmin ? <Navigate to="/admin" replace /> :
           <LandingPage onSelect={handleSelectApp} />
         } />
-=======
-        <Route path="/" element={<LandingPage onSelect={handleSelectApp} />} />
->>>>>>> 18fc01854c1e2793205673b08e1cfbea14a490ab
-        <Route path="/merchant/*" element={<MerchantApp />} />
-        <Route path="/customer/*" element={<CustomerApp />} />
-        <Route path="/admin/*" element={<AdminPanel />} />
+        <Route path="/merchant/*" element={<Suspense fallback={<RouteLoading />}><MerchantApp /></Suspense>} />
+        <Route path="/customer/*" element={<Suspense fallback={<RouteLoading />}><CustomerApp /></Suspense>} />
+        <Route path="/admin/*" element={<AdminExternalRedirect />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

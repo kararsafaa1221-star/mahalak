@@ -77,7 +77,6 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
         })
         .catch((err) => {
           if (!isSubscribed) return;
-          console.error("Camera permission request rejected:", err);
           setHasPermission(false);
           setErrorText('يرجى تفعيل صلاحية الوصول للكاميرا من إعدادات المتصفح أو الهاتف المحمول للتمكن من التقاط الصور للمنتجات مباشرة.');
         });
@@ -106,7 +105,6 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
       setStep('source');
       setTimeout(() => setStep('camera'), 100);
     } catch (err: any) {
-      console.error("Manual camera permission request rejected:", err);
       setHasPermission(false);
       setErrorText('فشل تفعيل صلاحية الكاميرا. يرجى تفعيل الإذن يدوياً من إعدادات المتصفح أو الهاتف المحمول.');
     }
@@ -132,7 +130,6 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
           setErrorText('الكاميرا ليست جاهزة بعد أو تم رفض إذن الوصول إليها. يرجى الانتظار أو تفعيل إذن الكاميرا من المتصفح.');
         }
       } catch (err: any) {
-        console.error("Camera capture error:", err);
         setErrorText('حدث خطأ أثناء محاولة التقاط الصورة: ' + (err.message || err));
       }
     } else {
@@ -179,7 +176,6 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
       setProcessedUrl(outputUrl);
       setStep('result');
     } catch (err: any) {
-      console.error("Background removal error:", err);
       setErrorText('عذراً، فشل تفريغ خلفية الصورة محلياً على المتصفح. يمكنك استخدام الصورة الأصلية كما هي.');
       setStep('preview');
     }
@@ -389,7 +385,6 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                     className="w-full h-full object-cover"
                     videoConstraints={{ facingMode: 'environment' }}
                     onUserMediaError={(err) => {
-                      console.error("Webcam media error:", err);
                       setHasPermission(false);
                       setErrorText('لم نتمكن من تشغيل الكاميرا. يرجى التأكد من السماح للتطبيق بالوصول للكاميرا في إعدادات متصفحك أو إعدادات بروفايل التطبيق.');
                     }}

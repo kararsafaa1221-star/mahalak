@@ -63,7 +63,6 @@ function LocationMarker({
         address = data.display_name;
       }
     } catch (error) {
-      console.log("Error fetching address:", error);
     }
     setAddress(address);
     onLocationSelect(lat, lng, address);
@@ -109,7 +108,6 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         addr = data.display_name;
       }
     } catch (e) {
-      console.log("Could not fetch address", e);
     }
 
     setAddress(addr);
@@ -118,7 +116,6 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
   }, [onLocationSelect]);
 
   const handlePositionError = useCallback(async (err: any) => {
-    console.warn("Geolocation error, attempting IP fallback:", err);
     try {
       const ipFallback = await fetch('https://ipapi.co/json/');
       const ipData = await ipFallback.json();

@@ -129,7 +129,6 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
       setCurrentStep('completed');
       onUploadSuccess(downloadUrl);
     } catch (err: any) {
-      console.error('Core Background Removal & Upload Pipeline Error:', err);
       const errorMessage = err?.message || 'Failed processing or uploading. Please try another image.';
       setErrorMsg(errorMessage);
       setCurrentStep('idle');
