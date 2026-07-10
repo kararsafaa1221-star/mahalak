@@ -11,14 +11,12 @@
   },
   "hosting": [
     {
-      "target": "mahalak-app",
-      "public": "dist",
+      "target": "customer",
+      "public": "apps/customer/dist",
       "ignore": [
         "firebase.json",
         "**/.*",
-        "**/node_modules/**",
-        "server.cjs",
-        "server.cjs.map"
+        "**/node_modules/**"
       ],
       "rewrites": [
         {
@@ -28,8 +26,32 @@
       ]
     },
     {
-      "target": "mahalak-admin",
-      "public": "admin-dashboard/dist",
+      "target": "merchant",
+      "public": "apps/merchant/dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "headers": [
+        {
+          "source": "**",
+          "headers": [
+            { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+            { "key": "Cross-Origin-Embedder-Policy", "value": "credentialless" }
+          ]
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ]
+    },
+    {
+      "target": "admin",
+      "public": "apps/admin/dist",
       "ignore": [
         "firebase.json",
         "**/.*",

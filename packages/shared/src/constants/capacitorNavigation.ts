@@ -1,0 +1,23 @@
+/** Allowed WebView navigation targets for production Capacitor builds. */
+export const CAPACITOR_ALLOW_NAVIGATION = [
+  'mahalak-0.web.app',
+  'mahalak-0.firebaseapp.com',
+  'mahalak-merchant.web.app',
+  'mahalak-merchant.firebaseapp.com',
+  'mahalak-admin.web.app',
+  'mahallak.app',
+  'e-mahalak.com',
+  'firebase.googleapis.com',
+  'firebasestorage.googleapis.com',
+  'googleapis.com',
+  'gstatic.com',
+  'cdn.onesignal.com',
+  'onesignal.com',
+  'openstreetmap.org',
+  'tile.openstreetmap.org',
+  'cdnjs.cloudflare.com',
+  'wa.me',
+  'api.whatsapp.com',
+  'localhost',
+  '127.0.0.1',
+] as const;

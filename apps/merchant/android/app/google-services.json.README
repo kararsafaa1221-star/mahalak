@@ -1,0 +1,7 @@
+# Place the Firebase Android config for package iq.mahalak.merchant here:
+# apps/merchant/android/app/google-services.json
+#
+# Download: Firebase Console → mahalak-0 → Project settings → Your apps →
+# Add Android app (iq.mahalak.merchant) if missing → google-services.json
+#
+# Required for FCM / OneSignal push delivery on Android.

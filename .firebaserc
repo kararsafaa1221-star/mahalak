@@ -5,10 +5,13 @@
   "targets": {
     "mahalak-0": {
       "hosting": {
-        "mahalak-app": [
+        "merchant": [
+          "mahalak-merchant"
+        ],
+        "customer": [
           "mahalak-0"
         ],
-        "mahalak-admin": [
+        "admin": [
           "mahalak-admin"
         ]
       }

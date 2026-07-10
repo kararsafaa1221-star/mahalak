@@ -6,14 +6,66 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    // Storage cross-service rules can only read Firestore database "(default)".
+    // App data lives in the named database "default", so we authorize via Auth custom claims
+    // set by Cloud Functions (syncStoreOwnerSession / syncAdminStorageSession).
     function isDashboardStaff() {
       return isSignedIn()
-        && firestore.exists(/databases/default/documents/admins/$(request.auth.uid));
+        && request.auth.token.adminRole in ['owner', 'admin', 'supervisor', 'support', 'accountant'];
+    }
+
+    function ownsStorePath(storeId) {
+      return isSignedIn()
+        && request.auth.token.merchantStoreId == storeId;
+    }
+
+    function isValidImageUpload() {
+      return request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Merchant-scoped product images: products/images/{storeId}/{fileName}
+    match /products/images/{storeId}/{fileName} {
+      allow read: if true;
+      allow write: if (ownsStorePath(storeId) || isDashboardStaff()) && isValidImageUpload();
+      allow delete: if ownsStorePath(storeId) || isDashboardStaff();
+    }
+
+    // Legacy flat path — read-only for existing uploads; no new client writes.
+    match /products/images/{fileName} {
+      allow read: if true;
+      allow write: if false;
+      allow delete: if isDashboardStaff();
+    }
+
+    match /products/{productId}/{fileName} {
+      allow read: if true;
+      allow write: if false;
+      allow delete: if isDashboardStaff();
+    }
+
+    match /reels/{storeId}/{fileName} {
+      allow read: if true;
+      allow write: if (ownsStorePath(storeId) || isDashboardStaff())
+        && request.resource.size < 60 * 1024 * 1024;
+      allow delete: if ownsStorePath(storeId) || isDashboardStaff();
+    }
+
+    match /stores/{storeId}/{fileName} {
+      allow read: if true;
+      allow write: if (ownsStorePath(storeId) || isDashboardStaff()) && isValidImageUpload();
+      allow delete: if ownsStorePath(storeId) || isDashboardStaff();
+    }
+
+    match /ads/{fileName} {
+      allow read: if true;
+      allow write: if isDashboardStaff() && isValidImageUpload();
+      allow delete: if isDashboardStaff();
     }
 
     match /{allPaths=**} {
       allow read: if true;
-      allow write: if isSignedIn();
+      allow write: if false;
       allow delete: if isDashboardStaff();
     }
   }

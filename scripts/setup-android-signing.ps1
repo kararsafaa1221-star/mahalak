@@ -1,9 +1,9 @@
-# Creates release keystore + keystore.properties for Google Play signing.
+# Creates release keystore + keystore.properties for CUSTOMER app (iq.mahalak.app — Play update).
 # Run from repo root:  powershell -ExecutionPolicy Bypass -File scripts/setup-android-signing.ps1
 
 $ErrorActionPreference = "Stop"
 $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$androidDir = Join-Path $rootDir "android"
+$androidDir = Join-Path $rootDir "apps\customer\android"
 $keystorePath = Join-Path $androidDir "mahalak-release.keystore"
 $propsPath = Join-Path $androidDir "keystore.properties"
 $keyAlias = "mahalak"

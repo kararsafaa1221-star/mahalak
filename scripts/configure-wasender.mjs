@@ -2,7 +2,7 @@
 /**
  * Upload Wasender credentials to Firebase Functions secrets.
  *
- * 1. Add to functions/.env:
+ * 1. Add to functions/.env.wasender (not auto-loaded on deploy):
  *    WASENDER_ACCESS_TOKEN=your_token
  *    WASENDER_INSTANCE_ID=your_instance_id
  * 2. Run: node scripts/configure-wasender.mjs
@@ -14,10 +14,10 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const envPath = resolve(root, 'functions/.env');
+const envPath = resolve(root, 'functions/.env.wasender');
 
 if (!existsSync(envPath)) {
-  console.error('Missing functions/.env — copy .env.example and set Wasender values.');
+  console.error('Missing functions/.env.wasender — copy functions/.env.wasender.example and set Wasender values.');
   process.exit(1);
 }
 
@@ -44,7 +44,7 @@ const keys = ['WASENDER_ACCESS_TOKEN', 'WASENDER_INSTANCE_ID'];
 for (const key of keys) {
   const value = vars[key]?.trim();
   if (!value) {
-    console.error(`Missing ${key} in functions/.env`);
+    console.error(`Missing ${key} in functions/.env.wasender`);
     process.exit(1);
   }
   console.log(`Setting secret ${key}...`);

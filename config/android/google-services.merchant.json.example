@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "405501753361",
+    "project_id": "mahalak-0",
+    "storage_bucket": "mahalak-0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "REPLACE_WITH_FIREBASE_CONSOLE_VALUES",
+        "android_client_info": {
+          "package_name": "iq.mahalak.merchant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REPLACE_WITH_FIREBASE_CONSOLE_VALUES"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -132,6 +132,52 @@ async function updateWebIcon() {
   console.log('\n  ✓ public/icon.png  1024×1024px  (PWA)');
 }
 
+const SMALL_NOTIFICATION_SIZES = {
+  'drawable-mdpi': 24,
+  'drawable-hdpi': 36,
+  'drawable-xhdpi': 48,
+  'drawable-xxhdpi': 72,
+  'drawable-xxxhdpi': 96,
+};
+
+/** White silhouette on transparent — required for Android status-bar icon. */
+async function writeWhiteSilhouetteIcon(size, outputPath) {
+  const resized = sharp(src).resize(size, size, {
+    fit: 'contain',
+    background: { r: 0, g: 0, b: 0, alpha: 0 },
+  }).ensureAlpha();
+
+  const meta = await resized.metadata();
+  const width = meta.width ?? size;
+  const height = meta.height ?? size;
+  const alphaMask = await resized.clone().extractChannel('alpha').toBuffer();
+
+  await sharp({
+    create: { width, height, channels: 3, background: { r: 255, g: 255, b: 255 } },
+  })
+    .joinChannel(alphaMask)
+    .png()
+    .toFile(outputPath);
+}
+
+async function generateNotificationIcons() {
+  console.log('\n🔔 Generating OneSignal / FCM notification icons…');
+
+  for (const [folder, size] of Object.entries(SMALL_NOTIFICATION_SIZES)) {
+    const dir = join(res, folder);
+    ensure(dir);
+    const output = join(dir, 'ic_stat_onesignal_default.png');
+    await writeWhiteSilhouetteIcon(size, output);
+    console.log(`  ✓ ${folder.padEnd(18)} ic_stat_onesignal_default.png  ${size}×${size}px`);
+  }
+
+  const largeDir = join(res, 'drawable-xxxhdpi');
+  ensure(largeDir);
+  const largePath = join(largeDir, 'ic_onesignal_large_icon_default.png');
+  await sharp(src).resize(256, 256, { fit: 'contain', background: { r: 24, g: 8, b: 40, alpha: 1 } }).png().toFile(largePath);
+  console.log('  ✓ drawable-xxxhdpi     ic_onesignal_large_icon_default.png  256×256px');
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   await generateFlat();
@@ -140,6 +186,7 @@ async function main() {
   createAdaptiveIconXmls();
   removeOldForegroundVector();
   await updateWebIcon();
+  await generateNotificationIcons();
   console.log('\n🎉  All icons generated — icon will render full & unclipped on every Android launcher.\n');
 }
 

@@ -7,10 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 
 const targets = [
-  'src',
-  'admin-dashboard/src',
+  'apps/customer/src',
+  'apps/merchant/src',
+  'apps/admin/src',
+  'packages/shared/src',
   'functions/index.js',
-  'server.ts',
 ];
 
 const keepErrorIn = new Set([

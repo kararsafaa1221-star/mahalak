@@ -1,0 +1,503 @@
+/* ==========================================
+   Mahalak Brand Identity — Shared Global Styles
+   Colors: deep-navy · vibrant-purple · violet
+   EN: Plus Jakarta Sans (Modern Sans-serif)
+   AR: Cairo (Elegant Modern Kufi)
+   ========================================== */
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@layer base {
+  /* Override Tailwind preflight `color: inherit` — body uses light text on dark shell */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']),
+  textarea,
+  select {
+    color: #0B1320;
+  }
+
+  input:not([type='checkbox']):not([type='radio'])::placeholder,
+  textarea::placeholder {
+    color: #9ca3af;
+  }
+
+  input:not([type='checkbox']):not([type='radio']):-webkit-autofill,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-text-fill-color: #0B1320;
+  }
+}
+
+@theme {
+  /* ── Brand palette (Style Guide) ── */
+  --color-deep-navy:       #0B1320;
+  --color-deep-navy-light: #151d2b;
+  --color-vibrant-purple:  #7B3DFF;
+  --color-violet:          #B18CFF;
+
+  --background-image-mahalak-gradient: linear-gradient(180deg, #0B1320 0%, #151d2b 100%);
+
+  /* Aliases for gradual migration */
+  --color-mahalak-navy:   #0B1320;
+  --color-mahalak-purple: #7B3DFF;
+  --color-mahalak-violet: #B18CFF;
+
+  /* Legacy tokens → brand guide */
+  --color-brand-purple-start: #7B3DFF;
+  --color-brand-purple-end:   #B18CFF;
+  --color-soft-bg-light: #131C2E;
+  --color-soft-bg-alt:   #1A2540;
+
+  /* Surfaces on dark navy */
+  --color-slate-50:   #131C2E;
+  --color-slate-100:  #1A2540;
+  --color-gray-50:    #131C2E;
+  --color-neutral-50: #131C2E;
+
+  /* ── Brand Typography ── */
+  --font-sans:    'Plus Jakarta Sans', 'Cairo', 'IBM Plex Sans Arabic', -apple-system, sans-serif;
+  --font-arabic:  'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  --font-english: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-tajawal: 'Cairo', sans-serif;
+  --font-outfit:  'Plus Jakarta Sans', sans-serif;
+  --font-space:   'Plus Jakarta Sans', sans-serif;
+
+  /* ── Brand Glow Shadows ── */
+  --shadow-brand-glow:
+    0 0 15px -3px rgba(123, 61, 255, 0.5),
+    0 4px 6px -2px rgba(123, 61, 255, 0.2);
+  --shadow-brand-glow-lg:
+    0 0 25px -5px rgba(123, 61, 255, 0.6),
+    0 10px 10px -5px rgba(123, 61, 255, 0.3);
+}
+
+.font-tajawal,
+.font-arabic {
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+}
+
+.font-english {
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+}
+
+:lang(en),
+[lang="en"] {
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+}
+
+:lang(ar),
+[dir="rtl"] {
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  font-variant-numeric: lining-nums proportional-nums;
+  font-feature-settings: "lnum" 1, "pnum" 1;
+}
+
+/* ==========================================
+   Base application shell
+   ========================================== */
+
+body {
+  font-family: 'Cairo', 'Plus Jakarta Sans', 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: linear-gradient(180deg, #0B1320 0%, #151d2b 100%);
+  background-attachment: fixed;
+  color: #E8ECF4;
+  direction: rtl;
+  text-align: right;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Dark-surface form fields keep light text (slate tokens remapped to navy in this theme) */
+:is(input, textarea, select):is(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-neutral-50):not(.bg-white),
+.input-brand,
+.card-dark :is(input, textarea, select),
+.card-dark-elevated :is(input, textarea, select),
+.card-glass :is(input, textarea, select),
+.surface-card-dark :is(input, textarea, select) {
+  color: #E8ECF4;
+}
+
+:is(input, textarea).bg-slate-50::placeholder,
+:is(input, textarea).bg-slate-100::placeholder,
+:is(input, textarea).bg-gray-50::placeholder,
+:is(input, textarea).bg-neutral-50::placeholder,
+.input-brand::placeholder {
+  color: rgba(177, 140, 255, 0.45);
+}
+
+:is(input, textarea, select):is(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-neutral-50):not(.bg-white):-webkit-autofill,
+.input-brand:-webkit-autofill,
+:is(input, textarea, select):is(.bg-\[\#0B1320\], .bg-deep-navy):-webkit-autofill {
+  -webkit-text-fill-color: #E8ECF4;
+}
+
+/* Explicit dark inputs on navy backgrounds */
+:is(input, textarea, select):is(.bg-\[\#0B1320\], .bg-deep-navy),
+.bg-\[\#0B1320\] :is(input:not([type='checkbox']):not([type='radio']), textarea, select),
+.bg-deep-navy :is(input:not([type='checkbox']):not([type='radio']), textarea, select) {
+  color: #E8ECF4;
+}
+
+/* Reinforce dark text inside white cards / light surfaces */
+.bg-white :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(:is(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-neutral-50, .bg-\[\#0B1320\], .bg-deep-navy)),
+.surface-card :is(input:not([type='checkbox']):not([type='radio']), textarea, select) {
+  color: #0B1320;
+}
+
+#root {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #0B1320 0%, #151d2b 100%);
+  background-attachment: fixed;
+}
+
+/* App shell — subtle depth gradient behind floating cards */
+.bg-mahalak-gradient {
+  background-image: linear-gradient(180deg, #0B1320 0%, #151d2b 100%);
+}
+
+/* Gradient border for brand purple cards (matches browser preview) */
+.brand-gradient-border {
+  border-image: linear-gradient(90deg, rgba(11, 19, 32, 1) 0%, rgba(123, 61, 255, 1) 100%) 1;
+}
+
+/* Merchant dashboard — unified gradient card (purple → navy) */
+.merchant-brand-card {
+  background-image: linear-gradient(90deg, #7B3DFF 0%, #0B1320 100%);
+  border: 1px solid transparent;
+  border-image: linear-gradient(90deg, rgba(11, 19, 32, 1) 0%, rgba(123, 61, 255, 1) 100%) 1;
+}
+
+.merchant-gradient-surface {
+  background-image: linear-gradient(90deg, #7B3DFF 0%, #0B1320 100%);
+}
+
+.text-on-brand {
+  color: #E8ECF4;
+}
+
+.merchant-panel-inset {
+  background-color: rgba(19, 28, 46, 0.55);
+  border: 1px solid rgba(123, 61, 255, 0.15);
+}
+
+.merchant-inner-card {
+  background-color: #131C2E;
+  border: 1px solid rgba(123, 61, 255, 0.12);
+  color: #E8ECF4;
+}
+
+.merchant-nav-mobile {
+  background: linear-gradient(180deg, #1A2540 0%, #0B1320 100%);
+  border-top: 1px solid rgba(123, 61, 255, 0.25);
+  box-shadow: 0 -10px 40px -15px rgba(123, 61, 255, 0.15);
+}
+
+.merchant-dropdown {
+  background-color: #131C2E;
+  border: 1px solid rgba(123, 61, 255, 0.2);
+}
+
+.merchant-icon-tile {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #B18CFF;
+}
+
+/* تأثيرات حركية مخصصة (Animations) */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { 
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-left {
+  from { 
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to { 
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes scale-up {
+  from { 
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to { 
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.5s ease-out;
+}
+
+.animate-slide-left {
+  animation: slide-left 0.3s ease-out;
+}
+
+.animate-scale-up {
+  animation: scale-up 0.3s ease-out;
+}
+
+/* شريط التمرير المخصص (Custom Scrollbar) - مخفي تماماً لتسهيل التنقل باللمس والإيماءات */
+::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+* {
+  scrollbar-width: none !important; /* لمتصفح فايرفوكس */
+  -ms-overflow-style: none !important; /* لمتصفح إنترنت إكسبلورر وإيدج القديم */
+}
+
+/* تحسينات للأزرار والنقر */
+button, a, [role="button"] {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* إخفاء السهم في حقول الأرقام */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* تحسين التركيز (Focus) للوصولية — Brand purple ring */
+*:focus {
+  outline: 2px solid rgba(123, 61, 255, 0.5); /* mahalak-purple */
+  outline-offset: 2px;
+}
+
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* تحسينات الطباعة لاتجاه RTL */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* لوحة الادمن: اجبار القائمة الجانبية على الاختفاء بالموبايل بعد اختيار الصفحة */
+.admin-sidebar-open {
+  transform: translateX(0) !important;
+}
+
+.admin-sidebar-closed {
+  transform: translateX(110%) !important;
+}
+
+@media (min-width: 1024px) {
+  .admin-sidebar-open,
+  .admin-sidebar-closed {
+    transform: translateX(0) !important;
+  }
+}
+
+/* ==========================================
+   التفاعلات الدقيقة والجمالية الفاخرة (Micro-Interactions & Premium Elements)
+   ========================================== */
+
+/* أزرار وتفاعلات منصة محلك الفخمة */
+.btn-premium,
+.btn-primary {
+  background: linear-gradient(135deg, #7B3DFF 0%, #B18CFF 100%);
+  color: white !important;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: var(--shadow-brand-glow);
+}
+
+.btn-premium:hover,
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-brand-glow-lg);
+  filter: brightness(1.05);
+}
+
+.btn-premium:active,
+.btn-primary:active {
+  transform: translateY(0) scale(0.97);
+  filter: brightness(0.95);
+}
+
+/* Brand icon tint for Lucide SVGs in nav / headers */
+.icon-brand {
+  color: #7B3DFF;
+  stroke: #7B3DFF;
+}
+
+.icon-brand-violet {
+  color: #B18CFF;
+  stroke: #B18CFF;
+}
+
+/* Inputs on dark surfaces */
+.input-brand {
+  background-color: #131C2E;
+  background-image: linear-gradient(90deg, rgba(123, 61, 255, 0.35) 0%, #131C2E 55%);
+  border: 1px solid rgba(177, 140, 255, 0.2);
+  color: #E8ECF4;
+}
+
+.input-brand:focus {
+  border-color: #7B3DFF;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(123, 61, 255, 0.25);
+}
+
+.input-brand option {
+  background-color: #0B1320;
+  color: #E8ECF4;
+}
+
+.input-brand option:checked,
+.input-brand option:hover {
+  background-color: #7B3DFF;
+  color: #ffffff;
+}
+
+/* Surface card on deep-navy app shell */
+.surface-card {
+  background-color: #ffffff;
+  border: 1px solid rgba(177, 140, 255, 0.12);
+  border-radius: 1.5rem;
+}
+
+.surface-card-dark {
+  background-color: #131C2E;
+  border: 1px solid rgba(123, 61, 255, 0.12);
+  border-radius: 1.5rem;
+}
+
+/* تأثير التكبير الطفيف للمرور واللمس على الكروت والبطاقات */
+.card-interactive {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.card-interactive:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 12px 25px rgba(0, 0, 0, 0.05);
+}
+
+.card-interactive:active {
+  transform: translateY(-1px) scale(0.99);
+}
+
+/* تأثير نبض خفيف متناغم */
+.animate-soft-pulse {
+  animation: soft-pulse 2.5s infinite ease-in-out;
+}
+
+@keyframes soft-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.015);
+    opacity: 0.96;
+  }
+}
+
+/* ==========================================
+   Brand Dark-Mode Card & Surface System
+   ========================================== */
+
+/* Primary card surface — floats above Deep Navy background */
+.card-dark {
+  background-color: #131C2E;
+  border: 1px solid rgba(123, 61, 255, 0.08);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Slightly elevated secondary surface */
+.card-dark-elevated {
+  background-color: #1A2540;
+  border: 1px solid rgba(177, 140, 255, 0.10);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Glass-morphism variant */
+.card-glass {
+  background-color: rgba(19, 28, 46, 0.60);
+  border: 1px solid rgba(123, 61, 255, 0.12);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* ==========================================
+   Semantic Status Colors
+   ========================================== */
+
+/* ✅ Success / Approval */
+.status-success {
+  color: #34d399;               /* emerald-400 */
+  background-color: rgba(16, 185, 129, 0.08);  /* emerald-500/8 */
+  border-color: rgba(52, 211, 153, 0.20);
+}
+.status-success-text { color: #34d399; }
+.status-success-bg   { background-color: rgba(16, 185, 129, 0.10); }
+.status-success-border { border-color: rgba(52, 211, 153, 0.25); }
+
+/* ❌ Rejection / Error */
+.status-error {
+  color: #fb7185;               /* rose-400 */
+  background-color: rgba(244, 63, 94, 0.08);   /* rose-500/8 */
+  border-color: rgba(251, 113, 133, 0.20);
+}
+.status-error-text   { color: #fb7185; }
+.status-error-bg     { background-color: rgba(244, 63, 94, 0.10); }
+.status-error-border { border-color: rgba(251, 113, 133, 0.25); }
+
+/* ⏳ Pending / Neutral */
+.status-pending {
+  color: #fbbf24;               /* amber-400 */
+  background-color: rgba(245, 158, 11, 0.08);  /* amber-500/8 */
+  border-color: rgba(251, 191, 36, 0.20);
+}
+.status-pending-text   { color: #fbbf24; }
+.status-pending-bg     { background-color: rgba(245, 158, 11, 0.10); }
+.status-pending-border { border-color: rgba(251, 191, 36, 0.25); }
+
+/* ── Shared badge base (pair with a status-* class) ── */
+.badge-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-width: 1px;
+  border-style: solid;
+}

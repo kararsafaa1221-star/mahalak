@@ -16,27 +16,24 @@ service cloud.firestore {
       );
     }
 
-    /** Role-based page access — mirrors admin-dashboard ROLE_PERMISSION_MATRIX. */
     function roleHasPageAccess(perm) {
       return isDashboardStaff() && (
         adminDoc().role == 'owner' ||
         adminDoc().role == 'admin' ||
-        (adminDoc().role == 'supervisor' && (perm == 'stores' || perm == 'orders')) ||
+        (adminDoc().role == 'supervisor' && (perm == 'stores' || perm == 'orders' || perm == 'activityLogs')) ||
         (adminDoc().role == 'support' && (perm == 'customers' || perm == 'orders')) ||
         (adminDoc().role == 'accountant' && (perm == 'subscriptions' || perm == 'payouts'))
       );
     }
 
-    /** @deprecated use roleHasPageAccess — kept for gradual migration */
     function hasDashboardPermission(perm) {
       return roleHasPageAccess(perm);
     }
 
     function canReadCustomersAsStaff() {
-      return isDashboardStaff();
+      return roleHasPageAccess('customers');
     }
 
-    /** Owner or supervisor — activity log read access. */
     function isSuperAdmin() {
       return isDashboardStaff() && (
         adminDoc().role == 'owner' ||
@@ -46,6 +43,18 @@ service cloud.firestore {
 
     function incoming() { return request.resource.data; }
 
+    function storeData(storeId) {
+      return get(/databases/$(database)/documents/stores/$(storeId)).data;
+    }
+
+    function ownsStore(storeId) {
+      return isSignedIn()
+        && storeId is string
+        && storeId != ''
+        && exists(/databases/$(database)/documents/stores/$(storeId))
+        && storeData(storeId).get('ownerId', '') == request.auth.uid;
+    }
+
     function isCustomerSelf(customerId) {
       return isSignedIn() && (
         request.auth.uid == customerId ||
@@ -53,12 +62,41 @@ service cloud.firestore {
       );
     }
 
+    function ownsCustomerId(customerId) {
+      return isSignedIn() && (
+        customerId == request.auth.uid ||
+        (
+          exists(/databases/$(database)/documents/customers/$(customerId))
+          && get(/databases/$(database)/documents/customers/$(customerId)).data.get('authUid', '') == request.auth.uid
+        )
+      );
+    }
+
     function notificationBelongsToUser() {
       return isSignedIn() && (
         resource.data.userId == request.auth.uid ||
+        ownsCustomerId(resource.data.userId) ||
+        ownsStore(resource.data.userId)
+      );
+    }
+
+    /** Merchant sends a targeted notification to one of their customers (e.g. gift). */
+    function merchantNotifiesCustomer() {
+      return incoming().role == 'customer'
+        && incoming().userId is string
+        && incoming().senderStoreId is string
+        && ownsStoreSecrets(incoming().senderStoreId);
+    }
+
+    /** Notifications: no arbitrary cross-user spam from merchants. Bulk sends use Cloud Functions. */
+    function canCreateNotification() {
+      return isSignedIn() && (
+        roleHasPageAccess('broadcast') ||
+        ownsStore(incoming().userId) ||
+        merchantNotifiesCustomer() ||
         (
-          exists(/databases/$(database)/documents/customers/$(resource.data.userId))
-          && get(/databases/$(database)/documents/customers/$(resource.data.userId)).data.get('authUid', '') == request.auth.uid
+          ownsCustomerId(incoming().userId)
+          && incoming().get('senderStoreId', '') == ''
         )
       );
     }
@@ -67,15 +105,72 @@ service cloud.firestore {
       return request.query.limit <= 2 && resource.data.authUid == request.auth.uid;
     }
 
-    function canLinkCustomerAuthUid() {
+    function customerSelfProfileUpdate() {
+      return isCustomerSelf(customerId) && !incoming().diff(resource.data).affectedKeys().hasAny([
+        'points', 'tier', 'isBlocked', 'ordersCount', 'monthlyOrdersCount', 'authUid', 'password'
+      ]);
+    }
+
+    function storeOwnerProfileUpdate() {
+      return !incoming().diff(resource.data).affectedKeys().hasAny([
+        'isVerified', 'verificationType', 'verificationExpiresAt',
+        'walletBalance', 'payoutMethods', 'password',
+        'subscriptionStatus', 'subscriptionValidUntil',
+        'subscriptionExpiry', 'subscriptionExpiryDate', 'subscriptionId',
+        'autoSubscriptionDuration', 'autoSubscriptionDisabled', 'status',
+        'rating', 'totalReviews'
+      ]);
+    }
+
+    function storeOwnerSafeCreate() {
+      let d = request.resource.data;
+      let status = d.get('status', 'pending');
+      return d.get('ownerId', request.auth.uid) == request.auth.uid
+        && (status == 'pending' || status == 'active')
+        && d.get('subscriptionStatus', 'none') == 'none'
+        && d.get('subscriptionExpiry', 'none') == 'none'
+        && d.get('subscriptionExpiryDate', 'none') == 'none'
+        && !d.keys().hasAny(['subscriptionValidUntil', 'autoSubscriptionDuration'])
+        && d.get('autoSubscriptionDisabled', false) == false
+        && !d.keys().hasAny(['walletBalance', 'payoutMethods', 'password']);
+    }
+
+    function ownsStoreSecrets(storeId) {
       return isSignedIn()
-        && incoming().get('authUid', '') == request.auth.uid
-        && incoming().diff(resource.data).affectedKeys().hasOnly(['authUid']);
+        && storeId is string
+        && storeId != ''
+        && (
+          ownsStore(storeId)
+          || (
+            exists(/databases/$(database)/documents/store_secrets/$(storeId))
+            && get(/databases/$(database)/documents/store_secrets/$(storeId)).data.get('ownerId', '') == request.auth.uid
+          )
+        );
+    }
+
+    function promoFieldsSafe() {
+      return !incoming().diff(resource.data).affectedKeys().hasAny([
+        'usedCount', 'currentGlobalUses', 'status'
+      ]) || roleHasPageAccess('promoCodes');
+    }
+
+    function orderStatusTransitionAllowed() {
+      return roleHasPageAccess('orders')
+        || (
+          ownsStore(resource.data.storeId)
+          && incoming().diff(resource.data).affectedKeys().hasOnly([
+            'status', 'updatedAt', 'rejectionReason', 'returnReason'
+          ])
+        );
     }
 
     match /admins/{adminId} {
       allow read: if isOwner(adminId) || isDashboardStaff();
       allow write: if isDashboardStaff() && adminDoc().role == 'owner';
+    }
+
+    match /auth_secrets/{secretId} {
+      allow read, write: if false;
     }
 
     match /customers/{customerId} {
@@ -84,10 +179,8 @@ service cloud.firestore {
       allow create: if isSignedIn() && (
         isOwner(customerId) ||
         incoming().get('authUid', request.auth.uid) == request.auth.uid
-      );
-      allow update: if isCustomerSelf(customerId)
-        || roleHasPageAccess('customers')
-        || canLinkCustomerAuthUid();
+      ) && !incoming().keys().hasAny(['password']);
+      allow update: if customerSelfProfileUpdate() || roleHasPageAccess('customers');
       allow delete: if roleHasPageAccess('customers');
     }
 
@@ -95,54 +188,93 @@ service cloud.firestore {
       allow read, write: if isOwner(userId) || roleHasPageAccess('settings');
     }
 
-    match /stores/{storeId} {
+    /** Public catalog — safe fields only; synced from stores via Cloud Functions (Admin SDK). */
+    match /stores_public/{storeId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update: if isOwner(storeId) || roleHasPageAccess('stores');
+      allow write: if false;
+    }
+
+    match /stores/{storeId} {
+      allow get, list: if ownsStore(storeId)
+        || roleHasPageAccess('stores')
+        || roleHasPageAccess('payouts');
+      allow create: if isSignedIn()
+        && incoming().get('ownerId', request.auth.uid) == request.auth.uid
+        && storeOwnerSafeCreate();
+      allow update: if (ownsStore(storeId) && storeOwnerProfileUpdate())
+        || roleHasPageAccess('stores');
       allow delete: if roleHasPageAccess('stores');
+    }
+
+    match /store_secrets/{storeId} {
+      allow read: if ownsStoreSecrets(storeId)
+        || roleHasPageAccess('stores')
+        || roleHasPageAccess('payouts');
+      allow create: if ownsStore(storeId)
+        && incoming().storeId == storeId
+        && incoming().get('ownerId', request.auth.uid) == request.auth.uid;
+      allow update: if ownsStoreSecrets(storeId)
+        || roleHasPageAccess('stores')
+        || roleHasPageAccess('payouts');
+      allow delete: if roleHasPageAccess('stores') && adminDoc().role == 'owner';
     }
 
     match /products/{productId} {
       allow read: if true;
       allow create: if isSignedIn() && (
-        incoming().storeId == request.auth.uid || roleHasPageAccess('products')
+        ownsStore(incoming().storeId) || roleHasPageAccess('products')
       );
-      allow update, delete: if isSignedIn()
-        && (resource.data.storeId == request.auth.uid || roleHasPageAccess('products'));
+      allow update: if isSignedIn() && (
+        ownsStore(resource.data.storeId) ||
+        roleHasPageAccess('products')
+      );
+      allow delete: if isSignedIn()
+        && (ownsStore(resource.data.storeId) || roleHasPageAccess('products'));
     }
 
     match /orders/{orderId} {
       allow get: if isSignedIn() && (
-        resource.data.customerId == request.auth.uid ||
-        resource.data.storeId == request.auth.uid ||
-        (
-          exists(/databases/$(database)/documents/customers/$(resource.data.customerId))
-          && get(/databases/$(database)/documents/customers/$(resource.data.customerId)).data.get('authUid', '') == request.auth.uid
-        ) ||
+        ownsCustomerId(resource.data.customerId) ||
+        ownsStore(resource.data.storeId) ||
         roleHasPageAccess('orders')
       );
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() && incoming().customerId == request.auth.uid;
-      allow update: if isSignedIn() && (
-        roleHasPageAccess('orders') ||
-        (resource.data.storeId == request.auth.uid
-          && incoming().diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-        (resource.data.customerId == request.auth.uid
-          && incoming().diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
+      allow list: if isSignedIn() && (
+        ownsCustomerId(resource.data.customerId) ||
+        ownsStore(resource.data.storeId) ||
+        roleHasPageAccess('orders')
       );
+      // All order creation goes through placeOrderSecure (Admin SDK) — no client writes.
+      allow create: if false;
+      allow update: if isSignedIn() && orderStatusTransitionAllowed();
       allow delete: if roleHasPageAccess('orders');
+    }
+
+    function storeReviewCreateAllowed(reviewId) {
+      return isSignedIn()
+        && ownsCustomerId(incoming().customerId)
+        && incoming().storeId is string
+        && incoming().storeId != ''
+        && reviewId == incoming().storeId + '_' + request.auth.uid
+        && !exists(/databases/$(database)/documents/store_reviews/$(reviewId));
     }
 
     match /store_reviews/{reviewId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() || roleHasPageAccess('reviews');
-      allow delete: if roleHasPageAccess('reviews');
+      allow create: if roleHasPageAccess('reviews') || storeReviewCreateAllowed(reviewId);
+      allow update: if ownsCustomerId(resource.data.customerId) || roleHasPageAccess('reviews');
+      allow delete: if roleHasPageAccess('reviews') || ownsCustomerId(resource.data.customerId);
+    }
+
+    match /product_reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isSignedIn() && ownsCustomerId(incoming().customerId);
+      allow update: if ownsCustomerId(resource.data.customerId) || roleHasPageAccess('reviews');
+      allow delete: if roleHasPageAccess('reviews') || ownsCustomerId(resource.data.customerId);
     }
 
     match /notifications/{notificationId} {
       allow read: if notificationBelongsToUser() || roleHasPageAccess('broadcast');
-      allow create: if isSignedIn();
+      allow create: if canCreateNotification();
       allow update: if notificationBelongsToUser() || roleHasPageAccess('broadcast');
       allow delete: if roleHasPageAccess('broadcast');
     }
@@ -154,53 +286,93 @@ service cloud.firestore {
 
     match /flash_sale_requests/{requestId} {
       allow read: if isSignedIn()
-        && (resource.data.storeId == request.auth.uid || roleHasPageAccess('flashSales'));
-      allow create: if isSignedIn() && incoming().storeId == request.auth.uid;
+        && (ownsStore(resource.data.storeId) || roleHasPageAccess('flashSales'));
+      allow create: if isSignedIn() && ownsStore(incoming().storeId);
       allow update, delete: if roleHasPageAccess('flashSales');
     }
 
     match /promo_codes/{codeId} {
-      allow read: if true;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() || roleHasPageAccess('promoCodes');
-      allow delete: if roleHasPageAccess('promoCodes');
+      allow get: if isSignedIn() && (
+        roleHasPageAccess('promoCodes')
+        || ownsStore(resource.data.storeId)
+        || (
+          resource.data.get('ownerCustomerId', '') != ''
+          && ownsCustomerId(resource.data.ownerCustomerId)
+        )
+      );
+      allow list: if isSignedIn() && (
+        roleHasPageAccess('promoCodes')
+        || ownsStore(resource.data.storeId)
+        || (
+          resource.data.get('ownerCustomerId', '') != ''
+          && ownsCustomerId(resource.data.ownerCustomerId)
+        )
+      );
+      allow create: if isSignedIn() && (
+        roleHasPageAccess('promoCodes') || ownsStore(incoming().storeId)
+      );
+      allow update: if roleHasPageAccess('promoCodes')
+        || (ownsStore(resource.data.storeId) && promoFieldsSafe());
+      allow delete: if roleHasPageAccess('promoCodes') || ownsStore(resource.data.storeId);
     }
 
     match /promoCodes/{codeId} {
-      allow read: if true;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() || roleHasPageAccess('promoCodes');
-      allow delete: if roleHasPageAccess('promoCodes');
+      allow get: if isSignedIn() && (
+        roleHasPageAccess('promoCodes')
+        || ownsStore(resource.data.storeId)
+        || (
+          resource.data.get('ownerCustomerId', '') != ''
+          && ownsCustomerId(resource.data.ownerCustomerId)
+        )
+      );
+      allow list: if isSignedIn() && (
+        roleHasPageAccess('promoCodes')
+        || ownsStore(resource.data.storeId)
+        || (
+          resource.data.get('ownerCustomerId', '') != ''
+          && ownsCustomerId(resource.data.ownerCustomerId)
+        )
+      );
+      allow create: if isSignedIn() && (
+        roleHasPageAccess('promoCodes') || ownsStore(incoming().storeId)
+      );
+      allow update: if roleHasPageAccess('promoCodes')
+        || (ownsStore(resource.data.storeId) && promoFieldsSafe());
+      allow delete: if roleHasPageAccess('promoCodes') || ownsStore(resource.data.storeId);
     }
 
     match /recharge_codes/{codeId} {
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && roleHasPageAccess('rechargeCodes');
       allow create: if roleHasPageAccess('rechargeCodes');
-      allow update: if isSignedIn() || roleHasPageAccess('rechargeCodes');
-      allow delete: if roleHasPageAccess('rechargeCodes');
+      allow update, delete: if roleHasPageAccess('rechargeCodes');
     }
 
     match /payoutRequests/{requestId} {
       allow read: if isSignedIn()
-        && (resource.data.merchantId == request.auth.uid || roleHasPageAccess('payouts'));
-      allow create: if isSignedIn() && incoming().merchantId == request.auth.uid;
+        && (ownsStore(resource.data.merchantId) || roleHasPageAccess('payouts'));
+      allow create: if isSignedIn() && ownsStore(incoming().merchantId);
       allow update, delete: if roleHasPageAccess('payouts');
     }
 
     match /reels/{reelId} {
       allow read: if true;
-      allow create, update, delete: if isSignedIn();
+      allow create: if isSignedIn() && ownsStore(incoming().storeId);
+      allow update: if ownsStore(resource.data.storeId) || roleHasPageAccess('reviews');
+      allow delete: if ownsStore(resource.data.storeId) || roleHasPageAccess('reviews');
     }
 
     match /reel_comments/{commentId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update, delete: if isSignedIn() || roleHasPageAccess('reviews');
+      allow create: if isSignedIn()
+        && incoming().userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || roleHasPageAccess('reviews')
+      );
     }
 
     match /activityLogs/{logId} {
       allow read: if isSuperAdmin();
-      allow create: if isSignedIn()
+      allow create: if isDashboardStaff()
         && request.resource.data.adminUid == request.auth.uid;
       allow update, delete: if false;
     }
@@ -217,13 +389,60 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /login_attempts/{attemptId} {
+      allow read, write: if false;
+    }
+
+    match /unique_phones/{phoneKey} {
+      allow read: if false;
+      allow create: if isSignedIn()
+        && !exists(/databases/$(database)/documents/unique_phones/$(phoneKey))
+        && incoming().entityId is string
+        && (incoming().entityType == 'customer' || incoming().entityType == 'store');
+      allow update, delete: if roleHasPageAccess('customers') || roleHasPageAccess('stores');
+    }
+
+    match /unique_usernames/{usernameKey} {
+      allow read: if false;
+      allow create: if isSignedIn()
+        && !exists(/databases/$(database)/documents/unique_usernames/$(usernameKey))
+        && incoming().storeId is string;
+      allow update, delete: if roleHasPageAccess('stores');
+    }
+
+    match /blocked_phones/{phoneKey} {
+      // Signup checks a single phone key by document id (not a collection list).
+      allow get: if isSignedIn();
+      allow list: if isDashboardStaff();
+      allow create, update, delete: if roleHasPageAccess('customers') || roleHasPageAccess('stores');
+    }
+
+    match /share_rewards/{rewardId} {
+      allow read, write: if false;
+    }
+
+    match /store_audience/{storeId} {
+      match /members/{memberId} {
+        allow read: if ownsStore(storeId);
+        allow write: if false;
+      }
+    }
+
+    match /counters/{counterId} {
+      allow read, write: if false;
+    }
+
     match /test/{docId} {
-      allow read: if true;
+      allow read, write: if false;
     }
 
     match /settings/global {
       allow read: if true;
       allow write: if roleHasPageAccess('settings') || roleHasPageAccess('subscriptions');
+    }
+
+    match /settings_internal/{docId} {
+      allow read, write: if roleHasPageAccess('settings');
     }
   }
 }

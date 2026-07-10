@@ -49,7 +49,7 @@ const allFiles = [
   'src/services/otpService.ts',
   'src/lib/pushNotifications.ts',
   'src/lib/firebase.ts',
-  'src/context/AppContext.tsx',
+  'src/context/AppContext.tsx', // removed — use packages/shared/src/context/AppContext.tsx
   'src/constants.ts',
   'src/types.ts',
   'src/utils/date.ts',

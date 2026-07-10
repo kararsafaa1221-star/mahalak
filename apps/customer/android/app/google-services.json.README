@@ -1,0 +1,5 @@
+# Place the Firebase Android config for package iq.mahalak.app here:
+# apps/customer/android/app/google-services.json
+#
+# Download: Firebase Console → mahalak-0 → Project settings → Your apps →
+# Android app (iq.mahalak.app) → google-services.json
