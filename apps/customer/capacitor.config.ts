@@ -14,6 +14,9 @@ const config: CapacitorConfig = {
   android: {
     path: 'android',
   },
+  ios: {
+    path: 'ios',
+  },
   plugins: {
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],

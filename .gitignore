@@ -37,6 +37,9 @@ apps/*/.env.local
 
 # iOS (per-app)
 apps/*/ios/Pods/
+apps/*/ios/App/Pods/
 apps/*/ios/.symlinks/
+apps/*/ios/App/build/
+apps/*/ios/DerivedData/
 
 .dart_tool/
