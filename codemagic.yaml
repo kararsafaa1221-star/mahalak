@@ -1,12 +1,10 @@
 # Mahalak — Capacitor iOS (App Store)
-# Not React Native: Vite + Capacitor monorepo.
+# Capacitor 8 uses Swift Package Manager (App.xcodeproj), not CocoaPods workspace.
 #
 # Before first build in Codemagic UI:
-# 1. Team settings → Integrations → App Store Connect → add API key
-#    (name must match `integrations.app_store_connect` below)
+# 1. Team settings → Integrations → App Store Connect → add API key named "Mahalak"
 # 2. Create apps in App Store Connect with matching bundle IDs
 # 3. Set APP_STORE_APP_ID (numeric) from App Store Connect → App Information
-# 4. Commit & push this file, then click "Check for configuration files"
 
 workflows:
   customer-ios-app-store:
@@ -14,7 +12,6 @@ workflows:
     max_build_duration: 90
     instance_type: mac_mini_m2
     integrations:
-      # Must match the API key name in Codemagic → Team → Integrations
       app_store_connect: Mahalak
     environment:
       ios_signing:
@@ -23,14 +20,12 @@ workflows:
       vars:
         APP_DIR: apps/customer
         BUNDLE_ID: iq.mahalak.app
-        XCODE_WORKSPACE: App.xcworkspace
+        XCODE_PROJECT: App.xcodeproj
         XCODE_SCHEME: App
-        # Replace with App Store Connect numeric App ID
         APP_STORE_APP_ID: 0000000000
         MARKETING_VERSION: "1.0.5"
       node: 22
       xcode: latest
-      cocoapods: default
       npm: default
     scripts:
       - name: Install npm dependencies
@@ -41,29 +36,19 @@ workflows:
         script: |
           npm run build:customer
 
-      - name: Ensure iOS platform + Capacitor sync
+      - name: Capacitor sync iOS
         script: |
           cd "$APP_DIR"
-          if [ ! -d "ios/App" ]; then
-            echo "iOS project missing — adding Capacitor iOS platform"
-            npx cap add ios
-          fi
           npx cap sync ios
-
-      - name: CocoaPods install
-        script: |
-          cd "$APP_DIR/ios/App"
-          pod install --repo-update
 
       - name: Set up code signing (profiles → Xcode project)
         script: |
           xcode-project use-profiles \
-            --project "$CM_BUILD_DIR/$APP_DIR/ios/App/App.xcodeproj"
+            --project "$CM_BUILD_DIR/$APP_DIR/ios/App/$XCODE_PROJECT"
 
       - name: Set version & build number
         script: |
           cd "$CM_BUILD_DIR/$APP_DIR/ios/App"
-          # BUILD_NUMBER is provided by Codemagic
           agvtool new-marketing-version "$MARKETING_VERSION"
           agvtool new-version -all "$BUILD_NUMBER"
 
@@ -71,7 +56,7 @@ workflows:
         script: |
           cd "$CM_BUILD_DIR/$APP_DIR/ios/App"
           xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
+            --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
             --config Release
     artifacts:
@@ -87,7 +72,6 @@ workflows:
           failure: true
       app_store_connect:
         auth: integration
-        # Upload build to TestFlight / App Store Connect (does not auto-submit for review)
         submit_to_testflight: true
         submit_to_app_store: false
 
@@ -104,14 +88,12 @@ workflows:
       vars:
         APP_DIR: apps/merchant
         BUNDLE_ID: iq.mahalak.merchant
-        XCODE_WORKSPACE: App.xcworkspace
+        XCODE_PROJECT: App.xcodeproj
         XCODE_SCHEME: App
-        # Replace with App Store Connect numeric App ID
         APP_STORE_APP_ID: 0000000000
         MARKETING_VERSION: "1.0.6"
       node: 22
       xcode: latest
-      cocoapods: default
       npm: default
     scripts:
       - name: Install npm dependencies
@@ -122,24 +104,18 @@ workflows:
         script: |
           npm run build:merchant
 
-      - name: Ensure iOS platform + Capacitor sync
+      - name: Capacitor sync iOS
         script: |
           cd "$APP_DIR"
           if [ ! -d "ios/App" ]; then
-            echo "iOS project missing — adding Capacitor iOS platform"
             npx cap add ios
           fi
           npx cap sync ios
 
-      - name: CocoaPods install
-        script: |
-          cd "$APP_DIR/ios/App"
-          pod install --repo-update
-
       - name: Set up code signing (profiles → Xcode project)
         script: |
           xcode-project use-profiles \
-            --project "$CM_BUILD_DIR/$APP_DIR/ios/App/App.xcodeproj"
+            --project "$CM_BUILD_DIR/$APP_DIR/ios/App/$XCODE_PROJECT"
 
       - name: Set version & build number
         script: |
@@ -151,7 +127,7 @@ workflows:
         script: |
           cd "$CM_BUILD_DIR/$APP_DIR/ios/App"
           xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
+            --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
             --config Release
     artifacts:
