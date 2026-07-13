@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Award, Gift, Plus, RotateCcw, Save, Trash2, Wallet } from 'lucide-react';
 import {
   DEFAULT_LOYALTY_SETTINGS,
+  calcOrderDeliveryPoints,
   createLoyaltyEarnRuleId,
   createLoyaltyRedemptionId,
   formatTierResetNoteAr,
+  getOrderDeliveryEarnRule,
   resolveLoyaltySettings,
   type LoyaltyEarnRule,
   type LoyaltyRedemptionPackage,
@@ -80,6 +82,11 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
     >;
     return {
       ...settings,
+      earnRules: settings.earnRules.map((rule) =>
+        rule.type === 'order_completed'
+          ? { ...rule, pointsPer1000Iqd: settings.pointsPer1000Iqd }
+          : rule,
+      ),
       tierUpgradeBonuses: {
         silverToGold: byKey.Gold ?? 0,
         goldToPlatinum: byKey.Platinum ?? 0,
@@ -100,11 +107,44 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
   };
 
   const updateEarnRule = (id: string, patch: Partial<LoyaltyEarnRule>) => {
+    setForm((prev) => {
+      const earnRules = prev.earnRules.map((r) => (r.id === id ? { ...r, ...patch } : r));
+      const orderRule = earnRules.find((r) => r.type === 'order_completed');
+      const nextPointsPer1000 =
+        orderRule?.type === 'order_completed' && patch.pointsPer1000Iqd != null
+          ? patch.pointsPer1000Iqd
+          : prev.pointsPer1000Iqd;
+      return {
+        ...prev,
+        pointsPer1000Iqd: nextPointsPer1000,
+        earnRules,
+      };
+    });
+  };
+
+  const updateOrderDeliveryReward = (patch: {
+    enabled?: boolean;
+    pointsPer1000Iqd?: number;
+    orderDeliveryBonusPoints?: number;
+  }) => {
     setForm((prev) => ({
       ...prev,
-      earnRules: prev.earnRules.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+      pointsPer1000Iqd: patch.pointsPer1000Iqd ?? prev.pointsPer1000Iqd,
+      orderDeliveryBonusPoints: patch.orderDeliveryBonusPoints ?? prev.orderDeliveryBonusPoints,
+      earnRules: prev.earnRules.map((rule) =>
+        rule.type === 'order_completed'
+          ? {
+              ...rule,
+              enabled: patch.enabled ?? rule.enabled,
+              pointsPer1000Iqd: patch.pointsPer1000Iqd ?? prev.pointsPer1000Iqd,
+            }
+          : rule,
+      ),
     }));
   };
+
+  const orderDeliveryRule = getOrderDeliveryEarnRule(form);
+  const orderDeliveryPreview = calcOrderDeliveryPoints(15000, preview);
 
   const addRedemptionPackage = () => {
     setForm((prev) => ({
@@ -161,6 +201,51 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
       </div>
 
       <div className="p-5 space-y-8 text-right max-h-none overflow-visible">
+        {/* مكافأة استلام الطلب */}
+        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h4 className="text-xs font-black text-amber-900 flex items-center gap-2">
+              <Award size={14} className="text-amber-600" /> مكافأة استلام الطلب
+            </h4>
+            <label className="flex items-center gap-2 text-[10px] font-bold text-amber-900">
+              <input
+                type="checkbox"
+                checked={orderDeliveryRule?.enabled !== false}
+                onChange={(e) => updateOrderDeliveryReward({ enabled: e.target.checked })}
+              />
+              تفعيل مكافأة الاستلام
+            </label>
+          </div>
+          <p className="text-[10px] font-bold text-amber-800/80">
+            تُمنح النقاط تلقائياً للزبون عند تغيير حالة الطلب إلى «تم الاستلام».
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-[10px] font-bold text-amber-900/80 mb-1 block">نقاط لكل 1000 د.ع من قيمة المنتجات (بدون التوصيل)</span>
+              <input
+                type="number"
+                min={0}
+                className={smallInputClass}
+                value={form.pointsPer1000Iqd}
+                onChange={(e) => updateOrderDeliveryReward({ pointsPer1000Iqd: Number(e.target.value) || 0 })}
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] font-bold text-amber-900/80 mb-1 block">نقاط ثابتة عند كل استلام</span>
+              <input
+                type="number"
+                min={0}
+                className={smallInputClass}
+                value={form.orderDeliveryBonusPoints}
+                onChange={(e) => updateOrderDeliveryReward({ orderDeliveryBonusPoints: Number(e.target.value) || 0 })}
+              />
+            </label>
+          </div>
+          <p className="text-[10px] font-bold text-amber-900 bg-white/70 border border-amber-100 rounded-xl px-3 py-2">
+            مثال: منتجات بقيمة 15,000 د.ع وتوصيل 5,000 د.ع يمنح الزبون <span className="font-black">{orderDeliveryPreview}</span> نقطة عند الاستلام (بدون احتساب التوصيل).
+          </p>
+        </div>
+
         {/* أرقام أساسية */}
         <div>
           <h4 className="text-xs font-black text-slate-800 mb-3 flex items-center gap-2">
@@ -168,7 +253,6 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
           </h4>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {[
-              { key: 'pointsPer1000Iqd', label: 'نقطة لكل 1000 د.ع (طلب مكتمل)' },
               { key: 'signupBonusPoints', label: 'مكافأة التسجيل' },
               { key: 'shareRewardPoints', label: 'مكافأة مشاركة التطبيق' },
               { key: 'shareDailyLimit', label: 'حد المشاركة اليومي' },
@@ -314,7 +398,9 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
                     </p>
                   )}
                   {rule.type === 'order_completed' && (
-                    <input type="number" className={smallInputClass} value={rule.pointsPer1000Iqd ?? form.pointsPer1000Iqd} onChange={(e) => updateEarnRule(rule.id, { pointsPer1000Iqd: Number(e.target.value) || 0 })} placeholder="لكل 1000 د.ع" />
+                    <p className="col-span-3 text-[9px] font-bold text-slate-500 bg-white border border-slate-100 rounded-lg px-2.5 py-2">
+                      تُعدَّل نقاط استلام الطلب من قسم «مكافأة استلام الطلب» أعلاه.
+                    </p>
                   )}
                   {rule.type === 'share_app' && (
                     <input type="number" className={smallInputClass} value={rule.dailyLimit ?? form.shareDailyLimit} onChange={(e) => updateEarnRule(rule.id, { dailyLimit: Number(e.target.value) || 0 })} placeholder="حد يومي" />

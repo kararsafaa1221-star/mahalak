@@ -1,0 +1,62 @@
+/* Merchant app — LocationPicker map GPS button & hidden attribution */
+.mahalak-location-picker-map .leaflet-control-attribution {
+  display: none !important;
+}
+
+.mahalak-location-picker-map .leaflet-bottom.leaflet-right {
+  bottom: 0.4rem;
+  right: 0.4rem;
+}
+
+.mahalak-location-picker-map .leaflet-bottom.leaflet-right .leaflet-control {
+  margin: 0 !important;
+}
+
+.mahalak-gps-control {
+  margin: 0 !important;
+  clear: both;
+}
+
+.mahalak-gps-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  border-radius: 9999px;
+  border: 2px solid #ffffff;
+  background: linear-gradient(90deg, #7b3dff 0%, #0b1320 100%);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.75rem;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  font-family: inherit;
+}
+
+.mahalak-gps-button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.mahalak-gps-button:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.mahalak-gps-button:disabled,
+.mahalak-gps-button.is-loading {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.mahalak-gps-button svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.mahalak-gps-button.is-loading svg {
+  animation: pulse 1.5s ease-in-out infinite;
+}

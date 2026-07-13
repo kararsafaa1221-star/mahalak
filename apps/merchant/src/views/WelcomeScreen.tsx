@@ -1,9 +1,39 @@
 import React, { useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, MapPinned, LayoutDashboard, TrendingUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '@shared/context/useApp';
-import { MahalakLogo } from '@shared/components/MahalakLogo';
+import { WelcomeScreenBackground } from '@shared/components/WelcomeScreenBackground';
+import { WelcomeScreenLogo } from '@shared/components/WelcomeScreenLogo';
+import {
+  welcomeIconVariants,
+  welcomeSlideItemVariants,
+  welcomeSlideVariants,
+} from '@shared/components/welcomeScreenMotion';
+
+const WELCOME_SLIDES = [
+  {
+    title: 'توسيع نطاق العمل',
+    question: 'ليش تبقى محصور بزبائن محلك وبس؟',
+    answer:
+      'وية «محلك»، محلك راح يوصل لكل العراق! افتح باب رزقك للكل، وخلّي بضاعتك تنعرض وتنباع للزبائن بكل المحافظات، وأنت بمكانك وبدون تعب.',
+    Icon: MapPinned,
+  },
+  {
+    title: 'تنظيم الإدارة',
+    question: 'تعبت من السجلات، الورقة والقلم، والدوخة بطلبات الزبائن؟',
+    answer:
+      '«محلك» يخلي إدارتك أسهل بـ 180 درجة. كل طلباتك، ومخزنك، وحساباتك بمكان واحد، منظمة وبشكل ذكي يخليك تتابع شغلك وتعرف أرباحك بضغطة زر.',
+    Icon: LayoutDashboard,
+  },
+  {
+    title: 'النمو والنجاح',
+    question: 'تريد تكبّر تجارتك وتزيد مبيعاتك بأقل مجهود؟',
+    answer:
+      'إحنا وياك خطوة بخطوة. وية «محلك» راح تكسب زبائن جدد يومية، وتطور تجارتك بطريقة حديثة ومحترفة تضمن لك الاستمرارية والأرباح.',
+    Icon: TrendingUp,
+  },
+] as const;
 
 export const WelcomeScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -12,8 +42,11 @@ export const WelcomeScreen: React.FC = () => {
 
   if (currentMerchant) return <Navigate to="/dashboard" replace />;
 
+  const slide = WELCOME_SLIDES[step - 1];
+  const SlideIcon = slide.Icon;
+
   const handleNext = () => {
-    if (step < 3) {
+    if (step < WELCOME_SLIDES.length) {
       setStep(step + 1);
     } else {
       navigate('/dashboard');
@@ -21,80 +54,71 @@ export const WelcomeScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-mahalak-gradient flex flex-col items-center justify-center p-6 text-center relative overflow-hidden text-white" dir="rtl">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] right-[-10%] w-96 h-96 bg-vibrant-purple/20 rounded-full blur-[100px]"></div>
-        <div className="absolute bottom-[-10%] left-[-10%] w-96 h-96 bg-violet/20 rounded-full blur-[100px]"></div>
-      </div>
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center relative overflow-hidden text-white bg-deep-navy" dir="rtl">
+      <WelcomeScreenBackground />
 
       <div className="relative z-10 max-w-lg w-full flex flex-col items-center">
-        <motion.div
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.5, type: 'spring' }}
-          className="mb-8"
-        >
-          <MahalakLogo className="mb-2 h-48 w-48 object-contain md:h-60 md:w-60" />
-        </motion.div>
+        <WelcomeScreenLogo step={step} />
 
         <div className="w-full mb-10">
           <AnimatePresence mode="wait">
-            {step === 1 && (
+            <motion.div
+              key={step}
+              variants={welcomeSlideVariants}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-3xl p-6 md:p-8 shadow-2xl text-right"
+            >
               <motion.div
-                key="step1"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                transition={{ duration: 0.3 }}
-                className="bg-white/5 border border-white/10 backdrop-blur-md rounded-3xl p-6 md:p-8 shadow-2xl"
+                variants={welcomeIconVariants}
+                className="welcome-icon-pulse mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl text-white bg-brand-horizontal border border-white shadow-brand-glow-lg"
               >
-                <p className="text-slate-300 text-base md:text-lg leading-relaxed font-medium whitespace-pre-line">
-                  تريد توسّع مشروعك وتصل لزبائن جدد من منطقتك؟
-                  ويا 'منصة محلك' متجرك يصير أونلاين بخطوات بسيطة! إحنا المنصة الذكية الأولى بالعراق اللي تجمع الزبائن بأقرب المتاجر. استقبل طلبات، زيد مبيعاتك، وكبّر مشروعك هسة!
-                </p>
+                <SlideIcon size={32} strokeWidth={2.2} aria-hidden />
               </motion.div>
-            )}
 
-            {step === 2 && (
-              <motion.div
-                key="step2"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                transition={{ duration: 0.3 }}
-                className="bg-white/5 border border-white/10 backdrop-blur-md rounded-3xl p-6 md:p-8 shadow-2xl"
+              <motion.p
+                variants={welcomeSlideItemVariants}
+                className="text-[11px] font-black uppercase tracking-widest text-violet-300/90 mb-3 text-center"
               >
-                <p className="text-slate-300 text-base md:text-lg leading-relaxed font-medium whitespace-pre-line">
-                  تريد إدارة سهلة وعروض تلفت الزبائن؟
-                  ويا 'محلك' تقدر تنشر منتجاتك، تعمل خصومات وأكواد ترويجية، وتوصل إشعارات لزبائنك. كل طلب يوصلك فوراً وتقدر تتابع مبيعاتك من لوحة واحدة!
-                </p>
-              </motion.div>
-            )}
+                {slide.title}
+              </motion.p>
 
-            {step === 3 && (
-              <motion.div
-                key="step3"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                transition={{ duration: 0.3 }}
-                className="bg-white/5 border border-white/10 backdrop-blur-md rounded-3xl p-6 md:p-8 shadow-2xl"
+              <motion.h2
+                variants={welcomeSlideItemVariants}
+                className="text-white text-lg md:text-xl font-black leading-snug mb-4 text-center"
               >
-                <p className="text-slate-300 text-base md:text-lg leading-relaxed font-medium whitespace-pre-line">
-                  جاهز تغير طريقة تسويقك أو تكبّر مشروعك وتزيد مبيعاتك؟
-                  الخطوة يمك هسة! سجّل حسابك كتاجر وانطلق ويانا بأول منصة رقمية عراقية تخدم منطقتك وتدعم تجارتنا المحلية. خلينا نبلش!
-                </p>
-              </motion.div>
-            )}
+                {slide.question}
+              </motion.h2>
+
+              <motion.p
+                variants={welcomeSlideItemVariants}
+                className="text-slate-300 text-base md:text-[17px] leading-relaxed font-medium"
+              >
+                {slide.answer}
+              </motion.p>
+            </motion.div>
           </AnimatePresence>
         </div>
 
-        <div className="flex items-center justify-center space-x-2 space-x-reverse mb-8">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className={`h-2 rounded-full transition-all duration-300 ${step === i ? 'w-8 bg-indigo-500' : 'w-2 bg-slate-700'}`}
-            />
+        <div className="flex items-center justify-center gap-2 mb-8">
+          {WELCOME_SLIDES.map((_, i) => (
+            <div key={i} className="relative flex items-center justify-center">
+              {step === i + 1 && (
+                <motion.span
+                  className="absolute h-2 w-8 rounded-full bg-indigo-400"
+                  animate={{ scale: [1, 2.5], opacity: [0.7, 0] }}
+                  transition={{ duration: 1, repeat: Infinity, ease: 'easeOut' }}
+                  aria-hidden
+                />
+              )}
+              <motion.div
+                layout
+                className={`relative h-2 rounded-full ${step === i + 1 ? 'bg-indigo-400 shadow-[0_0_20px_rgba(129,140,248,0.9)]' : 'bg-slate-700'}`}
+                animate={{ width: step === i + 1 ? 36 : 8 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 24 }}
+              />
+            </div>
           ))}
         </div>
 
@@ -126,9 +150,9 @@ export const WelcomeScreen: React.FC = () => {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={handleNext}
-            className="flex-1 bg-white text-slate-900 flex items-center justify-center space-x-3 space-x-reverse px-8 py-4 rounded-xl font-black text-lg shadow-[0_0_40px_rgba(255,255,255,0.3)] hover:shadow-[0_0_60px_rgba(255,255,255,0.5)] transition-all whitespace-nowrap group"
+            className="welcome-btn-pulse flex-1 bg-brand-horizontal text-white flex items-center justify-center space-x-3 space-x-reverse px-8 py-4 rounded-xl font-black text-lg transition-all whitespace-nowrap group"
           >
-            <motion.span layout>{step < 3 ? 'التالي' : 'للبدء'}</motion.span>
+            <motion.span layout>{step < WELCOME_SLIDES.length ? 'التالي' : 'للبدء'}</motion.span>
             <ArrowLeft size={20} className="group-hover:-translate-x-1 transition-transform" />
           </motion.button>
         </motion.div>

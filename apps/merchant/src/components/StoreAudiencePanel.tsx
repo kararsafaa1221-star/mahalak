@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { memo, useMemo } from "react";
 import {
   BellRing,
   ClipboardList,
@@ -93,7 +93,7 @@ type StoreAudiencePanelProps = {
   onSendGift: (customerId: string, customerName: string) => void;
 };
 
-export const StoreAudiencePanel: React.FC<StoreAudiencePanelProps> = ({
+export const StoreAudiencePanel = memo(function StoreAudiencePanel({
   storeId,
   customers,
   orders,
@@ -102,7 +102,7 @@ export const StoreAudiencePanel: React.FC<StoreAudiencePanelProps> = ({
   getCustomerSeqId,
   onSelectCustomer,
   onSendGift,
-}) => {
+}) {
   const stats = useMemo(
     () => getStoreAudienceStats(storeId, customers, orders),
     [storeId, customers, orders],
@@ -225,4 +225,4 @@ export const StoreAudiencePanel: React.FC<StoreAudiencePanelProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Navigation, AlertTriangle, Check } from "lucide-react";
+import { AlertTriangle, Check } from "lucide-react";
 import {
   MapContainer,
   TileLayer,
@@ -29,6 +29,7 @@ interface LocationPickerProps {
   label?: string;
   labelClassName?: string;
   hintClassName?: string;
+  inputClassName?: string;
   height?: string;
 }
 
@@ -73,6 +74,60 @@ function LocationMarker({
   return position === null ? null : <Marker position={position}></Marker>;
 }
 
+const GPS_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 11 22 2 13 21 11 13 3 11"></polygon></svg>`;
+
+function GpsLocateControl({
+  onLocate,
+  isLoading,
+}: {
+  onLocate: () => void;
+  isLoading: boolean;
+}) {
+  const map = useMap();
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const onLocateRef = useRef(onLocate);
+  onLocateRef.current = onLocate;
+
+  useEffect(() => {
+    const control = L.control({ position: "bottomright" });
+    const container = L.DomUtil.create("div", "mahalak-gps-control") as HTMLDivElement;
+    const button = L.DomUtil.create("button", "mahalak-gps-button", container) as HTMLButtonElement;
+
+    button.type = "button";
+    button.title = "تحديد موقعي الحالي";
+    button.innerHTML = `${GPS_ICON_SVG}<span>تحديد موقعي (GPS)</span>`;
+
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.disableScrollPropagation(container);
+    L.DomEvent.on(button, "click", (event) => {
+      L.DomEvent.preventDefault(event);
+      L.DomEvent.stopPropagation(event);
+      if (!button.disabled) {
+        onLocateRef.current();
+      }
+    });
+
+    control.onAdd = () => container;
+    control.addTo(map);
+    buttonRef.current = button;
+
+    return () => {
+      L.DomEvent.off(button);
+      buttonRef.current = null;
+      control.remove();
+    };
+  }, [map]);
+
+  useEffect(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+    button.disabled = isLoading;
+    button.classList.toggle("is-loading", isLoading);
+  }, [isLoading]);
+
+  return null;
+}
+
 export const LocationPicker: React.FC<LocationPickerProps> = ({
   onLocationSelect,
   initialLat,
@@ -81,6 +136,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
   label = "تحديد الموقع على الخريطة",
   labelClassName = "block text-xs font-bold text-gray-500 mb-1",
   hintClassName = "text-[10px] text-gray-400 font-bold text-center mb-1",
+  inputClassName = "text-white",
   height = "h-64",
 }) => {
   const [position, setPosition] = useState<{ lat: number; lng: number } | null>(
@@ -230,7 +286,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && searchLocation()}
-          className="flex-1 px-3 py-2 border rounded-xl text-sm focus:outline-none focus:border-indigo-500"
+          className={`flex-1 px-3 py-2 border rounded-xl text-sm focus:outline-none focus:border-indigo-500 ${inputClassName}`}
         />
         <button 
           type="button"
@@ -242,53 +298,41 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         </button>
       </div>
 
-      <div
-        className={`w-full ${height} rounded-2xl overflow-hidden border-2 relative transition-all ${
-          position 
-            ? "border-indigo-400 shadow-md" 
-            : required && !isLoading 
-              ? "border-red-300 bg-red-50/10 animate-pulse" 
-              : "border-gray-200"
-        }`}
-      >
-        <MapContainer
-          center={
-            position
-              ? [position.lat, position.lng]
-              : [defaultCenter.lat, defaultCenter.lng]
-          }
-          zoom={position ? 15 : 11}
-          style={{ height: "100%", width: "100%", zIndex: 10 }}
+      <div className="relative w-full">
+        <div
+          className={`mahalak-location-picker-map w-full ${height} rounded-2xl overflow-hidden border-2 transition-all ${
+            position 
+              ? "border-indigo-400 shadow-md" 
+              : required && !isLoading 
+                ? "border-red-300 bg-red-50/10 animate-pulse" 
+                : "border-gray-200"
+          }`}
         >
-          <TileLayer
-            attribution='&amp;copy <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          <LocationMarker
-            position={position}
-            setPosition={setPosition}
-            setAddress={setAddress}
-            onLocationSelect={onLocationSelect}
-          />
-        </MapContainer>
-
-        {/* زر تحديد الموقع داخل الخريطة */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            getCurrentLocation();
-          }}
-          disabled={isLoading}
-          className="absolute bottom-4 right-4 z-[400] bg-white px-4 py-2 rounded-2xl shadow-[0_4px_12px_rgba(0,0,0,0.15)] border-2 border-indigo-100 text-deep-navy hover:bg-indigo-50 hover:border-indigo-200 focus:outline-none transition-all active:scale-95 flex items-center justify-center gap-2 font-bold text-xs"
-          title="تحديد موقعي الحالي"
-        >
-          <Navigation size={18} className={isLoading ? "animate-pulse" : ""} fill={position ? "currentColor" : "none"} />
-          <span>تحديد موقعي (GPS)</span>
-        </button>
+          <MapContainer
+            center={
+              position
+                ? [position.lat, position.lng]
+                : [defaultCenter.lat, defaultCenter.lng]
+            }
+            zoom={position ? 15 : 11}
+            attributionControl={false}
+            style={{ height: "100%", width: "100%" }}
+          >
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            <LocationMarker
+              position={position}
+              setPosition={setPosition}
+              setAddress={setAddress}
+              onLocationSelect={onLocationSelect}
+            />
+            <GpsLocateControl onLocate={getCurrentLocation} isLoading={isLoading} />
+          </MapContainer>
+        </div>
 
         {isLoading && (
-          <div className="absolute inset-0 bg-white/50 backdrop-blur-sm flex flex-col items-center justify-center z-[500]">
+          <div className={`absolute inset-0 ${height} rounded-2xl bg-white/50 backdrop-blur-sm flex flex-col items-center justify-center z-[1002] pointer-events-none`}>
             <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-2"></div>
             <span className="text-xs font-bold text-indigo-600 shadow-sm">
               جارٍ تحديد موقعك...
@@ -302,13 +346,13 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       </p>
 
       {position && (
-        <div className="bg-green-50 border border-green-200 p-3 rounded-xl flex items-start gap-2">
-          <Check size={16} className="text-green-600 shrink-0 mt-0.5" />
+        <div className="bg-gradient-to-r from-vibrant-purple to-deep-navy border border-[#FFF700] text-[#FFF700] p-3 rounded-xl flex items-start gap-2">
+          <Check size={16} className="text-[#FFF700] shrink-0 mt-0.5" />
           <div>
-            <p className="text-xs font-bold text-green-700 mb-0.5">
+            <p className="text-xs font-bold text-[#FFF700] mb-0.5">
               تم تحديد الموقع!
             </p>
-            <p className="text-[10px] text-green-600 leading-tight line-clamp-2">
+            <p className="text-[10px] text-white leading-tight line-clamp-2">
               {address}
             </p>
           </div>

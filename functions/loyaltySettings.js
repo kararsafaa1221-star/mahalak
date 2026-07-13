@@ -2,6 +2,7 @@
 
 const DEFAULT_LOYALTY = {
   pointsPer1000Iqd: 1,
+  orderDeliveryBonusPoints: 0,
   signupBonusPoints: 50,
   shareRewardPoints: 5,
   shareDailyLimit: 10,
@@ -81,6 +82,50 @@ function mergePackages(raw) {
     }));
 }
 
+function mergeEarnRules(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [{ id: "earn_order", type: "order_completed", enabled: true, pointsPer1000Iqd: 1 }];
+  }
+  return raw
+    .filter((r) => r && r.id && r.type)
+    .map((r) => ({
+      id: String(r.id),
+      type: String(r.type),
+      enabled: r.enabled !== false,
+      pointsPer1000Iqd: r.pointsPer1000Iqd != null ? Number(r.pointsPer1000Iqd) || 0 : undefined,
+    }));
+}
+
+function getOrderDeliveryEarnRule(loyalty) {
+  return (loyalty.earnRules || []).find((rule) => rule.type === "order_completed");
+}
+
+function isOrderDeliveryRewardEnabled(loyalty) {
+  const rule = getOrderDeliveryEarnRule(loyalty);
+  return rule ? rule.enabled !== false : true;
+}
+
+function getOrderDeliveryPointsPer1000(loyalty) {
+  const rule = getOrderDeliveryEarnRule(loyalty);
+  return rule?.pointsPer1000Iqd ?? loyalty.pointsPer1000Iqd ?? 0;
+}
+
+function calcOrderDeliveryPoints(orderTotal, loyalty) {
+  if (!isOrderDeliveryRewardEnabled(loyalty)) return 0;
+  const per1000 = getOrderDeliveryPointsPer1000(loyalty);
+  const volumePoints = Math.floor((orderTotal || 0) / 1000) * (per1000 || 0);
+  const fixedBonus = Math.max(0, Number(loyalty.orderDeliveryBonusPoints) || 0);
+  return volumePoints + fixedBonus;
+}
+
+/** Product subtotal for loyalty points — delivery fees are excluded. */
+function getOrderPointsEligibleAmount(order) {
+  const subtotal = Number(order?.subtotal);
+  if (Number.isFinite(subtotal) && subtotal >= 0) return subtotal;
+  const total = Number(order?.total);
+  return Number.isFinite(total) && total >= 0 ? total : 0;
+}
+
 function resolveLoyaltySettings(globalData) {
   const raw = globalData?.loyaltyWallet;
   if (!raw || typeof raw !== "object") {
@@ -88,6 +133,7 @@ function resolveLoyaltySettings(globalData) {
       ...DEFAULT_LOYALTY,
       tiers: DEFAULT_LOYALTY.tiers.map((t) => ({ ...t })),
       redemptionPackages: [...DEFAULT_LOYALTY.redemptionPackages],
+      earnRules: [{ id: "earn_order", type: "order_completed", enabled: true, pointsPer1000Iqd: 1 }],
     };
   }
 
@@ -100,6 +146,7 @@ function resolveLoyaltySettings(globalData) {
 
   return {
     pointsPer1000Iqd: Number(raw.pointsPer1000Iqd ?? DEFAULT_LOYALTY.pointsPer1000Iqd),
+    orderDeliveryBonusPoints: Number(raw.orderDeliveryBonusPoints ?? DEFAULT_LOYALTY.orderDeliveryBonusPoints),
     signupBonusPoints: Number(raw.signupBonusPoints ?? DEFAULT_LOYALTY.signupBonusPoints),
     shareRewardPoints: Number(raw.shareRewardPoints ?? DEFAULT_LOYALTY.shareRewardPoints),
     shareDailyLimit: Number(raw.shareDailyLimit ?? DEFAULT_LOYALTY.shareDailyLimit),
@@ -111,6 +158,7 @@ function resolveLoyaltySettings(globalData) {
     redemptionBaseDiscountIqd: Number(raw.redemptionBaseDiscountIqd ?? DEFAULT_LOYALTY.redemptionBaseDiscountIqd),
     tiers,
     redemptionPackages: mergePackages(raw.redemptionPackages),
+    earnRules: mergeEarnRules(raw.earnRules),
   };
 }
 
@@ -187,6 +235,13 @@ function isValidRedemptionPoints(points, loyalty) {
   return Number.isFinite(points) && points >= minPts;
 }
 
+function buildOrderDeliveryRewardMessage(totalPoints) {
+  if (totalPoints > 0) {
+    return `حصلت تلقائياً على +${totalPoints} نقطة كمكافأة استلام طلبك!`;
+  }
+  return "تم استلام طلبك بنجاح.";
+}
+
 module.exports = {
   DEFAULT_LOYALTY,
   resolveLoyaltySettings,
@@ -197,4 +252,8 @@ module.exports = {
   calcTierBonus,
   calcRedemptionDiscount,
   isValidRedemptionPoints,
+  calcOrderDeliveryPoints,
+  isOrderDeliveryRewardEnabled,
+  buildOrderDeliveryRewardMessage,
+  getOrderPointsEligibleAmount,
 };

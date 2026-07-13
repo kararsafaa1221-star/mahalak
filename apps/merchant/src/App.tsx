@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from '@shared/context/AppContext';
+import { StorageService } from '@shared/services/storageService';
 import { useApp } from '@shared/context/useApp';
 import { MerchantApp } from './views/MerchantApp';
 import { WelcomeScreen } from './views/WelcomeScreen';
@@ -36,7 +37,7 @@ const StatusIndicator: React.FC = () => {
 };
 
 const MerchantRoutes: React.FC = () => {
-  const { currentMerchant } = useApp();
+  const { currentMerchant, authInitialized } = useApp();
   const [foregroundNotification, setForegroundNotification] = useState<{ title: string; body: string } | null>(null);
 
   useAndroidBackButton();
@@ -67,14 +68,21 @@ const MerchantRoutes: React.FC = () => {
           <div className="bg-white rounded-2xl shadow-2xl p-4 border flex items-start gap-4">
             <Bell size={24} className="text-indigo-600 mt-1" />
             <div className="flex-1">
-              <h4 className="font-black text-sm">{foregroundNotification.title}</h4>
-              <p className="text-xs text-slate-500">{foregroundNotification.body}</p>
+              <h4 className="text-base font-black text-slate-900 mb-1 leading-snug">{foregroundNotification.title}</h4>
+              <p className="text-sm text-slate-500 font-normal leading-relaxed">{foregroundNotification.body}</p>
             </div>
           </div>
         </div>
       )}
       <Routes>
-        <Route path="/" element={currentMerchant ? <Navigate to="/dashboard" replace /> : <WelcomeScreen />} />
+        <Route
+          path="/"
+          element={
+            currentMerchant || (authInitialized && StorageService.get('LOGGED_IN_MERCHANT_ID'))
+              ? <Navigate to="/dashboard" replace />
+              : <WelcomeScreen />
+          }
+        />
         <Route path="/about" element={<AboutUs />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/dashboard/*" element={<MerchantApp />} />

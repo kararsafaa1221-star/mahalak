@@ -25,6 +25,15 @@
 
         </activity>
 
+        <!-- OneSignal: use the custom white-silhouette icon for push notifications -->
+        <meta-data
+            android:name="com.onesignal.NotificationIcon"
+            android:resource="@drawable/ic_stat_onesignal_default" />
+        <!-- Accent color for the merchant app (brand dark-navy/deep blue) -->
+        <meta-data
+            android:name="com.onesignal.NotificationAccentColor"
+            android:value="FF0B1320" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

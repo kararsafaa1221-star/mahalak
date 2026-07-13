@@ -3,6 +3,8 @@ import React, { createContext, useState, useEffect, ReactNode, useCallback, useM
 import { motion } from 'motion/react';
 import { StorageService } from '@shared/services/storageService';
 import { isStoreSubscriptionActive } from '@shared/utils/store';
+import { sanitizeStoreThemeForFirestore } from '@shared/utils/storeTheme';
+import { prefetchImageUrls } from '@shared/utils/prefetchImages';
 import { db, auth, uploadProductImageStorage, app, mahalakFunctions } from '@shared/lib/firebase';
 import { 
   collection, 
@@ -11,13 +13,16 @@ import {
   updateDoc, 
   deleteDoc, 
   getDocFromServer,
+  onSnapshot as onDocSnapshot,
   writeBatch,
   increment,
   serverTimestamp,
   query,
   where,
+  orderBy,
   getDocs,
-  limit
+  limit,
+  runTransaction,
 } from 'firebase/firestore';
 import { 
   onAuthStateChanged,
@@ -28,11 +33,17 @@ import { httpsCallable } from 'firebase/functions';
 import {
   handleFirestoreError,
   OperationType,
+  isFirestoreOfflineError,
   isFirestorePermissionDenied,
   safeGetDoc,
   safeOnSnapshot,
 } from '@shared/lib/firestoreUtils';
 import { STORES_PUBLIC_COLLECTION } from '@shared/lib/publicStore';
+
+// Catalog listener caps — prevents loading the entire platform into memory.
+// Raise these once pagination / infinite-scroll is added to the catalog.
+const APP_STORES_LIMIT    = 500;
+const APP_PRODUCTS_LIMIT  = 1000;
 import {
   mergeStoreWithSecrets,
   upsertStoreSecretsPayout,
@@ -89,6 +100,8 @@ export interface AppContextType {
   payoutRequests: PayoutRequest[];
   currentCustomer: Customer | null;
   currentMerchant: Store | null;
+  authLoading: boolean;
+  authInitialized: boolean;
   adminSettings: any;
   subscriptionPlans: SubscriptionPlan[];
   flashSales: FlashSale[];
@@ -128,6 +141,8 @@ export interface AppContextType {
   updateStoreReview: (id: string, data: Partial<StoreReview>) => Promise<void>;
   deleteStoreReview: (id: string) => Promise<void>;
   registerMerchant: (data: any) => Promise<{ success: boolean; message: string } | undefined>;
+  refreshStore: (storeId: string) => Promise<void>;
+  subscribeToStore: (storeId: string, onUpdate: (store: Store) => void) => () => void;
   updateStoreProfile: (data: Partial<Store>) => Promise<void>;
   addProduct: (data: any) => Promise<void>;
   updateProduct: (id: string, data: Partial<Product>) => Promise<void>;
@@ -182,6 +197,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [authInitialized, setAuthInitialized] = useState(false);
   /** Restore persisted customer/merchant only once on cold start — not after signOut. */
   const initialSessionRestoredRef = useRef(false);
+  const explicitSignOutRef = useRef(false);
 
   const [adminSettings, setAdminSettings] = useState(() => StorageService.get('ADMIN_SETTINGS') || { 
     autoApproveStores: true,
@@ -190,6 +206,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     nearbyStoreIds: [],
     ads: [{ id: 'ad1', type: 'image', url: 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=800', title: 'خصومات الشتاء', desc: 'احصل على خصم 50%', targetType: 'none', targetId: '' }],
     adInterval: 5,
+    merchantAdInterval: 5,
+    merchantAdsSectionOrder: ['delivery', 'media'],
     lastSyncTime: null,
     autoSubscriptionEnabled: true,
     autoSubscriptionDurationValue: 1,
@@ -266,171 +284,201 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     testConnection();
   }, []);
 
-  // Auth Observer
+  // Auth Observer — wait for Firebase persistence before restoring sessions
   useEffect(() => {
     let isMounted = true;
     const fallbackTimer = setTimeout(() => {
-      if (isMounted) setAuthLoading(false);
-    }, 5000);
-
-    // Ensure we always have an anonymous Firebase session for Firestore Security Rules
-    signInAnonymously(auth).catch((e: any) => {
-      if (e?.code === 'auth/admin-restricted-operation' || e?.code === 'auth/operation-not-allowed') {
+      if (isMounted) {
+        setAuthInitialized(true);
+        setAuthLoading(false);
       }
-    });
+    }, 8000);
+
+    const restorePersistedCustomer = async (
+      user: NonNullable<typeof auth.currentUser>,
+      suppressAuthErrors: boolean,
+    ) => {
+      const persistedCustId = StorageService.get('LOGGED_IN_CUSTOMER_ID');
+      if (!persistedCustId) return;
+
+      try {
+        let custDoc = await safeGetDoc(doc(db, 'customers', persistedCustId), {
+          suppressPermissionDenied: suppressAuthErrors,
+        });
+        if (!custDoc?.exists()) {
+          const userDoc = await safeGetDoc(doc(db, 'users', persistedCustId), {
+            suppressPermissionDenied: suppressAuthErrors,
+          });
+          if (userDoc?.exists()) custDoc = userDoc;
+        }
+
+        if (!custDoc?.exists()) return;
+
+        const data = custDoc.data() as Customer;
+        const validation = validateUserStatus(data, 'customer');
+        if (!validation.valid) {
+          StorageService.remove('LOGGED_IN_CUSTOMER_ID');
+          setCurrentCustomerState(null);
+          return;
+        }
+
+        const currentUid = user.uid;
+        if (data.authUid && data.authUid !== currentUid) {
+          // Keep stored session id — user may need to sign in again if Firebase issued a new uid.
+          return;
+        }
+
+        setCurrentCustomerState({
+          ...data,
+          id: custDoc.id,
+          authUid: currentUid,
+        });
+      } catch (e: unknown) {
+        if (!isFirestorePermissionDenied(e) && !isFirestoreOfflineError(e)) {
+          console.warn('[AppContext] restore customer session:', e);
+        }
+      }
+    };
+
+    const restorePersistedMerchant = async (
+      user: NonNullable<typeof auth.currentUser>,
+      suppressAuthErrors: boolean,
+    ) => {
+      const persistedMerchantId = StorageService.get('LOGGED_IN_MERCHANT_ID');
+      if (!persistedMerchantId) return;
+
+      try {
+        const storeDoc = await safeGetDoc(doc(db, 'stores', persistedMerchantId), {
+          suppressPermissionDenied: suppressAuthErrors,
+        });
+        if (!storeDoc?.exists()) return;
+
+        const data = storeDoc.data() as Store;
+        const validation = validateUserStatus(data, 'merchant');
+        if (!validation.valid) {
+          StorageService.remove('LOGGED_IN_MERCHANT_ID');
+          setCurrentMerchantState(null);
+          return;
+        }
+
+        const storeWithId = { ...data, id: storeDoc.id };
+        if (data.ownerId === user.uid) {
+          setCurrentMerchantState(storeWithId);
+          return;
+        }
+
+        const linked = await linkStoreToAuthSession(storeWithId);
+        if (linked) {
+          setCurrentMerchantState(linked);
+        }
+      } catch (e: unknown) {
+        if (!isFirestorePermissionDenied(e) && !isFirestoreOfflineError(e)) {
+          console.warn('[AppContext] restore merchant session:', e);
+        }
+      }
+    };
+
+    const loadCustomerFromAuthUser = async (
+      user: NonNullable<typeof auth.currentUser>,
+      suppressAuthErrors: boolean,
+    ) => {
+      try {
+        let custDoc = await safeGetDoc(doc(db, 'customers', user.uid), {
+          suppressPermissionDenied: suppressAuthErrors,
+        });
+        if (!custDoc?.exists()) {
+          const userDoc = await safeGetDoc(doc(db, 'users', user.uid), {
+            suppressPermissionDenied: suppressAuthErrors,
+          });
+          if (userDoc?.exists()) {
+            try {
+              await setDoc(doc(db, 'customers', user.uid), userDoc.data());
+            } catch {
+              // ignore migration errors
+            }
+            custDoc = userDoc;
+          }
+        }
+        if (!custDoc?.exists()) {
+          try {
+            const authUidSnap = await getDocs(
+              query(collection(db, 'customers'), where('authUid', '==', user.uid), limit(1)),
+            );
+            if (!authUidSnap.empty) {
+              custDoc = authUidSnap.docs[0];
+            }
+          } catch (e) {
+            if (!isFirestorePermissionDenied(e)) throw e;
+          }
+        }
+
+        if (custDoc?.exists()) {
+          const data = custDoc.data() as Customer;
+          const validation = validateUserStatus(data, 'customer');
+          if (validation.valid) {
+            setCurrentCustomerState({ ...data, id: custDoc.id });
+          } else if (explicitSignOutRef.current) {
+            setCurrentCustomerState(null);
+            StorageService.remove('LOGGED_IN_CUSTOMER_ID');
+          }
+        }
+      } catch (e: unknown) {
+        if (!isFirestorePermissionDenied(e) && !isFirestoreOfflineError(e)) {
+          console.warn('[AppContext] load customer from auth:', e);
+        }
+      }
+    };
+
+    const bootstrap = async () => {
+      try {
+        await auth.authStateReady();
+      } catch {
+        // ignore — onAuthStateChanged still runs
+      }
+
+      if (!auth.currentUser) {
+        try {
+          await signInAnonymously(auth);
+        } catch {
+          // anonymous session is optional for some flows
+        }
+      }
+    };
+
+    void bootstrap();
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       clearTimeout(fallbackTimer);
       if (!isMounted) return;
       setAuthLoading(true);
       const suppressAuthErrors = true;
+
       if (user) {
-        try {
-          // Try to identify if user is customer, merchant or admin
-          try {
-            let custDoc = await safeGetDoc(doc(db, 'customers', user.uid), { suppressPermissionDenied: suppressAuthErrors });
-            if (!custDoc?.exists()) {
-               // Fallback: check "users" collection if the user created it there manually
-               const userDoc = await safeGetDoc(doc(db, 'users', user.uid), { suppressPermissionDenied: suppressAuthErrors });
-               if (userDoc?.exists()) {
-                 // Auto-migrate to customers collection so the rest of the app works predictably
-                 try {
-                   await setDoc(doc(db, 'customers', user.uid), userDoc.data());
-                 } catch (migrationErr) {
-                 }
-                 custDoc = userDoc;
-               }
-            }
-            if (!custDoc?.exists()) {
-              try {
-                const authUidSnap = await getDocs(
-                  query(collection(db, 'customers'), where('authUid', '==', user.uid), limit(1)),
-                );
-                if (!authUidSnap.empty) {
-                  custDoc = authUidSnap.docs[0];
-                }
-              } catch (e) {
-                if (!isFirestorePermissionDenied(e)) throw e;
-              }
-            }
-            
-            if (custDoc?.exists()) {
-              const data = custDoc.data() as Customer;
-              
-              const validation = validateUserStatus(data, 'customer');
-              if (validation.valid) {
-                 setCurrentCustomerState({ ...data, id: custDoc.id });
-              } else {
-                 setCurrentCustomerState(null);
-                 StorageService.remove('LOGGED_IN_CUSTOMER_ID');
-              }
-            } else {
-            }
-          } catch (e: any) {
-            if (!isFirestorePermissionDenied(e)) {
-            }
-          }
+        explicitSignOutRef.current = false;
+        await loadCustomerFromAuthUser(user, suppressAuthErrors);
 
-        } catch (error: any) {
-          if (error?.message?.includes('client is offline')) {
-          } else if (!isFirestorePermissionDenied(error)) {
-          }
-          // If profile fails to load due to network or permission error, we should still stop loading
+        if (!initialSessionRestoredRef.current) {
+          initialSessionRestoredRef.current = true;
+          await restorePersistedCustomer(user, suppressAuthErrors);
+          await restorePersistedMerchant(user, suppressAuthErrors);
         }
-      } else {
+      } else if (explicitSignOutRef.current) {
         setCurrentCustomerState(null);
+        setCurrentMerchantState(null);
       }
 
-      // Restore persisted sessions only on first auth callback (cold start).
-      // Re-running on signOut used to reload the account before localStorage was cleared.
-      if (!initialSessionRestoredRef.current) {
-        initialSessionRestoredRef.current = true;
-
-        const persistedCustId = StorageService.get('LOGGED_IN_CUSTOMER_ID');
-        if (persistedCustId) {
-          try {
-            let custDoc = await safeGetDoc(doc(db, 'customers', persistedCustId), { suppressPermissionDenied: suppressAuthErrors });
-            if (!custDoc?.exists()) {
-              const userDoc = await safeGetDoc(doc(db, 'users', persistedCustId), { suppressPermissionDenied: suppressAuthErrors });
-              if (userDoc?.exists()) custDoc = userDoc;
-            }
-            if (custDoc?.exists()) {
-              const data = custDoc.data() as Customer;
-              const validation = validateUserStatus(data, 'customer');
-              if (validation.valid) {
-                const currentUid = auth.currentUser?.uid;
-                if (currentUid && data.authUid && data.authUid === currentUid) {
-                  setCurrentCustomerState({
-                    ...data,
-                    id: custDoc.id,
-                    authUid: currentUid,
-                  });
-                } else {
-                  StorageService.remove('LOGGED_IN_CUSTOMER_ID');
-                  setCurrentCustomerState(null);
-                }
-              } else {
-                StorageService.remove('LOGGED_IN_CUSTOMER_ID');
-                setCurrentCustomerState(null);
-              }
-            } else {
-              StorageService.remove('LOGGED_IN_CUSTOMER_ID');
-              setCurrentCustomerState(null);
-            }
-          } catch (e: unknown) {
-            if (!isFirestorePermissionDenied(e)) {
-              console.warn('[AppContext] restore customer session:', e);
-            }
-          }
-        }
-
-        const persistedMerchantId = StorageService.get('LOGGED_IN_MERCHANT_ID');
-        if (persistedMerchantId) {
-          try {
-            const storeDoc = await safeGetDoc(doc(db, 'stores', persistedMerchantId), { suppressPermissionDenied: suppressAuthErrors });
-            if (storeDoc?.exists()) {
-              const data = storeDoc.data() as Store;
-              const validation = validateUserStatus(data, 'merchant');
-              if (validation.valid) {
-                const currentUid = auth.currentUser?.uid;
-                const storeWithId = { ...data, id: storeDoc.id };
-                if (currentUid && data.ownerId === currentUid) {
-                  setCurrentMerchantState(storeWithId);
-                } else {
-                  const linked = await linkStoreToAuthSession(storeWithId);
-                  if (linked) {
-                    setCurrentMerchantState(linked);
-                  } else {
-                    StorageService.remove('LOGGED_IN_MERCHANT_ID');
-                    setCurrentMerchantState(null);
-                  }
-                }
-              } else {
-                StorageService.remove('LOGGED_IN_MERCHANT_ID');
-                setCurrentMerchantState(null);
-              }
-            } else {
-              StorageService.remove('LOGGED_IN_MERCHANT_ID');
-              setCurrentMerchantState(null);
-            }
-          } catch (e: unknown) {
-            if (!isFirestorePermissionDenied(e)) {
-              console.warn('[AppContext] restore merchant session:', e);
-            }
-          }
-        }
+      if (isMounted) {
+        setAuthInitialized(true);
+        setAuthLoading(false);
       }
-
-      if (isMounted) setAuthInitialized(true);
-      setAuthLoading(false);
-    }, (error) => {
+    }, () => {
       clearTimeout(fallbackTimer);
       if (isMounted) {
         setAuthInitialized(true);
         setAuthLoading(false);
       }
     });
-    
+
     return () => {
       isMounted = false;
       clearTimeout(fallbackTimer);
@@ -453,6 +501,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     let productsRaf = 0;
 
     const scheduleStores = (data: Store[]) => {
+      prefetchImageUrls(data.slice(0, 20).map((s) => s.logo));
       cancelAnimationFrame(storesRaf);
       storesRaf = requestAnimationFrame(() => {
         setStores(data);
@@ -480,26 +529,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
     };
     const scheduleProducts = (data: Product[]) => {
+      prefetchImageUrls(data.slice(0, 24).map((p) => p.image));
       cancelAnimationFrame(productsRaf);
       productsRaf = requestAnimationFrame(() => setProducts(data));
     };
 
     const snapshotOpts = { suppressPermissionDenied: true as const };
 
-    unsubs.push(safeOnSnapshot(collection(db, STORES_PUBLIC_COLLECTION), (snap) => {
-      scheduleStores(mapFirestoreDocs<Store>(snap));
-    }, snapshotOpts));
+    unsubs.push(safeOnSnapshot(
+      query(collection(db, STORES_PUBLIC_COLLECTION), limit(APP_STORES_LIMIT)),
+      (snap) => scheduleStores(mapFirestoreDocs<Store>(snap)),
+      snapshotOpts,
+    ));
 
     const productsQuery = isStaffSession
-      ? collection(db, 'products')
-      : query(collection(db, 'products'), where('status', '==', 'published'));
+      ? query(collection(db, 'products'), limit(APP_PRODUCTS_LIMIT))
+      : query(collection(db, 'products'), where('status', '==', 'published'), limit(APP_PRODUCTS_LIMIT));
     unsubs.push(safeOnSnapshot(productsQuery, (snap) => {
       scheduleProducts(mapFirestoreDocs<Product>(snap));
     }, snapshotOpts));
 
-    unsubs.push(safeOnSnapshot(collection(db, 'flash_sales'), (snap) => {
-      setFlashSales(mapFirestoreDocs<FlashSale>(snap));
-    }, snapshotOpts));
+    unsubs.push(safeOnSnapshot(
+      query(collection(db, 'flash_sales'), limit(100)),
+      (snap) => setFlashSales(mapFirestoreDocs<FlashSale>(snap)),
+      snapshotOpts,
+    ));
 
     unsubs.push(safeOnSnapshot(doc(db, 'settings', 'global'), (snap) => {
       if (snap.exists()) {
@@ -509,9 +563,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     }, snapshotOpts));
 
-    unsubs.push(safeOnSnapshot(collection(db, 'store_reviews'), (snap) => {
-      setStoreReviews(mapFirestoreDocs<StoreReview>(snap));
-    }, snapshotOpts));
+    unsubs.push(safeOnSnapshot(
+      query(collection(db, 'store_reviews'), orderBy('createdAt', 'desc'), limit(500)),
+      (snap) => setStoreReviews(mapFirestoreDocs<StoreReview>(snap)),
+      snapshotOpts,
+    ));
 
     return () => {
       cancelAnimationFrame(storesRaf);
@@ -536,18 +592,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         (snap) => setPromoCodes(mapFirestoreDocs<PromoCode>(snap)),
         snapshotOpts,
       ));
-      unsubs.push(safeOnSnapshot(query(collection(db, 'orders'), where('storeId', '==', storeId)), (snap) => {
-        setOrders(mapFirestoreDocs<Order>(snap));
-      }, snapshotOpts));
-      unsubs.push(safeOnSnapshot(query(collection(db, 'notifications'), where('userId', '==', storeId)), (snap) => {
-        setNotifications(mapFirestoreDocs<AppNotification>(snap));
-      }, snapshotOpts));
+      unsubs.push(safeOnSnapshot(
+        query(collection(db, 'orders'), where('storeId', '==', storeId), orderBy('createdAt', 'desc'), limit(400)),
+        (snap) => setOrders(mapFirestoreDocs<Order>(snap)),
+        snapshotOpts,
+      ));
+      unsubs.push(safeOnSnapshot(
+        query(collection(db, 'notifications'), where('userId', '==', storeId), orderBy('createdAt', 'desc'), limit(100)),
+        (snap) => setNotifications(mapFirestoreDocs<AppNotification>(snap)),
+        snapshotOpts,
+      ));
       unsubs.push(safeOnSnapshot(query(collection(db, 'flash_sale_requests'), where('storeId', '==', storeId)), (snap) => {
         setFlashSaleRequests(mapFirestoreDocs<FlashSaleRequest>(snap));
       }, snapshotOpts));
-      unsubs.push(safeOnSnapshot(query(collection(db, 'payoutRequests'), where('merchantId', '==', storeId)), (snap) => {
-        setPayoutRequests(mapFirestoreDocs<PayoutRequest>(snap));
-      }, snapshotOpts));
+      unsubs.push(safeOnSnapshot(
+        query(collection(db, 'payoutRequests'), where('merchantId', '==', storeId), orderBy('createdAt', 'desc'), limit(50)),
+        (snap) => setPayoutRequests(mapFirestoreDocs<PayoutRequest>(snap)),
+        snapshotOpts,
+      ));
       unsubs.push(safeOnSnapshot(doc(db, 'stores', storeId), (snap) => {
         if (!snap.exists()) return;
         const privateStore = { ...(snap.data() as Store), id: snap.id };
@@ -599,15 +661,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (snap.exists()) {
           const data = { ...(snap.data() as Customer), id: snap.id };
           setCustomers([data]);
-          setCurrentCustomerState((prev) => (prev?.id === data.id ? data : prev));
+          setCurrentCustomerState(data);
         }
       }, snapshotOpts));
-      unsubs.push(safeOnSnapshot(query(collection(db, 'orders'), where('customerId', '==', customerId)), (snap) => {
-        setOrders(mapFirestoreDocs<Order>(snap));
-      }, snapshotOpts));
-      unsubs.push(safeOnSnapshot(query(collection(db, 'notifications'), where('userId', '==', customerId)), (snap) => {
-        setNotifications(mapFirestoreDocs<AppNotification>(snap));
-      }, snapshotOpts));
+      unsubs.push(safeOnSnapshot(
+        query(collection(db, 'orders'), where('customerId', '==', customerId), orderBy('createdAt', 'desc'), limit(200)),
+        (snap) => setOrders(mapFirestoreDocs<Order>(snap)),
+        snapshotOpts,
+      ));
+      unsubs.push(safeOnSnapshot(
+        query(collection(db, 'notifications'), where('userId', '==', customerId), orderBy('createdAt', 'desc'), limit(50)),
+        (snap) => setNotifications(mapFirestoreDocs<AppNotification>(snap)),
+        snapshotOpts,
+      ));
       setPromoCodes([]);
       setPayoutRequests([]);
       setFlashSaleRequests([]);
@@ -656,6 +722,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const logoutSession = useCallback(async () => {
+    explicitSignOutRef.current = true;
     StorageService.remove('LOGGED_IN_CUSTOMER_ID');
     StorageService.remove('LOGGED_IN_MERCHANT_ID');
     setCurrentCustomerState(null);
@@ -767,7 +834,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code ?? '';
       console.warn('[AppContext] verifyCustomerLogin:', e);
-      if (code === 'functions/not-found' || code === 'functions/unavailable') {
+      if (code === 'functions/not-found' || code === 'functions/unavailable' || code === 'functions/internal') {
         return { success: false, error: 'service_unavailable' };
       }
       if (code === 'functions/unauthenticated' || code === 'unauthenticated') {
@@ -796,7 +863,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const code = (e as { code?: string })?.code ?? '';
       const message = String((e as { message?: string })?.message ?? '');
       console.warn('[AppContext] verifyMerchantLogin:', e);
-      if (code === 'functions/not-found' || code === 'functions/unavailable') {
+      if (code === 'functions/not-found' || code === 'functions/unavailable' || code === 'functions/internal') {
         return { success: false, error: 'service_unavailable' };
       }
       if (code === 'functions/unauthenticated' || code === 'unauthenticated') {
@@ -1080,6 +1147,46 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  /** Subscribes to a single stores_public document with a real-time listener.
+   *  Fires immediately with current data, then on every server update.
+   *  Returns an unsubscribe function. */
+  const subscribeToStore = useCallback(
+    (storeId: string, onUpdate: (store: Store) => void): (() => void) => {
+      if (!storeId) return () => {};
+      const ref = doc(db, STORES_PUBLIC_COLLECTION, storeId);
+      const unsub = onDocSnapshot(
+        ref,
+        (snap) => {
+          if (!snap.exists()) return;
+          const fresh = { ...(snap.data() as Store), id: snap.id };
+          setStores((prev) =>
+            prev.some((s) => s.id === storeId)
+              ? prev.map((s) => (s.id === storeId ? fresh : s))
+              : [...prev, fresh],
+          );
+          onUpdate(fresh);
+        },
+        () => {/* permission errors suppressed */},
+      );
+      return unsub;
+    },
+    [],
+  );
+
+  /** Fetches a single stores_public document straight from the server (no cache),
+   *  then patches the in-memory stores array so the UI reflects the latest theme. */
+  const refreshStore = useCallback(async (storeId: string) => {
+    if (!storeId) return;
+    try {
+      const snap = await getDocFromServer(doc(db, STORES_PUBLIC_COLLECTION, storeId));
+      if (!snap.exists()) return;
+      const fresh = { ...(snap.data() as Store), id: snap.id };
+      setStores((prev) => prev.map((s) => (s.id === storeId ? fresh : s)));
+    } catch {
+      // silent — realtime listener will catch it eventually
+    }
+  }, []);
+
   const updateStoreProfile = async (data: Partial<Store>) => {
     const idToUpdate = data.id || currentMerchant?.id;
     if (!idToUpdate) return;
@@ -1114,9 +1221,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       delete storePatch.walletBalance;
       delete storePatch.payoutMethods;
       delete storePatch.id;
-      if (Object.keys(storePatch).length > 0) {
-        await updateDoc(doc(db, 'stores', idToUpdate), storePatch);
+      if (storePatch.storeTheme !== undefined) {
+        storePatch.storeTheme = sanitizeStoreThemeForFirestore(storePatch.storeTheme);
       }
+      // Eagerly update currentMerchant so the UI reflects changes immediately
+      // (especially important when the user navigates away then comes back).
       if (currentMerchant?.id === idToUpdate) {
         setCurrentMerchantState((prev) => {
           if (!prev) return prev;
@@ -1130,6 +1239,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setCurrentMerchantState((prev) =>
           prev ? mergeStoreWithSecrets(prev, { storeId: idToUpdate, payoutMethods }) : prev,
         );
+      }
+
+      if (Object.keys(storePatch).length > 0) {
+        await updateDoc(doc(db, 'stores', idToUpdate), storePatch);
+        setStores((prev) =>
+          prev.map((s) => (s.id === idToUpdate ? { ...s, ...storePatch } : s)),
+        );
+        if (storePatch.storeTheme !== undefined) {
+          try {
+            await setDoc(
+              doc(db, STORES_PUBLIC_COLLECTION, idToUpdate),
+              { storeTheme: storePatch.storeTheme },
+              { merge: true },
+            );
+          } catch {
+            // Cloud Function may still sync stores → stores_public
+          }
+        }
       }
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, 'stores/' + idToUpdate);
@@ -1224,9 +1351,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!auth.currentUser) {
       throw new Error('يجب تسجيل الدخول أولاً.');
     }
-    if (data.customerId) {
-      await linkCustomerAuthUid(data.customerId);
-    }
+    // linkCustomerAuthUid is intentionally omitted here: placeOrderSecure already
+    // validates ownership via customerAuthOwnsId server-side, and the auth session
+    // is linked during login (verifyCustomerLogin). Calling it here adds an extra
+    // Firestore read on every order with no benefit.
     const fn = httpsCallable<
       Record<string, unknown>,
       { orderId: string; total: number; subtotal: number }
@@ -1238,6 +1366,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const orderId = result.data?.orderId ?? '';
     if (!orderId) {
       throw new Error('تعذر إنشاء الطلب. حاول مرة أخرى.');
+    }
+    if (promoCodeText) {
+      refreshCustomerWalletPromos().catch(() => undefined);
     }
     return orderId;
   };
@@ -1615,18 +1746,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateOrderStatus = async (id: string, status: string, reason?: string) => {
     try {
       const orderRef = doc(db, 'orders', id);
-      const updateData: any = { 
-        status, 
-        updatedAt: serverTimestamp() 
-      };
-      if (status === 'rejected') updateData.rejectionReason = reason;
-      if (status === 'returned' || status === 'replaced') updateData.returnReason = reason;
-      
       const order = orders.find(o => o.id === id);
       if (status === 'delivered' && order?.status === 'delivered') {
         return;
       }
 
+      const updateData: Record<string, unknown> = {
+        status,
+        updatedAt: serverTimestamp(),
+      };
+      if (status === 'rejected') updateData.rejectionReason = reason;
+      if (status === 'returned' || status === 'replaced') updateData.returnReason = reason;
+
+      // Loyalty points and wallet credits are handled exclusively by the
+      // onOrderDelivered Cloud Function trigger — never from the client.
+      // This prevents the double-award race between client transaction and CF.
       await updateDoc(orderRef, updateData);
 
       if (order?.customerId) {
@@ -1635,20 +1769,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (status === 'accepted') { statusText = 'تم قبول طلبك بنجاح'; pSound = true; }
         if (status === 'preparing') { statusText = 'طلبك قيد التجهيز'; pSound = false; }
         if (status === 'shipped') { statusText = 'طلبك في الطريق إليك ومندوب التوصيل في طريقه'; pSound = false; }
-        if (status === 'delivered') {
-          statusText = 'تم توصيل طلبك بنجاح. شكراً لك!';
-          pSound = true;
-          const loyaltyMsg = `حصلت تلقائياً على +${Math.floor((order.total || 0) / 1000)} نقطة كفوز رائع بمشترياتك!`;
-          await addNotification({
-            userId: order.customerId,
-            role: 'customer',
-            type: 'system',
-            title: '🎁 تم شحن محفظة نقاطك!',
-            message: loyaltyMsg,
-            targetId: id,
-            sound: true,
-          });
-        }
+        if (status === 'delivered') { statusText = 'تم توصيل طلبك بنجاح. شكراً لك!'; pSound = true; }
         if (status === 'rejected') { statusText = `تم رفض الطلب: ${reason || ''}`; pSound = true; }
         if (status === 'returned') { statusText = `تم إرجاع الطلب: ${reason || ''}`; pSound = true; }
         if (status === 'replaced') { statusText = `تم استبدال الطلب: ${reason || ''}`; pSound = true; }
@@ -1670,19 +1791,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const requestPayout = async (amount: number, methodUsed: 'zain_cash' | 'mastercard', methodDetails: string) => {
     if (!currentMerchant) return;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('المبلغ المطلوب غير صالح');
+    }
     try {
+      const merchantId = currentMerchant.id;
       const pId = 'PAY-' + Math.floor(Math.random() * 1000000);
-      const req: PayoutRequest = {
-        id: pId,
-        merchantId: currentMerchant.id,
-        requestedAmount: amount,
-        payoutMethodUsed: methodUsed,
-        payoutMethodDetails: methodDetails,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      };
-      await setDoc(doc(db, 'payoutRequests', pId), req);
-    } catch(e) {
+
+      await runTransaction(db, async (transaction) => {
+        // Read current wallet balance inside the transaction to prevent
+        // concurrent over-withdrawal before the admin completes any request.
+        const secretsSnap = await transaction.get(doc(db, 'store_secrets', merchantId));
+        const currentBalance: number =
+          (secretsSnap.data() as { walletBalance?: number } | undefined)?.walletBalance ?? 0;
+        if (amount > currentBalance) {
+          throw new Error(
+            `رصيدك الحالي (${currentBalance.toLocaleString()} د.ع) أقل من المبلغ المطلوب`,
+          );
+        }
+        const req: PayoutRequest = {
+          id: pId,
+          merchantId,
+          requestedAmount: amount,
+          payoutMethodUsed: methodUsed,
+          payoutMethodDetails: methodDetails,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        };
+        transaction.set(doc(db, 'payoutRequests', pId), req);
+      });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'payoutRequests');
     }
   };
 
@@ -1721,7 +1860,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const convertPointsToPromo = async (cid: string, pointsRequired: number) => {
-    const customer = customers.find(c => c.id === cid);
+    const customer = customers.find(c => c.id === cid) ?? (currentCustomer?.id === cid ? currentCustomer : null);
     if (!customer || customer.points < pointsRequired) return { success: false, message: 'عذراً، نقاطك غير كافية ❌' };
 
     try {
@@ -1734,13 +1873,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (!data?.success || !data.code) {
         return { success: false, message: 'عذراً، حدث خطأ ما' };
       }
+
+      // Optimistic: deduct points locally so UI reflects immediately
       if (currentCustomer?.id === cid) {
         setCurrentCustomerState({
           ...currentCustomer,
           points: Math.max(0, currentCustomer.points - pointsRequired),
         });
       }
-      await refreshCustomerWalletPromos();
+
+      // Optimistic: inject the new promo into local state immediately
+      // so the customer sees the coupon without a second cloud-function round-trip.
+      const optimisticPromo: PromoCode = {
+        id: `promo_optimistic_${Date.now()}`,
+        storeId: 'ALL_STORES',
+        code: data.code,
+        discountType: 'amount',
+        discountValue: data.discount ?? 0,
+        maxUses: 1,
+        usedCount: 0,
+        status: 'active',
+        source: 'points',
+        ownerCustomerId: cid,
+        createdAt: new Date().toISOString(),
+      } as PromoCode;
+      setCustomerWalletPromos(prev => {
+        const withoutDupes = prev.filter(p => p.code !== data.code);
+        return [optimisticPromo, ...withoutDupes];
+      });
+
+      // Refresh in background to get the real Firestore document
+      refreshCustomerWalletPromos().catch(() => undefined);
+
       return { success: true, message: 'تم التحويل بنجاح ✅', code: data.code };
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, 'convert_points');
@@ -1993,9 +2157,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     void linkStoreToAuthSession(found).then((linked) => {
       if (linked) {
         setCurrentMerchantState(linked);
-      } else {
-        StorageService.remove('LOGGED_IN_MERCHANT_ID');
-        setCurrentMerchantState(null);
+      } else if (!currentMerchant) {
+        setCurrentMerchantState(found);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2085,7 +2248,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const contextValue = useMemo(() => ({
       provinces: IRAQ_PROVINCES, stores, products, customers, orders, promoCodes, customerWalletPromos, notifications, payoutRequests,
-      currentCustomer, currentMerchant, adminSettings, subscriptionPlans, flashSales, flashSaleRequests, storeReviews,
+      currentCustomer, currentMerchant, authLoading, authInitialized, adminSettings, subscriptionPlans, flashSales, flashSaleRequests, storeReviews,
       getCustomerSeqId, getOrderSeqId,
       setOrders,
       setCurrentCustomer, setCurrentMerchant, logoutSession, deleteUserAccountSecure,
@@ -2093,14 +2256,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       validatePromoCode, refreshCustomerWalletPromos,
       toggleFollowStore, toggleStoreNotification, placeOrder, convertPointsToPromo, addCustomerPoints,
       submitStoreReview, submitProductReview, updateStoreReview, deleteStoreReview,
-      registerMerchant, updateStoreProfile, addProduct, updateProduct, deleteProduct,
+      registerMerchant, refreshStore, subscribeToStore, updateStoreProfile, addProduct, updateProduct, deleteProduct,
       createPromoCode, updatePromoCode, togglePromoCodeStatus, updateOrder, updateOrderStatus, requestPayout,
       addNotification, addBulkNotifications, markNotificationAsRead, markAllNotificationsAsRead,
       redeemRechargeCode, deletePromoCode, requestJoinFlashSale, sendMerchantFollowerNotifications,
       refreshStoreAudience, sendCustomerGift,
     }), [
       stores, products, customers, orders, promoCodes, customerWalletPromos, notifications, payoutRequests,
-      currentCustomer, currentMerchant, adminSettings, flashSales, flashSaleRequests, storeReviews,
+      currentCustomer, currentMerchant, authLoading, authInitialized, adminSettings, flashSales, flashSaleRequests, storeReviews,
       refreshStoreAudience,
     ]);
 

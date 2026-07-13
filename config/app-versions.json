@@ -1,0 +1,13 @@
+{
+  "customer": {
+    "versionName": "1.0.5",
+    "versionCode": 8
+  },
+  "merchant": {
+    "versionName": "1.0.6",
+    "versionCode": 7
+  },
+  "admin": {
+    "versionName": "1.0.5"
+  }
+}

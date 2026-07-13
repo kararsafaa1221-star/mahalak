@@ -12,6 +12,7 @@ export type CustomerNavState = {
   selectedProductDetailId: string | null;
   showCart: boolean;
   showNotifications: boolean;
+  scrollY?: number;
 };
 
 export type CustomerBackSnapshot = {
@@ -23,7 +24,7 @@ export type CustomerBackSnapshot = {
   showNotifications: boolean;
   showShareModal: boolean;
   showRateModal: unknown;
-  showCompareModal: Product | null;
+  showCompareModal: { baseProduct: Product; listOpen: boolean } | null;
   showUnsavedModal: boolean;
   showRedeemConfirm: number | null;
   showCartLocationPicker: boolean;
@@ -51,7 +52,8 @@ export type CustomerBackActions = {
   setShowNotifications: (show: boolean) => void;
   setShowShareModal: (show: boolean) => void;
   setShowRateModal: (value: null) => void;
-  setShowCompareModal: (value: Product | null) => void;
+  setShowCompareModal: (value: { baseProduct: Product; listOpen: boolean } | null) => void;
+  reopenCompareList: () => void;
   setShowUnsavedModal: (show: boolean) => void;
   setPendingTab: (tab: string | null) => void;
   setShowRedeemConfirm: (value: number | null) => void;
@@ -221,8 +223,12 @@ export function useCustomerAndroidBack({
         a.setShowRateModal(null);
         return true;
       }
-      if (snapshot.showCompareModal) {
+      if (snapshot.showCompareModal?.listOpen) {
         a.setShowCompareModal(null);
+        return true;
+      }
+      if (snapshot.showCompareModal && !snapshot.showCompareModal.listOpen && snapshot.selectedProductDetail) {
+        a.reopenCompareList();
         return true;
       }
       if (snapshot.showUnsavedModal) {

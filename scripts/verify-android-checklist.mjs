@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const versions = JSON.parse(fs.readFileSync(path.join(root, 'config', 'app-versions.json'), 'utf8'));
 
 const APPS = [
   {
@@ -17,7 +18,8 @@ const APPS = [
     expectedAppId: 'iq.mahalak.app',
     expectedAppName: 'محلك - زبون',
     expectedLauncherBg: '#10B981',
-    expectedVersionCode: 8,
+    expectedVersionCode: versions.customer.versionCode,
+    expectedVersionName: versions.customer.versionName,
     expectedKeystoreFile: 'mahalak-release.keystore',
     envExample: 'YOUR_CUSTOMER_ONESIGNAL_APP_ID',
   },
@@ -28,7 +30,8 @@ const APPS = [
     expectedAppId: 'iq.mahalak.merchant',
     expectedAppName: 'محلك - تاجر',
     expectedLauncherBg: '#6366F1',
-    expectedVersionCode: 7,
+    expectedVersionCode: versions.merchant.versionCode,
+    expectedVersionName: versions.merchant.versionName,
     expectedKeystoreFile: 'mahalak-merchant.jks',
     envExample: 'YOUR_MERCHANT_ONESIGNAL_APP_ID',
   },
@@ -50,6 +53,11 @@ function extractGradleValue(content, key) {
 function extractVersionCode(content) {
   const m = content?.match(/versionCode\s+(\d+)/);
   return m ? Number(m[1]) : null;
+}
+
+function extractVersionName(content) {
+  const m = content?.match(/versionName\s+"([^"]+)"/);
+  return m?.[1] ?? null;
 }
 
 function getGoogleServicesPackage(jsonPath) {
@@ -112,6 +120,12 @@ for (const app of APPS) {
   console.log(`  [${versionOk ? 'x' : ' '}] versionCode: ${versionCode ?? 'missing'} (expected ${expectedVersion})`);
   if (!versionOk) failCount++;
 
+  const versionName = extractVersionName(gradle);
+  const versionNameOk = versionName === app.expectedVersionName;
+  results.push([`versionName = ${app.expectedVersionName}`, versionNameOk]);
+  console.log(`  [${versionNameOk ? 'x' : ' '}] versionName: ${versionName ?? 'missing'} (expected ${app.expectedVersionName})`);
+  if (!versionNameOk) failCount++;
+
   const stringsPath = path.join(app.dir, 'android', 'app', 'src', 'main', 'res', 'values', 'strings.xml');
   const strings = readText(stringsPath) ?? '';
   const labelOk = strings.includes(`<string name="app_name">${app.expectedAppName}</string>`);
@@ -163,6 +177,41 @@ for (const app of APPS) {
     }`
   );
   if (!oneSignalOk) failCount++;
+
+  const manifestPath = path.join(app.dir, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+  const manifest = readText(manifestPath) ?? '';
+  const postNotifOk = manifest.includes('android.permission.POST_NOTIFICATIONS');
+  results.push(['POST_NOTIFICATIONS permission', postNotifOk]);
+  console.log(`  [${postNotifOk ? 'x' : ' '}] POST_NOTIFICATIONS in AndroidManifest.xml`);
+  if (!postNotifOk) failCount++;
+
+  const pluginsJsonPath = path.join(app.dir, 'android', 'app', 'src', 'main', 'assets', 'capacitor.plugins.json');
+  const pluginsJson = readText(pluginsJsonPath) ?? '';
+  const pushPluginOk = pluginsJson.includes('@capacitor/push-notifications');
+  results.push(['Capacitor push-notifications plugin', pushPluginOk]);
+  console.log(
+    `  [${pushPluginOk ? 'x' : ' '}] @capacitor/push-notifications synced (run cap sync if missing)`,
+  );
+  if (!pushPluginOk) failCount++;
+
+  const notifIconPath = path.join(
+    app.dir,
+    'android',
+    'app',
+    'src',
+    'main',
+    'res',
+    'drawable-mdpi',
+    'ic_stat_onesignal_default.png',
+  );
+  const notifIconOk = fs.existsSync(notifIconPath);
+  results.push(['Notification status-bar icon', notifIconOk]);
+  console.log(
+    `  [${notifIconOk ? 'x' : ' '}] ic_stat_onesignal_default.png: ${
+      notifIconOk ? 'present' : 'missing — run node scripts/generate-notification-icons.mjs'
+    }`,
+  );
+  if (!notifIconOk) failCount++;
 
   const keystorePropsPath = path.join(app.dir, 'android', 'keystore.properties');
   let keystoreOk = false;

@@ -4,6 +4,19 @@ function publishedStoreProducts(storeId: string, products: Product[]): Product[]
   return products.filter((p) => p.storeId === storeId && p.status === 'published');
 }
 
+export function productHasActiveDiscount(product: Product): boolean {
+  const discountType = product.discountType || 'none';
+  if (discountType === 'none') return false;
+  return (product.discountValue ?? 0) > 0;
+}
+
+/** True when every published product in the store has an active discount. */
+export function storeHasDiscountOnAllProducts(store: Store, products: Product[]): boolean {
+  const storeProducts = publishedStoreProducts(store.id, products);
+  if (storeProducts.length === 0) return false;
+  return storeProducts.every(productHasActiveDiscount);
+}
+
 /** True when the store has at least one explicit product discount or active promo banner. */
 export function storeHasActiveDiscounts(store: Store, products: Product[]): boolean {
   return getStoreOfferBadge(store, products) !== null;

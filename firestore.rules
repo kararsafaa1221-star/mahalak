@@ -111,6 +111,15 @@ service cloud.firestore {
       ]);
     }
 
+    // Staff (support/admin) may update customer profiles but must NOT touch
+    // financially or security-sensitive fields — those are Cloud Function only.
+    function customerStaffUpdateSafe() {
+      return !incoming().diff(resource.data).affectedKeys().hasAny([
+        'points', 'tier', 'isBlocked', 'monthlyOrdersCount', 'ordersCount',
+        'authUid', 'password'
+      ]);
+    }
+
     function storeOwnerProfileUpdate() {
       return !incoming().diff(resource.data).affectedKeys().hasAny([
         'isVerified', 'verificationType', 'verificationExpiresAt',
@@ -148,25 +157,66 @@ service cloud.firestore {
         );
     }
 
+    // Fields that track coupon lifecycle — only Cloud Functions (Admin SDK) or
+    // privileged staff may change these. Store owners updating their own codes
+    // are blocked from touching any of these. Customers have no update path at
+    // all (see promo_codes rules below), so this is defence-in-depth for
+    // store-owner writes only.
     function promoFieldsSafe() {
       return !incoming().diff(resource.data).affectedKeys().hasAny([
-        'usedCount', 'currentGlobalUses', 'status'
+        'status', 'usedCount', 'currentGlobalUses',
+        'maxUses', 'maxGlobalUses',
+        'expirationDate', 'expiresAt',
+        'ownerCustomerId', 'source'
       ]) || roleHasPageAccess('promoCodes');
     }
 
+    // Staff may only touch these order fields; all financial fields are CF-only.
+    function orderStaffFieldsSafe() {
+      return incoming().diff(resource.data).affectedKeys()
+        .hasOnly(['status', 'updatedAt', 'rejectionReason', 'returnReason',
+                  'notes', 'deliveryRewardsApplied']);
+    }
+
+    // deliveryRewardsApplied may only be SET (true), never cleared.
+    function rewardsFlagSafe(affectedKeys) {
+      return !affectedKeys.hasAny(['deliveryRewardsApplied'])
+        || incoming().deliveryRewardsApplied == true;
+    }
+
+    // Enforce a valid status-machine transition for merchant order updates.
+    function merchantStatusTransitionValid() {
+      let from = resource.data.get('status', 'pending');
+      let to = incoming().get('status', from);
+      return (from == 'pending'   && (to == 'accepted'  || to == 'rejected' || to == 'cancelled'))
+          || (from == 'accepted'  && (to == 'preparing' || to == 'shipped'  || to == 'rejected' || to == 'cancelled'))
+          || (from == 'preparing' && (to == 'shipped'   || to == 'rejected' || to == 'cancelled'))
+          || (from == 'shipped'   && (to == 'delivered' || to == 'returned' || to == 'replaced'))
+          || (from == 'delivered' && (to == 'returned'  || to == 'replaced'));
+    }
+
     function orderStatusTransitionAllowed() {
-      return roleHasPageAccess('orders')
-        || (
-          ownsStore(resource.data.storeId)
-          && incoming().diff(resource.data).affectedKeys().hasOnly([
-            'status', 'updatedAt', 'rejectionReason', 'returnReason'
-          ])
-        );
+      let affectedKeys = incoming().diff(resource.data).affectedKeys();
+      return (roleHasPageAccess('orders')
+                && rewardsFlagSafe(affectedKeys)
+                && orderStaffFieldsSafe())
+          || (ownsStore(resource.data.storeId)
+                && affectedKeys.hasOnly(['status', 'updatedAt', 'rejectionReason', 'returnReason'])
+                && merchantStatusTransitionValid());
     }
 
     match /admins/{adminId} {
       allow read: if isOwner(adminId) || isDashboardStaff();
       allow write: if isDashboardStaff() && adminDoc().role == 'owner';
+      // Any dashboard staff may write push-notification fields to their own document only.
+      // Covers both update (doc exists) and create (first setDoc with merge:true).
+      allow update: if isDashboardStaff()
+        && request.auth.uid == adminId
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['fcmToken', 'oneSignalId', 'pushEnabled']);
+      allow create: if isDashboardStaff()
+        && request.auth.uid == adminId
+        && request.resource.data.keys().hasOnly(['fcmToken', 'oneSignalId', 'pushEnabled']);
     }
 
     match /auth_secrets/{secretId} {
@@ -179,8 +229,13 @@ service cloud.firestore {
       allow create: if isSignedIn() && (
         isOwner(customerId) ||
         incoming().get('authUid', request.auth.uid) == request.auth.uid
-      ) && !incoming().keys().hasAny(['password']);
-      allow update: if customerSelfProfileUpdate() || roleHasPageAccess('customers');
+      ) && !incoming().keys().hasAny(['password'])
+        && incoming().get('points', 0) == 0
+        && incoming().get('isBlocked', false) == false;
+      // Self-update: blocklist protects sensitive fields.
+      // Staff-update: same blocklist; points/isBlocked are Cloud Function only.
+      allow update: if customerSelfProfileUpdate()
+        || (roleHasPageAccess('customers') && customerStaffUpdateSafe());
       allow delete: if roleHasPageAccess('customers');
     }
 
@@ -191,7 +246,9 @@ service cloud.firestore {
     /** Public catalog — safe fields only; synced from stores via Cloud Functions (Admin SDK). */
     match /stores_public/{storeId} {
       allow read: if true;
-      allow write: if false;
+      allow update: if ownsStoreSecrets(storeId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['storeTheme']);
+      allow create, delete: if false;
     }
 
     match /stores/{storeId} {
@@ -212,15 +269,28 @@ service cloud.firestore {
         || roleHasPageAccess('payouts');
       allow create: if ownsStore(storeId)
         && incoming().storeId == storeId
-        && incoming().get('ownerId', request.auth.uid) == request.auth.uid;
-      allow update: if ownsStoreSecrets(storeId)
+        && incoming().get('ownerId', request.auth.uid) == request.auth.uid
+        && !incoming().keys().hasAny(['walletBalance']);
+      // Merchants: may update own secrets but NOT walletBalance (CF only).
+      // Stores/owner staff: full update access.
+      // Accountants (payouts): read-audit only; may not write walletBalance or ownerId.
+      allow update: if (ownsStoreSecrets(storeId)
+            && !incoming().diff(resource.data).affectedKeys().hasAny(['walletBalance']))
         || roleHasPageAccess('stores')
-        || roleHasPageAccess('payouts');
+        || (roleHasPageAccess('payouts')
+            && !incoming().diff(resource.data).affectedKeys().hasAny(['walletBalance', 'ownerId']));
       allow delete: if roleHasPageAccess('stores') && adminDoc().role == 'owner';
     }
 
     match /products/{productId} {
-      allow read: if true;
+      // Require Firebase auth (anonymous counts) to prevent raw unauthenticated
+      // API scraping of costPrice and inventory fields.
+      // Firestore does not support field-level security; all authenticated users
+      // (including anonymous app sessions) receive the full document.
+      // Store owners and staff always have full read access.
+      allow read: if isSignedIn()
+        || ownsStore(resource.data.storeId)
+        || roleHasPageAccess('products');
       allow create: if isSignedIn() && (
         ownsStore(incoming().storeId) || roleHasPageAccess('products')
       );
@@ -291,6 +361,12 @@ service cloud.firestore {
       allow update, delete: if roleHasPageAccess('flashSales');
     }
 
+    // Customers can READ their own personal promo codes (ownerCustomerId match)
+    // but have ZERO write path — create/update/delete are all restricted to
+    // staff or the store that owns the code. Lifecycle fields (status, usedCount,
+    // expiresAt, …) are further protected by promoFieldsSafe() so even store
+    // owners cannot forge them. All status transitions are done by Cloud
+    // Functions via the Admin SDK which bypasses these rules.
     match /promo_codes/{codeId} {
       allow get: if isSignedIn() && (
         roleHasPageAccess('promoCodes')
@@ -308,14 +384,19 @@ service cloud.firestore {
           && ownsCustomerId(resource.data.ownerCustomerId)
         )
       );
+      // Customers may NOT create promo codes — only staff or the owning store.
       allow create: if isSignedIn() && (
         roleHasPageAccess('promoCodes') || ownsStore(incoming().storeId)
       );
+      // Customers may NOT update promo codes. Store owners may update safe fields
+      // only (promoFieldsSafe blocks status, usedCount, expiry, etc.).
       allow update: if roleHasPageAccess('promoCodes')
         || (ownsStore(resource.data.storeId) && promoFieldsSafe());
+      // Customers may NOT delete promo codes.
       allow delete: if roleHasPageAccess('promoCodes') || ownsStore(resource.data.storeId);
     }
 
+    // Legacy collection — same rules as promo_codes above.
     match /promoCodes/{codeId} {
       allow get: if isSignedIn() && (
         roleHasPageAccess('promoCodes')
@@ -425,6 +506,36 @@ service cloud.firestore {
       match /members/{memberId} {
         allow read: if ownsStore(storeId);
         allow write: if false;
+      }
+    }
+
+    match /marketing_share_stats/{storeId} {
+      allow read: if ownsStore(storeId);
+
+      allow create: if incoming().storeId == storeId
+        && incoming().totalVisits == 1
+        && (
+          (incoming().storeLinkVisits == 1 && incoming().productLinkVisits == 0) ||
+          (incoming().storeLinkVisits == 0 && incoming().productLinkVisits == 1)
+        );
+
+      allow update: if incoming().storeId == storeId
+        && incoming().totalVisits == resource.data.get('totalVisits', 0) + 1
+        && (
+          (
+            incoming().storeLinkVisits == resource.data.get('storeLinkVisits', 0) + 1
+            && incoming().productLinkVisits == resource.data.get('productLinkVisits', 0)
+          ) ||
+          (
+            incoming().productLinkVisits == resource.data.get('productLinkVisits', 0) + 1
+            && incoming().storeLinkVisits == resource.data.get('storeLinkVisits', 0)
+          )
+        );
+
+      match /product_stats/{productId} {
+        allow read: if ownsStore(storeId);
+        allow create: if incoming().visits == 1;
+        allow update: if incoming().visits == resource.data.get('visits', 0) + 1;
       }
     }
 

@@ -17,6 +17,17 @@ export function stripUndefinedFields<T extends Record<string, unknown>>(data: T)
   ) as T;
 }
 
+export function isFirestoreOfflineError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('client is offline') ||
+    message.includes('Failed to get document') ||
+    message.includes('network-request-failed') ||
+    message.includes('unavailable')
+  );
+}
+
 export function isFirestorePermissionDenied(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const code = (error as { code?: string }).code;

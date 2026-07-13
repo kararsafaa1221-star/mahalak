@@ -30,7 +30,10 @@ const SETTINGS_FIELD_LABELS_AR: Record<string, string> = {
   enableAutoNearby: 'الفرز التلقائي حسب المسافة',
   enableMaps: 'عرض الخرائط',
   enableAutoBackup: 'النسخ الاحتياطي التلقائي',
-  adInterval: 'فترة عرض الإعلانات',
+  adInterval: 'فترة عرض إعلانات الزبون',
+  merchantAdInterval: 'فترة عرض إعلانات التجار',
+  merchantAdsSectionOrder: 'ترتيب مجموعات إعلانات التجار',
+  adBadgeText: 'نص شارة الإعلانات',
   ads: 'إعلانات واجهة العملاء',
   merchantDeliveryAds: 'إعلانات توصيل التجار',
   merchantMediaAds: 'إعلانات وسائط التجار',
@@ -41,7 +44,7 @@ const SETTINGS_FIELD_LABELS_AR: Record<string, string> = {
 };
 
 const AUTO_SUB_KEYS = ['autoSubscriptionEnabled', 'autoSubscriptionDurationValue', 'autoSubscriptionDurationUnit'];
-const AD_KEYS = ['ads', 'adInterval', 'merchantDeliveryAds', 'merchantMediaAds'];
+const AD_KEYS = ['ads', 'adInterval', 'merchantAdInterval', 'merchantAdsSectionOrder', 'adBadgeText', 'merchantDeliveryAds', 'merchantMediaAds'];
 const SILENT_SETTINGS_KEYS = new Set(['lastSyncTime', 'lastAutoBackup']);
 
 function planIdToAr(id?: string): string {

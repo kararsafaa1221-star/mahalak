@@ -10,5 +10,6 @@
   "messagingSenderId": "405501753361",
   "measurementId": "G-7REPLWRT98",
   "oneSignalAppId": "72e9bba5-accd-4ee9-aa87-11d883b55748",
-  "merchantOneSignalAppId": "7d625bd6-2545-488d-8324-84aa0d4faecf"
+  "merchantOneSignalAppId": "7d625bd6-2545-488d-8324-84aa0d4faecf",
+  "adminOneSignalAppId": "96bac951-7ba6-4b7a-a4ef-c8de95382db8"
 }

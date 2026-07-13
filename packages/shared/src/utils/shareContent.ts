@@ -1,3 +1,5 @@
+import { appendShareTrackingQuery } from '../lib/shareVisitTracking';
+
 export const CUSTOMER_APP_BASE_URL = 'https://mahallak.app';
 
 export type ShareTargetType = 'store' | 'product';
@@ -26,11 +28,13 @@ export interface SharePayload {
 }
 
 export function buildStoreShareUrl(storeId: string): string {
-  return `${CUSTOMER_APP_BASE_URL}/#/dashboard/store/${storeId}`;
+  return appendShareTrackingQuery(`${CUSTOMER_APP_BASE_URL}/#/dashboard/store/${storeId}`);
 }
 
 export function buildProductShareUrl(storeId: string, productId: string): string {
-  return `${CUSTOMER_APP_BASE_URL}/#/dashboard/store/${storeId}/product/${productId}`;
+  return appendShareTrackingQuery(
+    `${CUSTOMER_APP_BASE_URL}/#/dashboard/store/${storeId}/product/${productId}`,
+  );
 }
 
 function formatSharePrice(product: ProductShareInput): string {

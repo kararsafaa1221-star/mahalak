@@ -44,12 +44,6 @@ import type {
   AppNotification,
 } from '@shared/types';
 import { buildVirtualStore, buildVirtualProduct } from '../utils/virtualDataSeed';
-import {
-  calcTierUpgradeBonus,
-  getEffectiveCustomerTierState,
-  resolveLoyaltySettings,
-  resolveTierFromOrders,
-} from '@shared/constants/loyaltySettings';
 
 export interface AdminServiceContext {
   stores: Store[];
@@ -288,70 +282,9 @@ export function createAdminService(actor: AdminActor) {
 
         const order = ctx.orders.find((o) => o.id === id);
 
-        if (status === 'delivered' && order?.customerId) {
-          const loyalty = resolveLoyaltySettings(ctx.adminSettings);
-          await runTransaction(db, async (transaction) => {
-            const custRef = doc(db, 'customers', order.customerId);
-            const storeRef = doc(db, 'stores', order.storeId);
-            const [orderSnap, custSnap, storeSnap] = await Promise.all([
-              transaction.get(orderRef),
-              transaction.get(custRef),
-              transaction.get(storeRef),
-            ]);
-            if (!orderSnap.exists()) throw new Error('Order not found.');
-            if (orderSnap.data().status === 'delivered') throw new Error('ALREADY_DELIVERED');
-            if (orderSnap.data().deliveryRewardsApplied) throw new Error('REWARDS_ALREADY_APPLIED');
-
-            if (custSnap.exists()) {
-              const cData = custSnap.data();
-              const periodState = getEffectiveCustomerTierState(
-                {
-                  monthlyOrdersCount: cData.monthlyOrdersCount,
-                  tier: cData.tier,
-                  lastResetMonth: cData.lastResetMonth,
-                },
-                loyalty,
-              );
-              const newCount = periodState.monthlyOrdersCount + 1;
-              const orderPoints = Math.floor((orderSnap.data().total || 0) / 1000) * (loyalty.pointsPer1000Iqd || 1);
-              const oldTier = periodState.tier;
-              const newTier = resolveTierFromOrders(newCount, loyalty.tiers);
-              const tierBonus = calcTierUpgradeBonus(oldTier, newTier, loyalty);
-              transaction.update(custRef, {
-                points: increment(orderPoints + tierBonus),
-                monthlyOrdersCount: newCount,
-                tier: newTier,
-                lastResetMonth: periodState.lastResetMonth,
-              });
-            }
-
-            if (storeSnap.exists()) {
-              const promoCodeObj = orderSnap.data().promoCode;
-              let isAdminSponsored = orderSnap.data().discountSponsor === 'ADMIN';
-              if (promoCodeObj) {
-                const usedPromo = ctx.promoCodes.find((p) => p.code === promoCodeObj);
-                if (usedPromo && (usedPromo.source === 'admin' || usedPromo.source === 'points')) isAdminSponsored = true;
-              }
-              if (isAdminSponsored) {
-                const storeEarnings = orderSnap.data().discountAmount || 0;
-                if (storeEarnings > 0) {
-                  const secretsRef = doc(db, 'store_secrets', order.storeId);
-                  transaction.set(
-                    secretsRef,
-                    {
-                      storeId: order.storeId,
-                      walletBalance: increment(storeEarnings),
-                    },
-                    { merge: true },
-                  );
-                }
-              }
-            }
-            transaction.update(orderRef, { ...updateData, deliveryRewardsApplied: true });
-          });
-        } else {
-          await updateDoc(orderRef, updateData);
-        }
+        // Loyalty points and wallet credits are handled exclusively by the
+        // onOrderDelivered Cloud Function trigger — never from the client.
+        await updateDoc(orderRef, updateData);
 
         if (order?.customerId) {
           let statusText = status;
@@ -380,7 +313,16 @@ export function createAdminService(actor: AdminActor) {
         if (!reqSnap.exists()) throw new Error('Payout request not found!');
         const reqData = reqSnap.data() as PayoutRequest;
         if (reqData.status === 'completed') throw new Error('Already completed.');
+
         const secretsRef = doc(db, 'store_secrets', reqData.merchantId);
+        const secretsSnap = await transaction.get(secretsRef);
+        const currentBalance: number = (secretsSnap.data() as { walletBalance?: number } | undefined)?.walletBalance ?? 0;
+        if (currentBalance < reqData.requestedAmount) {
+          throw new Error(
+            `Insufficient wallet balance: available ${currentBalance}, requested ${reqData.requestedAmount}`,
+          );
+        }
+
         transaction.update(reqRef, { status: 'completed' });
         transaction.set(
           secretsRef,
@@ -584,22 +526,72 @@ export function createAdminService(actor: AdminActor) {
   }
 
   // ─── Broadcast ────────────────────────────────────────────────────────────
+  function parseBroadcastTarget(target: string) {
+    if (target === 'all' || target === 'ALL') {
+      return { audience: 'customers' as const, scope: 'all' as const };
+    }
+    if (!target.includes(':')) {
+      return { audience: 'customers' as const, scope: target };
+    }
+    const [audience, scope] = target.split(':');
+    if (audience === 'customers' || audience === 'merchants' || audience === 'both') {
+      return { audience, scope: scope || 'all' };
+    }
+    return { audience: 'customers' as const, scope: 'all' as const };
+  }
+
   async function sendBroadcast(title: string, message: string, target: string, ctx: AdminServiceContext) {
+    const { audience, scope } = parseBroadcastTarget(target);
+    const isAll = scope === 'all' || scope === 'ALL';
+
+    const eligibleCustomers = ctx.customers.filter((c) => !c.isBlocked);
+    const eligibleMerchants = ctx.stores.filter(
+      (s) => s.status === 'active' && !s.isBanned && !s.is_virtual,
+    );
+
+    const targetCustomers =
+      audience === 'merchants'
+        ? []
+        : isAll
+          ? eligibleCustomers
+          : eligibleCustomers.filter((c) => c.province === scope);
+    const targetMerchants =
+      audience === 'customers'
+        ? []
+        : isAll
+          ? eligibleMerchants
+          : eligibleMerchants.filter((s) => s.province === scope);
+
     return runAdminAction(
       actor,
       'broadcast',
       'broadcast.send',
       target,
-      { title, province: target === 'all' || target === 'ALL' ? undefined : target },
+      {
+        title,
+        audience,
+        province: isAll ? undefined : scope,
+        customerCount: targetCustomers.length,
+        merchantCount: targetMerchants.length,
+      },
       async () => {
-        const isAll = target === 'all' || target === 'ALL';
-        const targetCustomers = isAll ? ctx.customers : ctx.customers.filter((c) => c.province === target);
-        const notifs = targetCustomers.map((c) => ({
-          userId: c.id,
-          role: 'customer',
-          title: title || 'محلك',
-          message,
-        }));
+        const notifs = [
+          ...targetCustomers.map((c) => ({
+            userId: c.id,
+            role: 'customer',
+            title: title || 'محلك',
+            message,
+            type: 'broadcast',
+          })),
+          ...targetMerchants.map((s) => ({
+            userId: s.id,
+            role: 'merchant',
+            title: title || 'محلك',
+            message,
+            type: 'broadcast',
+          })),
+        ];
+        if (notifs.length === 0) return;
         await ctx.addBulkNotifications(notifs);
       },
     );

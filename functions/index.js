@@ -1,7 +1,9 @@
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
 const { getFirestore, FieldValue, FieldPath } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const axios = require("axios");
@@ -12,6 +14,9 @@ const {
   calcTierBonus,
   calcRedemptionDiscount,
   isValidRedemptionPoints,
+  calcOrderDeliveryPoints,
+  buildOrderDeliveryRewardMessage,
+  getOrderPointsEligibleAmount,
 } = require("./loyaltySettings");
 
 setGlobalOptions({
@@ -24,7 +29,14 @@ setGlobalOptions({
 
 /** Bind Firebase secrets so process.env is populated in production (Firebase Functions v2). */
 const WASENDER_SECRETS = ["WASENDER_ACCESS_TOKEN", "WASENDER_INSTANCE_ID"];
-const ONESIGNAL_SECRETS = ["ONESIGNAL_APP_ID", "ONESIGNAL_REST_API_KEY"];
+const ONESIGNAL_SECRETS = [
+  "ONESIGNAL_APP_ID",
+  "ONESIGNAL_REST_API_KEY",
+  "MERCHANT_ONESIGNAL_APP_ID",
+  "MERCHANT_ONESIGNAL_REST_API_KEY",
+  "ADMIN_ONESIGNAL_APP_ID",
+  "ADMIN_ONESIGNAL_REST_API_KEY",
+];
 
 admin.initializeApp();
 // Client app uses named database "default" (not canonical "(default)")
@@ -41,6 +53,12 @@ const OTP_REQUEST_WINDOW_MS = 60 * 1000;
 const OTP_MAX_REQUESTS_PER_WINDOW = 3;
 const OTP_VERIFY_WINDOW_MS = 10 * 60 * 1000;
 const OTP_MAX_VERIFY_ATTEMPTS = 10;
+// Stricter daily cap per phone — prevents sustained SMS abuse against one number.
+const OTP_DAILY_CAP_PER_PHONE = 8;
+const OTP_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Per-IP cap — slows down bulk cross-number flooding from one source.
+const OTP_IP_MAX_PER_MINUTE = 8;
+const OTP_IP_WINDOW_MS = 60 * 1000;
 const UNIQUE_PHONES_COLLECTION = "unique_phones";
 const UNIQUE_USERNAMES_COLLECTION = "unique_usernames";
 const BLOCKED_PHONES_COLLECTION = "blocked_phones";
@@ -274,11 +292,34 @@ exports.otpRequest = onRequest({ cors: false, secrets: WASENDER_SECRETS }, async
   const code = String(Math.floor(100000 + Math.random() * 900000));
   const expiresAt = Date.now() + OTP_TTL_MS;
 
+  // Layer 1: per-phone short-window cap (3 per minute — existing)
   try {
     await assertOtpRateLimit(`req_${key}`, OTP_REQUEST_WINDOW_MS, OTP_MAX_REQUESTS_PER_WINDOW);
   } catch {
     res.status(429).json({ success: false, error: "Too many OTP requests. Please wait and try again." });
     return;
+  }
+
+  // Layer 2: per-phone daily cap — prevents sustained abuse against one number
+  try {
+    await assertOtpRateLimit(`day_${key}`, OTP_DAILY_WINDOW_MS, OTP_DAILY_CAP_PER_PHONE);
+  } catch {
+    res.status(429).json({ success: false, error: "الحد اليومي لرسائل التحقق لهذا الرقم تجاوز. حاول غداً." });
+    return;
+  }
+
+  // Layer 3: per-IP cap — throttles cross-number flooding from a single source
+  const ip = String(
+    req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown"
+  ).split(",")[0].trim();
+  if (ip && ip !== "unknown") {
+    const ipKey = `ip_${ip.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    try {
+      await assertOtpRateLimit(ipKey, OTP_IP_WINDOW_MS, OTP_IP_MAX_PER_MINUTE);
+    } catch {
+      res.status(429).json({ success: false, error: "Too many requests from this network. Please wait." });
+      return;
+    }
   }
 
   try {
@@ -569,10 +610,32 @@ async function callerOwnsCustomer(callerUid, customerId) {
   return snap.exists && snap.data()?.authUid === callerUid;
 }
 
-async function assertCanDispatchPush(callerUid, externalIds) {
+/**
+ * Authorization guard for dispatchOneSignalPush.
+ *
+ * Dashboard admins:
+ *   - Sending to multiple recipients OR using a targetRole other than their
+ *     own app ("admin") requires the 'broadcast' permission.
+ *   - Sending a single push to themselves (e.g. test) is always allowed.
+ *
+ * Non-admin callers (merchants / customers):
+ *   - May only push to themselves or resources they own.
+ */
+async function assertCanDispatchPush(callerUid, externalIds, targetRole, authToken) {
   const adminDoc = await fetchAdminDoc(callerUid);
-  if (adminDoc) return;
 
+  if (adminDoc) {
+    // A dashboard admin calling with targetRole other than "admin", or targeting
+    // multiple external IDs, must hold the broadcast permission.
+    const isCrossApp = targetRole && targetRole !== "admin";
+    const isBulk = externalIds.length > 1;
+    if (isCrossApp || isBulk) {
+      await assertDashboardPermission(callerUid, authToken, "broadcast");
+    }
+    return;
+  }
+
+  // Non-admin: caller may only push to themselves or their own resources.
   for (const targetId of externalIds) {
     if (targetId === callerUid) continue;
     if (await callerOwnsCustomer(callerUid, targetId)) continue;
@@ -581,7 +644,30 @@ async function assertCanDispatchPush(callerUid, externalIds) {
   }
 }
 
-function resolveOneSignalCredentials() {
+function resolveOneSignalCredentials(role) {
+  const normalized = String(role || "customer").toLowerCase();
+
+  if (normalized === "admin") {
+    const adminAppId = process.env.ADMIN_ONESIGNAL_APP_ID;
+    const adminRestApiKey = process.env.ADMIN_ONESIGNAL_REST_API_KEY;
+    if (adminAppId && adminRestApiKey) {
+      return { appId: adminAppId, restApiKey: adminRestApiKey };
+    }
+    return null;
+  }
+
+  const useMerchant =
+    normalized === "merchant" || normalized.startsWith("merchant");
+
+  if (useMerchant) {
+    const merchantAppId = process.env.MERCHANT_ONESIGNAL_APP_ID;
+    const merchantRestApiKey = process.env.MERCHANT_ONESIGNAL_REST_API_KEY;
+    if (merchantAppId && merchantRestApiKey) {
+      return { appId: merchantAppId, restApiKey: merchantRestApiKey };
+    }
+    return null;
+  }
+
   const appId = process.env.ONESIGNAL_APP_ID;
   const restApiKey = process.env.ONESIGNAL_REST_API_KEY;
   if (!appId || !restApiKey) {
@@ -593,8 +679,31 @@ function resolveOneSignalCredentials() {
   return { appId, restApiKey };
 }
 
-async function postOneSignalNotification(payload) {
-  const { restApiKey } = resolveOneSignalCredentials();
+function resolveOneSignalCredentialsForChannel(channelId, targetRole) {
+  if (targetRole === "admin") {
+    return resolveOneSignalCredentials("admin");
+  }
+  if (targetRole === "merchant") {
+    return resolveOneSignalCredentials("merchant");
+  }
+  if (typeof channelId === "string" && channelId.startsWith("merchant_")) {
+    return resolveOneSignalCredentials("merchant");
+  }
+  return resolveOneSignalCredentials("customer");
+}
+
+function resolveOneSignalCredentialsForNotification(data) {
+  if (data?.role === "admin") {
+    return resolveOneSignalCredentials("admin");
+  }
+  if (data?.role === "merchant") {
+    return resolveOneSignalCredentials("merchant");
+  }
+  return resolveOneSignalCredentials("customer");
+}
+
+async function postOneSignalNotification(payload, credentials) {
+  const { restApiKey } = credentials || resolveOneSignalCredentials("customer");
   const response = await axios.post(
     "https://api.onesignal.com/notifications",
     payload,
@@ -733,9 +842,9 @@ exports.onPromoCodeCreated = onDocumentCreated(
     const { code, message } = formatPromoDiscountMessage(data);
     if (!code) return;
 
-    let appId;
+    let credentials;
     try {
-      ({ appId } = resolveOneSignalCredentials());
+      credentials = resolveOneSignalCredentials("customer");
     } catch {
       return;
     }
@@ -743,7 +852,7 @@ exports.onPromoCodeCreated = onDocumentCreated(
     try {
       await postOneSignalNotification(
         buildOneSignalBroadcastPayload({
-          appId,
+          appId: credentials.appId,
           title: "كود خصم جديد",
           message,
           channelId: "customer_promos_sound",
@@ -754,6 +863,7 @@ exports.onPromoCodeCreated = onDocumentCreated(
             promoCode: code,
           },
         }),
+        credentials,
       );
     } catch (error) {
       console.error("[onPromoCodeCreated] OneSignal error:", error.response?.data || error.message);
@@ -771,10 +881,16 @@ exports.onNotificationCreated = onDocumentCreated(
     const data = snap.data();
     if (!data?.userId || !data?.message) return;
 
-    let appId;
+    let credentials;
     try {
-      ({ appId } = resolveOneSignalCredentials());
+      credentials = resolveOneSignalCredentialsForNotification(data);
     } catch {
+      return;
+    }
+    if (!credentials) {
+      console.warn(
+        `[onNotificationCreated] Push skipped for role=${data.role || "unknown"} — OneSignal credentials missing`,
+      );
       return;
     }
 
@@ -784,13 +900,14 @@ exports.onNotificationCreated = onDocumentCreated(
     try {
       await postOneSignalNotification(
         buildOneSignalPayload({
-          appId,
+          appId: credentials.appId,
           userId: data.userId,
           title,
           message: data.message,
           channelId,
           data: { ...data, notificationId: event.params.notificationId },
         }),
+        credentials,
       );
     } catch (error) {
       console.error("[onNotificationCreated] OneSignal error:", error.response?.data || error.message);
@@ -804,7 +921,7 @@ exports.dispatchOneSignalPush = onCall({ cors: ALLOWED_CALLABLE_CORS, secrets: O
     throw new HttpsError("unauthenticated", "Authentication required");
   }
 
-  const { title, message, channelId, externalIds } = request.data || {};
+  const { title, message, channelId, externalIds, targetRole } = request.data || {};
   if (!title || !message || !channelId || !Array.isArray(externalIds) || !externalIds.length) {
     throw new HttpsError("invalid-argument", "title, message, channelId and externalIds are required");
   }
@@ -813,26 +930,32 @@ exports.dispatchOneSignalPush = onCall({ cors: ALLOWED_CALLABLE_CORS, secrets: O
     throw new HttpsError("invalid-argument", "Too many recipients in one request");
   }
 
-  await assertCanDispatchPush(request.auth.uid, externalIds);
+  await assertCanDispatchPush(request.auth.uid, externalIds, targetRole, request.auth.token);
 
-  let appId;
+  let credentials;
   try {
-    ({ appId } = resolveOneSignalCredentials());
+    credentials = resolveOneSignalCredentialsForChannel(channelId, targetRole);
   } catch {
     throw new HttpsError("failed-precondition", "OneSignal credentials are not configured on the server");
   }
+  if (!credentials) {
+    throw new HttpsError(
+      "failed-precondition",
+      `OneSignal credentials are not configured for target role: ${targetRole || "customer"}`,
+    );
+  }
 
   const payload = buildOneSignalPayload({
-    appId,
+    appId: credentials.appId,
     userId: externalIds,
     title,
     message,
     channelId,
-    data: { type: "app", role: "system" },
+    data: { type: "app", role: targetRole || "system" },
   });
 
   try {
-    const data = await postOneSignalNotification(payload);
+    const data = await postOneSignalNotification(payload, credentials);
     return { success: true, data };
   } catch (error) {
     throw new HttpsError("internal", "Failed to send push notification");
@@ -852,9 +975,9 @@ exports.sendPushNotification = onCall({ cors: ALLOWED_CALLABLE_CORS, secrets: ON
     throw new HttpsError("invalid-argument", "title, message, channelId and externalIds are required");
   }
 
-  const { appId } = resolveOneSignalCredentials();
+  const credentials = resolveOneSignalCredentialsForChannel(channelId, request.data?.targetRole);
   const payload = buildOneSignalPayload({
-    appId,
+    appId: credentials.appId,
     userId: externalIds,
     title,
     message,
@@ -863,7 +986,7 @@ exports.sendPushNotification = onCall({ cors: ALLOWED_CALLABLE_CORS, secrets: ON
   });
 
   try {
-    const data = await postOneSignalNotification(payload);
+    const data = await postOneSignalNotification(payload, credentials);
     return { success: true, data };
   } catch (error) {
     const detail = error.response?.data || error.message;
@@ -1588,80 +1711,162 @@ exports.onStorePasswordSync = onDocumentWritten(
   },
 );
 
+async function resolveAdminSponsoredOrder(order) {
+  let isAdminSponsored = order?.discountSponsor === "ADMIN";
+  if (!isAdminSponsored && order?.promoCode) {
+    const promoSnap = await db.collection("promo_codes")
+      .where("code", "==", order.promoCode)
+      .limit(1)
+      .get();
+    if (!promoSnap.empty) {
+      const promo = promoSnap.docs[0].data() || {};
+      if (promo.source === "admin" || promo.source === "points") {
+        isAdminSponsored = true;
+      }
+    }
+  }
+  return isAdminSponsored;
+}
+
 /** Apply loyalty points and merchant wallet credit when an order is delivered. */
 exports.onOrderDelivered = onDocumentUpdated(
   { document: "orders/{orderId}", database: "default" },
   async (event) => {
-    const before = event.data.before.data();
     const after = event.data.after.data();
-    if (!before || !after) return;
-    if (before.status === after.status || after.status !== "delivered") return;
-    if (before.status === "delivered") return;
+    if (!after) return;
+    if (after.status !== "delivered") return;
+    if (after.deliveryRewardsApplied) return;
 
     const orderId = event.params.orderId;
     const orderRef = db.collection("orders").doc(orderId);
 
     try {
       const loyalty = await getLoyaltySettings(db);
+      const isAdminSponsored = await resolveAdminSponsoredOrder(after);
+      const rewardMeta = {
+        applied: false,
+        customerId: null,
+        totalPoints: 0,
+      };
+
       await db.runTransaction(async (tx) => {
         const orderSnap = await tx.get(orderRef);
         if (!orderSnap.exists || orderSnap.data()?.status !== "delivered") return;
         if (orderSnap.data()?.deliveryRewardsApplied) return;
 
         const order = orderSnap.data();
-        tx.update(orderRef, { deliveryRewardsApplied: true });
         const customerId = order.customerId;
         const storeId = order.storeId;
+        const custRef = customerId ? db.collection("customers").doc(customerId) : null;
+        const custSnap = custRef ? await tx.get(custRef) : null;
 
-        if (customerId) {
-          const custRef = db.collection("customers").doc(customerId);
-          const custSnap = await tx.get(custRef);
-          if (custSnap.exists) {
-            const customerData = custSnap.data() || {};
-            const periodState = applyTierPeriodReset(customerData, loyalty);
-            const oldOrdersCount = periodState.monthlyOrdersCount;
-            const newOrdersCount = oldOrdersCount + 1;
-            const purchaseTotal = order.total || 0;
-            const orderPoints = Math.floor(purchaseTotal / 1000) * (loyalty.pointsPer1000Iqd || 1);
-            const oldTier = periodState.tier;
-            const newTier = resolveTierFromOrders(newOrdersCount, loyalty.tiers);
-            const tierBonus = calcTierBonus(oldTier, newTier, loyalty.tiers);
+        let totalPoints = 0;
 
-            tx.update(custRef, {
-              points: FieldValue.increment(orderPoints + tierBonus),
-              monthlyOrdersCount: newOrdersCount,
-              tier: newTier,
-              lastResetMonth: periodState.lastResetMonth,
-            });
-          }
+        if (customerId && custSnap?.exists) {
+          const customerData = custSnap.data() || {};
+          const periodState = applyTierPeriodReset(customerData, loyalty);
+          const oldOrdersCount = periodState.monthlyOrdersCount;
+          const newOrdersCount = oldOrdersCount + 1;
+          const purchaseTotal = getOrderPointsEligibleAmount(order);
+          const orderPoints = calcOrderDeliveryPoints(purchaseTotal, loyalty);
+          const oldTier = periodState.tier;
+          const newTier = resolveTierFromOrders(newOrdersCount, loyalty.tiers);
+          const tierBonus = calcTierBonus(oldTier, newTier, loyalty.tiers);
+          totalPoints = orderPoints + tierBonus;
+
+          tx.update(custRef, {
+            points: FieldValue.increment(totalPoints),
+            monthlyOrdersCount: newOrdersCount,
+            tier: newTier,
+            lastResetMonth: periodState.lastResetMonth,
+          });
         }
 
-        if (storeId) {
-          let isAdminSponsored = order.discountSponsor === "ADMIN";
-          if (order.promoCode) {
-            const promoSnap = await db.collection("promo_codes")
-              .where("code", "==", order.promoCode)
-              .limit(1)
-              .get();
-            if (!promoSnap.empty) {
-              const promo = promoSnap.docs[0].data() || {};
-              if (promo.source === "admin" || promo.source === "points") {
-                isAdminSponsored = true;
-              }
-            }
-          }
-
-          if (isAdminSponsored && Number(order.discountAmount) > 0) {
-            tx.set(storeSecretsRef(storeId), {
-              storeId,
-              walletBalance: FieldValue.increment(Number(order.discountAmount)),
-              updatedAt: FieldValue.serverTimestamp(),
-            }, { merge: true });
-          }
+        if (storeId && isAdminSponsored && Number(order.discountAmount) > 0) {
+          tx.set(storeSecretsRef(storeId), {
+            storeId,
+            walletBalance: FieldValue.increment(Number(order.discountAmount)),
+            updatedAt: FieldValue.serverTimestamp(),
+          }, { merge: true });
         }
+
+        tx.update(orderRef, {
+          deliveryRewardsApplied: true,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        rewardMeta.applied = true;
+        rewardMeta.customerId = customerId || null;
+        rewardMeta.totalPoints = totalPoints;
       });
+
+      if (rewardMeta.applied && rewardMeta.customerId && rewardMeta.totalPoints > 0) {
+        await db.collection("notifications").add({
+          userId: rewardMeta.customerId,
+          role: "customer",
+          type: "system",
+          title: "🎁 تم شحن محفظة نقاطك!",
+          message: buildOrderDeliveryRewardMessage(rewardMeta.totalPoints),
+          targetId: orderId,
+          read: false,
+          sound: true,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      }
     } catch (error) {
       console.error("[onOrderDelivered]", error.message);
+    }
+  },
+);
+
+/**
+ * Restore product inventory when an order is cancelled or rejected.
+ * Inventory is only decremented in placeOrderSecure, so we must
+ * mirror the restore here to avoid permanent ghost stock loss.
+ */
+exports.onOrderCancelled = onDocumentUpdated(
+  { document: "orders/{orderId}", database: "default" },
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!before || !after) return;
+
+    const terminalStatuses = ["cancelled", "rejected"];
+    const wasTerminal = terminalStatuses.includes(before.status);
+    const isNowTerminal = terminalStatuses.includes(after.status);
+
+    // Only act on the transition into a terminal state — not on re-updates.
+    if (wasTerminal || !isNowTerminal) return;
+
+    const items = after.items || [];
+    if (!items.length) return;
+
+    const orderId = event.params.orderId;
+    try {
+      await db.runTransaction(async (tx) => {
+        // Re-read order inside the transaction to avoid stale snapshot races.
+        const orderSnap = await tx.get(db.collection("orders").doc(orderId));
+        if (!orderSnap.exists) return;
+        const latestStatus = orderSnap.data()?.status;
+        if (!terminalStatuses.includes(latestStatus)) return;
+
+        for (const item of items) {
+          const productId = item.productId;
+          const qty = Number(item.quantity) || 0;
+          if (!productId || qty <= 0) continue;
+
+          const prodRef = db.collection("products").doc(productId);
+          const prodSnap = await tx.get(prodRef);
+          if (!prodSnap.exists) continue;
+
+          const inventory = prodSnap.data()?.inventory;
+          if (!hasTrackedProductInventory(inventory)) continue;
+
+          tx.update(prodRef, { inventory: FieldValue.increment(qty) });
+        }
+      });
+    } catch (err) {
+      console.error("[onOrderCancelled] inventory restore failed:", err.message);
     }
   },
 );
@@ -2037,7 +2242,8 @@ exports.onStoreCreated = onDocumentCreated(
   },
 );
 
-/** Customer lookup by phone — existence only (no PII leak). */
+/** Customer lookup by phone — existence only (no PII leak).
+ *  Rate-limited per caller UID to prevent bulk phone enumeration. */
 exports.lookupCustomerByPhone = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Authentication required");
@@ -2045,6 +2251,15 @@ exports.lookupCustomerByPhone = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (r
   const phone = request.data?.phone;
   if (!phone || typeof phone !== "string") {
     throw new HttpsError("invalid-argument", "phone is required");
+  }
+
+  // 20 lookups per 10 minutes per caller — enough for legitimate one-time checks
+  // but prevents a loop that enumerates thousands of numbers.
+  const rateLimitKey = `lookup_phone_${request.auth.uid}`;
+  try {
+    await assertOtpRateLimit(rateLimitKey, 10 * 60 * 1000, 20);
+  } catch {
+    throw new HttpsError("resource-exhausted", "Too many lookups. Please wait before trying again.");
   }
 
   for (const variant of iraqiPhoneVariants(phone)) {
@@ -2277,7 +2492,37 @@ function sanitizePromoForClient(data, id) {
     ownerCustomerId: data.ownerCustomerId,
     merchantId: data.merchantId,
     objectId: data.objectId,
+    targetAudience: data.targetAudience,
+    usedCount: data.usedCount ?? 0,
+    currentGlobalUses: data.currentGlobalUses ?? data.usedCount ?? 0,
+    maxUses: data.maxUses ?? 0,
+    maxGlobalUses: data.maxGlobalUses ?? data.maxUses ?? 0,
+    maxUsesPerUser: data.maxUsesPerUser ?? 0,
   };
+}
+
+function promoListingStillValid(data, nowMs) {
+  if (data.status && data.status !== "active") return false;
+  const expiry = data.expirationDate || data.expiresAt;
+  if (expiry && new Date(expiry).getTime() < nowMs) return false;
+  const currentUses = data.currentGlobalUses ?? data.usedCount ?? 0;
+  const maxUses = data.maxGlobalUses ?? data.maxUses ?? 0;
+  if (maxUses > 0 && currentUses >= maxUses) return false;
+  return true;
+}
+
+function merchantPromoVisibleToCustomer(data, followedSet, pastBuyerSet) {
+  if (data.ownerCustomerId) return false;
+  const storeId = data.merchantId || data.storeId;
+  if (!storeId || storeId === "ALL_STORES") return false;
+  const audience = data.targetAudience || "ALL";
+  if (audience === "ALL") return true;
+  const isFollower = followedSet.has(storeId);
+  const isPastBuyer = pastBuyerSet.has(storeId);
+  if (audience === "FOLLOWERS") return isFollower;
+  if (audience === "PAST_BUYERS") return isPastBuyer;
+  if (audience === "FOLLOWERS_AND_PAST_BUYERS") return isFollower || isPastBuyer;
+  return true;
 }
 
 function promoErrorMessageAr(code) {
@@ -2407,17 +2652,33 @@ exports.listCustomerWalletPromos = onCall({ cors: ALLOWED_CALLABLE_CORS }, async
   const customer = customerSnap.data() || {};
   const followedStores = Array.isArray(customer.followedStores) ? customer.followedStores : [];
   const storeNotifications = Array.isArray(customer.storeNotifications) ? customer.storeNotifications : [];
+  const followedSet = new Set([...followedStores, ...storeNotifications]);
+  const pastBuyerSet = new Set();
   const promosById = new Map();
+  const now = Date.now();
+
+  const deliveredOrdersSnap = await db.collection("orders")
+    .where("customerId", "==", customerId)
+    .where("status", "==", "delivered")
+    .limit(200)
+    .get();
+  deliveredOrdersSnap.docs.forEach((docSnap) => {
+    const sid = docSnap.data()?.storeId;
+    if (sid) pastBuyerSet.add(sid);
+  });
 
   const pointSnap = await db.collection("promo_codes")
     .where("ownerCustomerId", "==", customerId)
     .where("source", "==", "points")
+    .where("status", "==", "active")
     .get();
   pointSnap.docs.forEach((docSnap) => {
-    promosById.set(docSnap.id, sanitizePromoForClient(docSnap.data(), docSnap.id));
+    const data = docSnap.data() || {};
+    if (!promoListingStillValid(data, now)) return;
+    promosById.set(docSnap.id, sanitizePromoForClient(data, docSnap.id));
   });
 
-  const storeIds = [...new Set([...followedStores, ...storeNotifications])].slice(0, 30);
+  const storeIds = [...followedSet].slice(0, 30);
   for (const storeId of storeIds) {
     const snap = await db.collection("promo_codes")
       .where("storeId", "==", storeId)
@@ -2427,9 +2688,23 @@ exports.listCustomerWalletPromos = onCall({ cors: ALLOWED_CALLABLE_CORS }, async
     snap.docs.forEach((docSnap) => {
       const data = docSnap.data() || {};
       if (data.source === "points") return;
+      if (!promoListingStillValid(data, now)) return;
+      if (data.sponsor === "MERCHANT" && !merchantPromoVisibleToCustomer(data, followedSet, pastBuyerSet)) return;
       promosById.set(docSnap.id, sanitizePromoForClient(data, docSnap.id));
     });
   }
+
+  const merchantSnap = await db.collection("promo_codes")
+    .where("source", "==", "merchant")
+    .where("status", "==", "active")
+    .limit(100)
+    .get();
+  merchantSnap.docs.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    if (!promoListingStillValid(data, now)) return;
+    if (!merchantPromoVisibleToCustomer(data, followedSet, pastBuyerSet)) return;
+    promosById.set(docSnap.id, sanitizePromoForClient(data, docSnap.id));
+  });
 
   const adminSnap = await db.collection("promo_codes")
     .where("storeId", "==", "ALL_STORES")
@@ -2508,11 +2783,26 @@ exports.convertPointsToPromoSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, asy
   await db.runTransaction(async (tx) => {
     const custSnap = await tx.get(customerRef);
     if (!custSnap.exists) throw new HttpsError("not-found", "Customer not found");
-    const currentPoints = Number(custSnap.data()?.points || 0);
+    const custData = custSnap.data() || {};
+    const currentPoints = Number(custData.points || 0);
     if (currentPoints < required) {
       throw new HttpsError("failed-precondition", "Insufficient points");
     }
-    tx.update(customerRef, { points: FieldValue.increment(-required) });
+
+    const lastRedeemAt = custData.lastPointsRedemptionAt;
+    if (lastRedeemAt) {
+      const lastMs = typeof lastRedeemAt.toMillis === "function"
+        ? lastRedeemAt.toMillis()
+        : new Date(lastRedeemAt).getTime();
+      if (Number.isFinite(lastMs) && Date.now() - lastMs < 4000) {
+        throw new HttpsError("failed-precondition", "Redemption already in progress");
+      }
+    }
+
+    tx.update(customerRef, {
+      points: FieldValue.increment(-required),
+      lastPointsRedemptionAt: FieldValue.serverTimestamp(),
+    });
     tx.set(promoRef, {
       id: promoId,
       storeId: "ALL_STORES",
@@ -2636,18 +2926,15 @@ async function resolveValidatedPromoDiscount({
   }
 
   if (promo.maxUsesPerUser && customerId) {
+    // Query by both customerId AND promoCode directly in Firestore to avoid
+    // the old limit(100) approach that missed usage beyond the first 100 orders.
     const priorUsesSnap = await db.collection("orders")
       .where("customerId", "==", customerId)
-      .limit(100)
+      .where("promoCode", "==", normalized)
       .get();
     const priorUses = priorUsesSnap.docs.filter((docSnap) => {
-      const data = docSnap.data() || {};
-      const status = data.status;
-      return (
-        normalizePromoCode(data.promoCode || "") === normalized &&
-        status !== "cancelled" &&
-        status !== "rejected"
-      );
+      const status = (docSnap.data() || {}).status;
+      return status !== "cancelled" && status !== "rejected";
     }).length;
     if (priorUses >= promo.maxUsesPerUser) {
       throw new HttpsError("failed-precondition", "Promo maxUsesPerUser exceeded");
@@ -2726,13 +3013,23 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
     throw new HttpsError("failed-precondition", "Store unavailable");
   }
 
+  // Batch-fetch all products in a single round-trip instead of N sequential reads.
+  const productIds = items.map(item => item.productId || item.id).filter(Boolean);
+  if (productIds.length === 0) {
+    throw new HttpsError("invalid-argument", "No valid products in order");
+  }
+  const productSnaps = await Promise.all(
+    productIds.map(id => db.collection("products").doc(id).get())
+  );
+  const productSnapMap = new Map(productSnaps.map(s => [s.id, s]));
+
   let subtotal = 0;
   const normalizedItems = [];
   for (const item of items) {
     const productId = item.productId || item.id;
     if (!productId) continue;
-    const prodSnap = await db.collection("products").doc(productId).get();
-    if (!prodSnap.exists || prodSnap.data()?.storeId !== storeId) {
+    const prodSnap = productSnapMap.get(productId);
+    if (!prodSnap || !prodSnap.exists || prodSnap.data()?.storeId !== storeId) {
       throw new HttpsError("failed-precondition", "Invalid product in order");
     }
     const prod = prodSnap.data();
@@ -2772,17 +3069,68 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
   const orderId = `ord_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   await db.runTransaction(async (tx) => {
-    for (const item of normalizedItems) {
-      const prodRef = db.collection("products").doc(item.productId);
-      const prodSnap = await tx.get(prodRef);
-      const rawInventory = prodSnap.data()?.inventory;
+    // ── Phase 1: ALL reads first (Firestore Admin SDK requires reads before writes) ──
+
+    // Re-read the promo to prevent race conditions on usage limits.
+    let promoData = null;
+    if (promoRef) {
+      const promoSnap = await tx.get(promoRef);
+      if (!promoSnap.exists) {
+        throw new HttpsError("failed-precondition", "Promo code no longer valid");
+      }
+      promoData = promoSnap.data() || {};
+    }
+
+    // Re-read all product inventory docs in a single parallel batch.
+    const prodRefs = normalizedItems.map(item => db.collection("products").doc(item.productId));
+    const prodSnaps = await Promise.all(prodRefs.map(ref => tx.get(ref)));
+
+    // ── Phase 2: Validate (no Firestore I/O, pure logic) ──
+
+    if (promoData) {
+      const currentUses = promoData.currentGlobalUses ?? promoData.usedCount ?? 0;
+      const maxUses = promoData.maxGlobalUses ?? promoData.maxUses ?? 0;
+      if (maxUses > 0 && currentUses >= maxUses) {
+        throw new HttpsError("failed-precondition", "Promo code exhausted");
+      }
+      if (promoData.status && promoData.status !== "active") {
+        throw new HttpsError("failed-precondition", "Promo code no longer active");
+      }
+    }
+
+    const inventoryUpdates = [];
+    for (let i = 0; i < normalizedItems.length; i++) {
+      const item = normalizedItems[i];
+      const rawInventory = prodSnaps[i].data()?.inventory;
       if (hasTrackedProductInventory(rawInventory)) {
         if (rawInventory < item.quantity) {
           throw new HttpsError("failed-precondition", "Insufficient inventory");
         }
-        tx.update(prodRef, { inventory: FieldValue.increment(-item.quantity) });
+        inventoryUpdates.push({ ref: prodRefs[i], qty: item.quantity });
       }
     }
+
+    // ── Phase 3: ALL writes (no more reads after this point) ──
+
+    if (promoRef && promoData) {
+      const newUsedCount = (promoData.currentGlobalUses ?? promoData.usedCount ?? 0) + 1;
+      const maxUses = promoData.maxGlobalUses ?? promoData.maxUses ?? 0;
+      const isExhausted = maxUses > 0 && newUsedCount >= maxUses;
+      tx.update(promoRef, {
+        usedCount: FieldValue.increment(1),
+        currentGlobalUses: FieldValue.increment(1),
+        ...(isExhausted ? { status: "used" } : {}),
+      });
+    }
+
+    for (const { ref, qty } of inventoryUpdates) {
+      tx.update(ref, { inventory: FieldValue.increment(-qty) });
+    }
+
+    const discountSponsor = promoData
+      ? (promoData.sponsor === "MERCHANT" ? "MERCHANT" : "ADMIN")
+      : null;
+
     tx.set(db.collection("orders").doc(orderId), {
       id: orderId,
       storeId,
@@ -2798,6 +3146,7 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       subtotal,
       deliveryPrice: delivery,
       discountAmount: discount,
+      discountSponsor,
       total,
       promoCode: promoCode || null,
       status: "pending",
@@ -2815,13 +3164,6 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
     read: false,
     createdAt: FieldValue.serverTimestamp(),
   });
-
-  if (promoRef) {
-    await promoRef.update({
-      usedCount: FieldValue.increment(1),
-      currentGlobalUses: FieldValue.increment(1),
-    });
-  }
 
   return { orderId, total, subtotal };
 });
@@ -3322,3 +3664,59 @@ exports.migrateStoreSensitiveData = onCall({ cors: ALLOWED_CALLABLE_CORS }, asyn
     publicSynced,
   };
 });
+
+/**
+ * Daily scheduled job — scans all active promo_codes and marks any whose
+ * expirationDate or expiresAt has passed as "expired". Runs at 00:05 UTC.
+ * Because the Admin SDK bypasses Firestore security rules, no rule change
+ * is needed — clients can never trigger this path.
+ */
+exports.expirePromoCodesDaily = onSchedule(
+  { schedule: "5 0 * * *", timeZone: "UTC", region: "us-central1" },
+  async () => {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const BATCH_SIZE = 400;
+
+    const toExpire = new Map();
+
+    // Codes that store expiry in "expirationDate"
+    const snap1 = await db.collection("promo_codes")
+      .where("status", "==", "active")
+      .where("expirationDate", "<", nowIso)
+      .get();
+    snap1.docs.forEach((d) => toExpire.set(d.id, d.ref));
+
+    // Codes that store expiry in "expiresAt"
+    const snap2 = await db.collection("promo_codes")
+      .where("status", "==", "active")
+      .where("expiresAt", "<", nowIso)
+      .get();
+    snap2.docs.forEach((d) => toExpire.set(d.id, d.ref));
+
+    if (toExpire.size === 0) {
+      console.log("[expirePromoCodesDaily] No expired promo codes found.");
+      return;
+    }
+
+    let batch = db.batch();
+    let ops = 0;
+    let total = 0;
+
+    for (const ref of toExpire.values()) {
+      batch.update(ref, { status: "expired" });
+      ops++;
+      total++;
+      if (ops >= BATCH_SIZE) {
+        await batch.commit();
+        batch = db.batch();
+        ops = 0;
+      }
+    }
+    if (ops > 0) {
+      await batch.commit();
+    }
+
+    console.log(`[expirePromoCodesDaily] Marked ${total} promo code(s) as expired.`);
+  }
+);

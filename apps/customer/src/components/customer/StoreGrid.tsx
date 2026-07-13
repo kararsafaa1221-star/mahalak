@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import { Sparkles, Zap } from 'lucide-react';
 import { MahalakLogo } from '@shared/components/MahalakLogo';
+import { ProductImage } from '@shared/components/ProductImage';
 import { Store } from '@shared/types';
 import { getStoreCategoryLabel } from '@shared/constants';
 import { VerifiedBadge } from '@shared/components/VerifiedBadge';
@@ -14,6 +15,7 @@ interface StoreGridItemProps {
   ratingLabel?: string;
   onSelect: (store: Store) => void;
   variant?: 'default' | 'onDark';
+  priority?: boolean;
 }
 
 const StoreGridItem = memo(function StoreGridItem({
@@ -25,6 +27,7 @@ const StoreGridItem = memo(function StoreGridItem({
   ratingLabel,
   onSelect,
   variant = 'default',
+  priority = false,
 }: StoreGridItemProps) {
   const categoryLabel = getStoreCategoryLabel(store.category);
   const rating = ratingLabel ?? Number(store.rating || 0).toFixed(1);
@@ -39,13 +42,14 @@ const StoreGridItem = memo(function StoreGridItem({
     >
       <div className="relative flex aspect-square w-full max-w-[76px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-shadow group-hover:border-vibrant-purple/30 group-hover:shadow-md sm:max-w-[84px]">
         {store.logo ? (
-          <img
+          <ProductImage
             src={store.logo}
             alt={store.shopName}
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-            referrerPolicy="no-referrer"
-            loading="lazy"
-            decoding="async"
+            size="custom"
+            priority={priority}
+            variant="light"
+            className="h-full w-full rounded-xl"
+            imageClassName="transition-transform duration-300 group-hover:scale-105"
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center">
@@ -138,7 +142,7 @@ export interface StoreGridProps {
   variant?: 'default' | 'onDark';
 }
 
-export function StoreGrid({
+export const StoreGrid = memo(function StoreGrid({
   stores,
   onStoreSelect,
   getOfferBadge,
@@ -154,10 +158,11 @@ export function StoreGrid({
       className={`grid w-full ${gridClassName} ${className}`}
       dir="rtl"
     >
-      {stores.map((store) => (
+      {stores.map((store, index) => (
         <StoreGridItem
           key={store.id}
           store={store}
+          priority={index < 6}
           offerBadge={getOfferBadge?.(store) ?? null}
           ratingLabel={getStoreRating?.(store)}
           isFeatured={getIsFeatured?.(store) ?? false}
@@ -169,6 +174,6 @@ export function StoreGrid({
       ))}
     </div>
   );
-}
+});
 
 export { StoreGridItem };

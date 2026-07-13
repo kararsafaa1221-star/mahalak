@@ -11,7 +11,7 @@ import {
   Check, X, Ban, RefreshCw, Search, Edit, AlertTriangle, LogOut, 
   TrendingUp, Calendar, Package, Ticket, Eye, EyeOff, Trash2,
   Plus, Copy, Globe, Star, ShoppingBag, CreditCard, Archive, Car,
-  BarChart3, Activity, Zap, Award, Crown, Palette, Menu, CheckCircle, MessageCircle, Send, Loader2, MapPin, Clock, Truck, Camera, Megaphone, Printer, Wallet, Map as MapIcon
+  BarChart3, Activity, Zap, Award, Crown, Palette, Menu, CheckCircle, MessageCircle, Send, Loader2, MapPin, Clock, Megaphone, Printer, Wallet, Map as MapIcon, ChevronUp, ChevronDown, Save, RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useReactToPrint } from 'react-to-print';
@@ -25,6 +25,7 @@ import { MapContainer, TileLayer, Marker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { showConfirm, showToast } from '../../utils/alerts';
 import { isStoreSubscriptionActive, buildExpiredSubscriptionPatch } from '@shared/utils/store';
+import { DEFAULT_SPONSORED_AD_BADGE, getMerchantAdsSectionOrder, reorderSponsoredAds } from '@shared/utils/sponsoredAds';
 import L from 'leaflet';
 
 // Fix leaflet marker icon issue
@@ -48,6 +49,7 @@ import { AdminManagement } from './AdminManagement';
 import { AdminSidebar } from '../../components/AdminSidebar';
 import { AutoSubscriptionSettingsCard, AutoSubscriptionSettingsModal } from '../../components/AutoSubscriptionSettings';
 import { LoyaltyWalletSettings } from '../../components/LoyaltyWalletSettings';
+import { MerchantRenewalPageSettings } from '../../components/MerchantRenewalPageSettings';
 import { SubscriptionAccountsPanel } from '../../components/SubscriptionAccountsPanel';
 import {
   buildStoreActivationFromPlan,
@@ -71,28 +73,62 @@ const notificationSound = new Audio(
 // ==========================================
 // مكون نموذج إرسال الإشعارات العامة
 // ==========================================
+type BroadcastAudience = 'customers' | 'merchants' | 'both';
+
 const BroadcastForm: React.FC = () => {
-  const { sendAdminNotification, provinces, customers } = useApp();
+  const { sendAdminNotification, provinces, customers, stores } = useApp();
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
-  const [target, setTarget] = useState<'all' | string>('all');
+  const [audience, setAudience] = useState<BroadcastAudience>('customers');
+  const [scope, setScope] = useState<'all' | string>('all');
   const [sent, setSent] = useState(false);
+
+  const eligibleCustomers = customers.filter((c) => !c.isBlocked);
+  const eligibleMerchants = stores.filter(
+    (s) => s.status === 'active' && !s.isBanned && !s.is_virtual,
+  );
+
+  const customersInScope =
+    scope === 'all'
+      ? eligibleCustomers
+      : eligibleCustomers.filter((c) => c.province === scope);
+  const merchantsInScope =
+    scope === 'all'
+      ? eligibleMerchants
+      : eligibleMerchants.filter((s) => s.province === scope);
+
+  const customerCount = audience === 'merchants' ? 0 : customersInScope.length;
+  const merchantCount = audience === 'customers' ? 0 : merchantsInScope.length;
+  const totalCount = customerCount + merchantCount;
+
+  const buildTarget = () => `${audience}:${scope}`;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !message.trim()) return;
-    
-    sendAdminNotification(title.trim(), message.trim(), target);
+    if (!title.trim() || !message.trim() || totalCount === 0) return;
+
+    sendAdminNotification(title.trim(), message.trim(), buildTarget());
     setSent(true);
     setTitle('');
     setMessage('');
-    setTarget('all');
+    setAudience('customers');
+    setScope('all');
     setTimeout(() => setSent(false), 3000);
   };
 
-  const targetCount = target === 'all' 
-    ? customers.length 
-    : customers.filter(c => c.province === target).length;
+  const audienceSummary =
+    audience === 'customers'
+      ? `${customerCount} زبون`
+      : audience === 'merchants'
+        ? `${merchantCount} تاجر`
+        : `${customerCount} زبون و ${merchantCount} تاجر (${totalCount} إجمالاً)`;
+
+  const deliveryHint =
+    audience === 'customers'
+      ? 'يظهر للزبائن في قائمة إشعاراتهم وتطبيق محلك'
+      : audience === 'merchants'
+        ? 'يظهر للتجار في قائمة إشعاراتهم وتطبيق التاجر'
+        : 'يظهر للزبائن والتجار في تطبيقاتهم وقوائم الإشعارات';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -128,32 +164,83 @@ const BroadcastForm: React.FC = () => {
       </div>
 
       <div>
-        <label className="block text-xs font-bold text-gray-500 mb-1">الجمهور المستهدف</label>
-        <select 
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
+        <label className="block text-xs font-bold text-gray-500 mb-1">نوع الجمهور</label>
+        <select
+          value={audience}
+          onChange={(e) => setAudience(e.target.value as BroadcastAudience)}
           className="w-full border border-gray-200 p-3 rounded-xl text-sm bg-white focus:ring-2 focus:ring-[#9952FF] focus:outline-none"
         >
-          <option value="all">جميع الزبائن ({customers.length})</option>
-          {provinces.map(p => {
-            const count = customers.filter(c => c.province === p.name).length;
-            return <option key={p.id} value={p.name}>{p.name} ({count} زبون)</option>;
+          <option value="customers">الزبائن فقط ({eligibleCustomers.length})</option>
+          <option value="merchants">التجار فقط ({eligibleMerchants.length})</option>
+          <option value="both">الزبائن والتجار معاً ({eligibleCustomers.length + eligibleMerchants.length})</option>
+        </select>
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-gray-500 mb-1">النطاق الجغرافي</label>
+        <select 
+          value={scope}
+          onChange={(e) => setScope(e.target.value)}
+          className="w-full border border-gray-200 p-3 rounded-xl text-sm bg-white focus:ring-2 focus:ring-[#9952FF] focus:outline-none"
+        >
+          <option value="all">
+            {audience === 'customers'
+              ? `جميع الزبائن (${eligibleCustomers.length})`
+              : audience === 'merchants'
+                ? `جميع التجار (${eligibleMerchants.length})`
+                : `الجميع — زبائن وتجار (${eligibleCustomers.length + eligibleMerchants.length})`}
+          </option>
+          {provinces.map((p) => {
+            const cCount = eligibleCustomers.filter((c) => c.province === p.name).length;
+            const mCount = eligibleMerchants.filter((s) => s.province === p.name).length;
+            const label =
+              audience === 'customers'
+                ? `${p.name} (${cCount} زبون)`
+                : audience === 'merchants'
+                  ? `${p.name} (${mCount} تاجر)`
+                  : `${p.name} (${cCount} زبون، ${mCount} تاجر)`;
+            return (
+              <option key={p.id} value={p.name}>
+                {label}
+              </option>
+            );
           })}
         </select>
       </div>
 
       <div className="bg-[#f5eeff] p-3 rounded-xl border border-[#e9daff]">
         <p className="text-xs text-[#4D2980] font-bold">
-          📊 عدد الزبائن اللي راح يستلمون الإشعار: <span className="text-lg">{targetCount}</span> زبون
+          📊 عدد المستلمين: <span className="text-lg">{audienceSummary}</span>
         </p>
         <p className="text-[10px] text-[#9952FF] mt-1">
-          الإشعار يرسل باسم "محلك" ويظهر للزبائن في قائمة إشعاراتهم
+          الإشعار يرسل باسم "محلك" — {deliveryHint}
         </p>
+        {totalCount === 0 && (
+          <p className="text-[10px] text-red-600 mt-2 font-bold">
+            لا يوجد مستلمون في النطاق المحدد.
+          </p>
+        )}
       </div>
+
+      {(title.trim() || message.trim()) && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 mb-3">معاينة شكل الإشعار</p>
+          {title.trim() ? (
+            <h4 className="text-base font-black text-slate-900 mb-1 leading-snug">{title}</h4>
+          ) : (
+            <h4 className="text-base font-black text-slate-300 mb-1 leading-snug">عنوان الإشعار</h4>
+          )}
+          {message.trim() ? (
+            <p className="text-sm text-slate-500 font-normal leading-relaxed whitespace-pre-line">{message}</p>
+          ) : (
+            <p className="text-sm text-slate-300 font-normal leading-relaxed">نص الإشعار يظهر هنا...</p>
+          )}
+        </div>
+      )}
 
       <button 
         type="submit"
-        disabled={!title.trim() || !message.trim()}
+        disabled={!title.trim() || !message.trim() || totalCount === 0}
         className="w-full py-3 bg-gradient-to-l from-[#9952FF] to-[#4D2980] hover:from-[#4D2980] hover:to-[#4D2980] text-white font-bold rounded-xl shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 space-x-reverse"
       >
         <Bell size={18} />
@@ -853,6 +940,55 @@ const provinceCoordinates: Record<string, [number, number]> = {
   'دهوك': [36.8667, 42.9833]
 };
 
+type AdsSettingsDraft = {
+  adInterval: number;
+  ads: any[];
+  merchantAdInterval: number;
+  merchantAdsSectionOrder: ReturnType<typeof getMerchantAdsSectionOrder>;
+  merchantDeliveryAds: any[];
+  merchantMediaAds: any[];
+};
+
+const createAdsSettingsDraft = (settings: Record<string, any>): AdsSettingsDraft => ({
+  adInterval: settings.adInterval ?? 5,
+  ads: [...(settings.ads || [])],
+  merchantAdInterval: settings.merchantAdInterval ?? settings.adInterval ?? 5,
+  merchantAdsSectionOrder: getMerchantAdsSectionOrder(settings.merchantAdsSectionOrder),
+  merchantDeliveryAds: [...(settings.merchantDeliveryAds || [])],
+  merchantMediaAds: [...(settings.merchantMediaAds || [])],
+});
+
+const SponsoredAdOrderControls: React.FC<{
+  index: number;
+  total: number;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}> = ({ index, total, onMoveUp, onMoveDown }) => (
+  <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
+    <span className="text-[9px] font-black text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-md min-w-[1.4rem] text-center">
+      {index + 1}
+    </span>
+    <button
+      type="button"
+      onClick={onMoveUp}
+      disabled={index === 0}
+      className="p-1 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+      aria-label="تحريك الإعلان لأعلى"
+    >
+      <ChevronUp size={14} />
+    </button>
+    <button
+      type="button"
+      onClick={onMoveDown}
+      disabled={index === total - 1}
+      className="p-1 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+      aria-label="تحريك الإعلان لأسفل"
+    >
+      <ChevronDown size={14} />
+    </button>
+  </div>
+);
+
 export const AdminPanel: React.FC = () => {
   const navigate = useNavigate();
   const { pageKey: routePageKey } = useParams<{ pageKey?: string }>();
@@ -1355,6 +1491,40 @@ export const AdminPanel: React.FC = () => {
   const [storeSearch, setStoreSearch] = useState('');
   const [adTargetSearch, setAdTargetSearch] = useState('');
   const [selectedAdForTarget, setSelectedAdForTarget] = useState<number | null>(null);
+  const [adsDraft, setAdsDraft] = useState<AdsSettingsDraft>(() => createAdsSettingsDraft(adminSettings));
+  const [adsDirty, setAdsDirty] = useState(false);
+  const [adsSaving, setAdsSaving] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'ads' && !adsDirty) {
+      setAdsDraft(createAdsSettingsDraft(adminSettings));
+    }
+  }, [adminSettings, activeTab, adsDirty]);
+
+  const patchAdsDraft = useCallback((patch: Partial<AdsSettingsDraft>) => {
+    setAdsDraft((prev) => ({ ...prev, ...patch }));
+    setAdsDirty(true);
+  }, []);
+
+  const handleSaveAdsSettings = async () => {
+    setAdsSaving(true);
+    try {
+      await updateAdminSettings(adsDraft);
+      setAdsDirty(false);
+      showToast('success', 'تم الحفظ', 'تُطبَّق إعدادات الإعلانات فوراً على تطبيقي الزبون والتاجر.');
+    } catch {
+      showToast('error', 'فشل الحفظ', 'تعذر حفظ إعدادات الإعلانات.');
+    } finally {
+      setAdsSaving(false);
+    }
+  };
+
+  const handleResetAdsDraft = () => {
+    setAdsDraft(createAdsSettingsDraft(adminSettings));
+    setAdsDirty(false);
+    setAdTargetSearch('');
+    setSelectedAdForTarget(null);
+  };
 
   // قاموس الألوان لكل ثيم
   const themeColors: Record<string, { primary: string; primaryHover: string; bg: string; light: string; text: string; dark: string }> = {
@@ -1793,7 +1963,7 @@ export const AdminPanel: React.FC = () => {
               {activeTab === 'accounts' && '🧮 الحسابات — أرباح الاشتراكات'}
                 {activeTab === 'flashsales' && '⚡ الفعاليات المركزية (Flash Sales)'}
                 {activeTab === 'reviews' && '⭐ تقييمات المتاجر'}
-                {activeTab === 'broadcast' && '📢 إرسال إشعارات للزبائن'}
+                {activeTab === 'broadcast' && '📢 إرسال إشعارات'}
                 {activeTab === 'whatsapp' && '💬 حملات الواتساب الذكية'}
                 {activeTab === 'heatmap' && '🗺️ الخريطة الحرارية للطلبات'}
                 {activeTab === 'database' && '🗄️ إدارة قاعدة البيانات'}
@@ -5026,7 +5196,7 @@ export const AdminPanel: React.FC = () => {
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
               <h3 className="font-bold text-slate-800 text-md mb-4 pb-2 border-b border-slate-100 flex items-center space-x-2 space-x-reverse">
                 <Bell size={20} className="text-[#9952FF]" />
-                <span>📢 إرسال إشعار عام للزبائن</span>
+                <span>📢 إرسال إشعار عام</span>
               </h3>
               
               <BroadcastForm />
@@ -5252,8 +5422,8 @@ export const AdminPanel: React.FC = () => {
                   <div className="flex items-center space-x-2 space-x-reverse">
                     <input 
                       type="number" 
-                      value={adminSettings.adInterval || 5} 
-                      onChange={(e) => updateAdminSettings({ adInterval: parseInt(e.target.value) || 3 })}
+                      value={adsDraft.adInterval} 
+                      onChange={(e) => patchAdsDraft({ adInterval: parseInt(e.target.value) || 3 })}
                       className="w-16 border p-2 rounded-lg text-center font-bold"
                       min="1"
                     />
@@ -5261,13 +5431,21 @@ export const AdminPanel: React.FC = () => {
                   </div>
                 </div>
 
+                <p className="text-[10px] text-slate-400 font-bold px-1">استخدم أسهم الترتيب على كل إعلان لتحديد ترتيب ظهوره في التطبيق.</p>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {adminSettings.ads?.map((ad: any, index: number) => (
+                  {adsDraft.ads?.map((ad: any, index: number) => (
                     <div key={ad.id} className="p-4 border border-slate-100 rounded-2xl bg-white space-y-3 relative shadow-sm hover:shadow-md transition">
+                      <SponsoredAdOrderControls
+                        index={index}
+                        total={(adsDraft.ads || []).length}
+                        onMoveUp={() => patchAdsDraft({ ads: reorderSponsoredAds(adsDraft.ads || [], index, 'up') })}
+                        onMoveDown={() => patchAdsDraft({ ads: reorderSponsoredAds(adsDraft.ads || [], index, 'down') })}
+                      />
                       <button 
                         onClick={() => {
-                          const updated = adminSettings.ads.filter((_: any, i: number) => i !== index);
-                          updateAdminSettings({ ads: updated });
+                          const updated = adsDraft.ads.filter((_: any, i: number) => i !== index);
+                          patchAdsDraft({ ads: updated });
                         }}
                         className="absolute top-2 left-2 p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition z-10"
                       >
@@ -5277,14 +5455,29 @@ export const AdminPanel: React.FC = () => {
                       <ImageUploader 
                         value={ad.url} 
                         onChange={(url) => {
-                          const updated = [...adminSettings.ads];
+                          const updated = [...adsDraft.ads];
                           updated[index].url = url;
-                          updateAdminSettings({ ads: updated });
+                          patchAdsDraft({ ads: updated });
                         }}
                         label="صورة الإعلان"
                         aspectRatio="landscape"
                         showUrlOption={true}
                       />
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-gray-400 mb-1">نص شارة الإعلان</label>
+                        <input
+                          type="text"
+                          placeholder={DEFAULT_SPONSORED_AD_BADGE}
+                          value={ad.badge ?? ''}
+                          onChange={(e) => {
+                            const updated = [...adsDraft.ads];
+                            updated[index].badge = e.target.value;
+                            patchAdsDraft({ ads: updated });
+                          }}
+                          className="w-full border p-2 rounded-lg text-[10px]"
+                        />
+                      </div>
 
                       <div className="grid grid-cols-2 gap-2">
                         <div>
@@ -5294,9 +5487,9 @@ export const AdminPanel: React.FC = () => {
                             placeholder="خصومات ضخمة"
                             value={ad.title || ''} 
                             onChange={(e) => {
-                              const updated = [...adminSettings.ads];
+                              const updated = [...adsDraft.ads];
                               updated[index].title = e.target.value;
-                              updateAdminSettings({ ads: updated });
+                              patchAdsDraft({ ads: updated });
                             }}
                             className="w-full border p-2 rounded-lg text-[10px]"
                           />
@@ -5308,9 +5501,9 @@ export const AdminPanel: React.FC = () => {
                             placeholder="تسوّق الآن"
                             value={ad.desc || ''} 
                             onChange={(e) => {
-                              const updated = [...adminSettings.ads];
+                              const updated = [...adsDraft.ads];
                               updated[index].desc = e.target.value;
-                              updateAdminSettings({ ads: updated });
+                              patchAdsDraft({ ads: updated });
                             }}
                             className="w-full border p-2 rounded-lg text-[10px]"
                           />
@@ -5325,10 +5518,10 @@ export const AdminPanel: React.FC = () => {
                             <button 
                               key={type}
                               onClick={() => {
-                                const updated = [...adminSettings.ads];
+                                const updated = [...adsDraft.ads];
                                 updated[index].targetType = type;
                                 updated[index].targetId = '';
-                                updateAdminSettings({ ads: updated });
+                                patchAdsDraft({ ads: updated });
                               }}
                               className={`flex-1 py-1 rounded-lg text-[9px] font-bold border transition ${ad.targetType === type ? 'bg-[#9952FF] text-white border-[#9952FF]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                             >
@@ -5355,10 +5548,10 @@ export const AdminPanel: React.FC = () => {
                                     <button 
                                       key={s.id}
                                       onClick={() => {
-                                        const updated = [...adminSettings.ads];
+                                        const updated = [...adsDraft.ads];
                                         updated[index].targetId = s.id;
                                         updated[index].targetTitle = s.shopName;
-                                        updateAdminSettings({ ads: updated });
+                                        patchAdsDraft({ ads: updated });
                                         setAdTargetSearch('');
                                         setSelectedAdForTarget(null);
                                       }}
@@ -5378,11 +5571,11 @@ export const AdminPanel: React.FC = () => {
                                           <button 
                                             key={p.id}
                                             onClick={() => {
-                                              const updated = [...adminSettings.ads];
+                                              const updated = [...adsDraft.ads];
                                               updated[index].targetId = p.id;
                                               updated[index].storeId = s.id; // نحتاج معرفة المتجر لفتحه لاحقا
                                               updated[index].targetTitle = p.name;
-                                              updateAdminSettings({ ads: updated });
+                                              patchAdsDraft({ ads: updated });
                                               setAdTargetSearch('');
                                               setSelectedAdForTarget(null);
                                             }}
@@ -5415,13 +5608,14 @@ export const AdminPanel: React.FC = () => {
                         type: 'image', 
                         url: '', 
                         title: 'عنوان جديد', 
-                        desc: 'أضف وصفاً هنا', 
+                        desc: 'أضف وصفاً هنا',
+                        badge: DEFAULT_SPONSORED_AD_BADGE,
                         targetType: 'none', 
                         targetId: '', 
                         targetTitle: '', 
                         link: '' 
                       };
-                      updateAdminSettings({ ads: [...(adminSettings.ads || []), newAd] });
+                      patchAdsDraft({ ads: [...(adsDraft.ads || []), newAd] });
                     }}
                     className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:text-[#9952FF] hover:border-[#e9daff] transition min-h-[250px]"
                   >
@@ -5432,19 +5626,69 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
-            {/* Delivery Ads */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mt-6">
-              <h3 className="font-bold text-slate-800 text-md mb-4 pb-2 border-b border-slate-100 flex items-center space-x-2 space-x-reverse">
-                <Truck size={20} className="text-[#9952FF]" />
-                <span>إعلانات تطبيق التاجر - شركات التوصيل</span>
+            {/* Merchant Ads */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mt-6 mb-6 space-y-6">
+              <h3 className="font-bold text-slate-800 text-md pb-2 border-b border-slate-100 flex items-center space-x-2 space-x-reverse">
+                <StoreIcon size={20} className="text-[#9952FF]" />
+                <span>إعلانات تطبيق التاجر</span>
               </h3>
+              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
+                <div>
+                  <span className="text-xs font-bold text-slate-700 block">سرعة التقليب التلقائي</span>
+                  <span className="text-[10px] text-slate-400">كم عدد الثواني قبل الانتقال للإعلان التالي</span>
+                </div>
+                <div className="flex items-center space-x-2 space-x-reverse">
+                  <input
+                    type="number"
+                    value={adsDraft.merchantAdInterval}
+                    onChange={(e) => patchAdsDraft({ merchantAdInterval: parseInt(e.target.value) || 3 })}
+                    className="w-16 border p-2 rounded-lg text-center font-bold"
+                    min="1"
+                  />
+                  <span className="text-xs text-slate-500">ثانية</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 bg-slate-50 rounded-xl">
+                <div>
+                  <span className="text-xs font-bold text-slate-700 block">ترتيب مجموعات الإعلانات</span>
+                  <span className="text-[10px] text-slate-400">أي مجموعة تظهر أولاً في تطبيق التاجر</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => patchAdsDraft({ merchantAdsSectionOrder: ['delivery', 'media'] })}
+                    className={`flex-1 px-3 py-2 rounded-lg text-[10px] font-bold border transition ${adsDraft.merchantAdsSectionOrder[0] === 'delivery' ? 'bg-[#9952FF] text-white border-[#9952FF]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                  >
+                    المجموعة الأولى ثم الثانية
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => patchAdsDraft({ merchantAdsSectionOrder: ['media', 'delivery'] })}
+                    className={`flex-1 px-3 py-2 rounded-lg text-[10px] font-bold border transition ${adsDraft.merchantAdsSectionOrder[0] === 'media' ? 'bg-[#9952FF] text-white border-[#9952FF]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                  >
+                    المجموعة الثانية ثم الأولى
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-slate-400 font-bold px-1">استخدم أسهم الترتيب على كل إعلان لتحديد ترتيب ظهوره داخل مجموعته.</p>
+
+              <div>
+                <h4 className="text-xs font-bold text-slate-600 mb-3">المجموعة الأولى</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(adminSettings.merchantDeliveryAds || []).map((ad: any, index: number) => (
+                {(adsDraft.merchantDeliveryAds || []).map((ad: any, index: number) => (
                   <div key={ad.id} className="p-4 border border-slate-100 rounded-2xl bg-white space-y-3 relative shadow-sm hover:shadow-md transition">
+                    <SponsoredAdOrderControls
+                      index={index}
+                      total={(adsDraft.merchantDeliveryAds || []).length}
+                      onMoveUp={() => patchAdsDraft({ merchantDeliveryAds: reorderSponsoredAds(adminSettings.merchantDeliveryAds || [], index, 'up') })}
+                      onMoveDown={() => patchAdsDraft({ merchantDeliveryAds: reorderSponsoredAds(adminSettings.merchantDeliveryAds || [], index, 'down') })}
+                    />
                     <button 
                       onClick={() => {
-                        const updated = (adminSettings.merchantDeliveryAds || []).filter((_: any, i: number) => i !== index);
-                        updateAdminSettings({ merchantDeliveryAds: updated });
+                        const updated = (adsDraft.merchantDeliveryAds || []).filter((_: any, i: number) => i !== index);
+                        patchAdsDraft({ merchantDeliveryAds: updated });
                       }}
                       className="absolute top-2 left-2 p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition z-10"
                     >
@@ -5454,14 +5698,29 @@ export const AdminPanel: React.FC = () => {
                     <ImageUploader 
                       value={ad.url} 
                       onChange={(url) => {
-                        const updated = [...(adminSettings.merchantDeliveryAds || [])];
+                        const updated = [...(adsDraft.merchantDeliveryAds || [])];
                         updated[index].url = url;
-                        updateAdminSettings({ merchantDeliveryAds: updated });
+                        patchAdsDraft({ merchantDeliveryAds: updated });
                       }}
                       label="صورة الإعلان"
                       aspectRatio="landscape"
                       showUrlOption={true}
                     />
+
+                    <div>
+                      <label className="block text-[9px] font-bold text-gray-400 mb-1">نص شارة الإعلان</label>
+                      <input
+                        type="text"
+                        placeholder={DEFAULT_SPONSORED_AD_BADGE}
+                        value={ad.badge ?? ''}
+                        onChange={(e) => {
+                          const updated = [...(adsDraft.merchantDeliveryAds || [])];
+                          updated[index].badge = e.target.value;
+                          patchAdsDraft({ merchantDeliveryAds: updated });
+                        }}
+                        className="w-full border p-2 rounded-lg text-[10px]"
+                      />
+                    </div>
 
                     <div className="grid grid-cols-2 gap-2">
                       <div>
@@ -5471,9 +5730,9 @@ export const AdminPanel: React.FC = () => {
                           placeholder="شركة توصيل سريعة"
                           value={ad.title || ''} 
                           onChange={(e) => {
-                            const updated = [...(adminSettings.merchantDeliveryAds || [])];
+                            const updated = [...(adsDraft.merchantDeliveryAds || [])];
                             updated[index].title = e.target.value;
-                            updateAdminSettings({ merchantDeliveryAds: updated });
+                            patchAdsDraft({ merchantDeliveryAds: updated });
                           }}
                           className="w-full border p-2 rounded-lg text-[10px]"
                         />
@@ -5485,9 +5744,9 @@ export const AdminPanel: React.FC = () => {
                           placeholder="توصيل بأفضل الأسعار"
                           value={ad.desc || ''} 
                           onChange={(e) => {
-                            const updated = [...(adminSettings.merchantDeliveryAds || [])];
+                            const updated = [...(adsDraft.merchantDeliveryAds || [])];
                             updated[index].desc = e.target.value;
-                            updateAdminSettings({ merchantDeliveryAds: updated });
+                            patchAdsDraft({ merchantDeliveryAds: updated });
                           }}
                           className="w-full border p-2 rounded-lg text-[10px]"
                         />
@@ -5501,9 +5760,9 @@ export const AdminPanel: React.FC = () => {
                         placeholder="https://... أو رقم هاتف"
                         value={ad.link || ''} 
                         onChange={(e) => {
-                          const updated = [...(adminSettings.merchantDeliveryAds || [])];
+                          const updated = [...(adsDraft.merchantDeliveryAds || [])];
                           updated[index].link = e.target.value;
-                          updateAdminSettings({ merchantDeliveryAds: updated });
+                          patchAdsDraft({ merchantDeliveryAds: updated });
                         }}
                         className="w-full border p-2 rounded-lg text-[10px]"
                       />
@@ -5517,32 +5776,35 @@ export const AdminPanel: React.FC = () => {
                       type: 'image', 
                       url: '', 
                       title: 'عنوان جديد', 
-                      desc: 'أضف وصفاً هنا', 
+                      desc: 'أضف وصفاً هنا',
+                      badge: DEFAULT_SPONSORED_AD_BADGE,
                       link: '' 
                     };
-                    updateAdminSettings({ merchantDeliveryAds: [...(adminSettings.merchantDeliveryAds || []), newAd] });
+                    patchAdsDraft({ merchantDeliveryAds: [...(adsDraft.merchantDeliveryAds || []), newAd] });
                   }}
                   className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:text-[#9952FF] hover:border-[#e9daff] transition min-h-[250px]"
                 >
                   <Plus size={24} />
-                  <span className="text-xs font-bold mt-2">إضافة إعلان توصيل جديد</span>
+                  <span className="text-xs font-bold mt-2">إضافة إعلان جديد</span>
                 </button>
               </div>
-            </div>
+              </div>
 
-            {/* Media Ads */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mt-6 mb-6">
-              <h3 className="font-bold text-slate-800 text-md mb-4 pb-2 border-b border-slate-100 flex items-center space-x-2 space-x-reverse">
-                <Camera size={20} className="text-[#9952FF]" />
-                <span>إعلانات تطبيق التاجر - شركات التصوير والإعلانات</span>
-              </h3>
+              <div className="border-t border-slate-100 pt-6">
+                <h4 className="text-xs font-bold text-slate-600 mb-3">المجموعة الثانية</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(adminSettings.merchantMediaAds || []).map((ad: any, index: number) => (
+                {(adsDraft.merchantMediaAds || []).map((ad: any, index: number) => (
                   <div key={ad.id} className="p-4 border border-slate-100 rounded-2xl bg-white space-y-3 relative shadow-sm hover:shadow-md transition">
+                    <SponsoredAdOrderControls
+                      index={index}
+                      total={(adsDraft.merchantMediaAds || []).length}
+                      onMoveUp={() => patchAdsDraft({ merchantMediaAds: reorderSponsoredAds(adminSettings.merchantMediaAds || [], index, 'up') })}
+                      onMoveDown={() => patchAdsDraft({ merchantMediaAds: reorderSponsoredAds(adminSettings.merchantMediaAds || [], index, 'down') })}
+                    />
                     <button 
                       onClick={() => {
-                        const updated = (adminSettings.merchantMediaAds || []).filter((_: any, i: number) => i !== index);
-                        updateAdminSettings({ merchantMediaAds: updated });
+                        const updated = (adsDraft.merchantMediaAds || []).filter((_: any, i: number) => i !== index);
+                        patchAdsDraft({ merchantMediaAds: updated });
                       }}
                       className="absolute top-2 left-2 p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition z-10"
                     >
@@ -5552,14 +5814,29 @@ export const AdminPanel: React.FC = () => {
                     <ImageUploader 
                       value={ad.url} 
                       onChange={(url) => {
-                        const updated = [...(adminSettings.merchantMediaAds || [])];
+                        const updated = [...(adsDraft.merchantMediaAds || [])];
                         updated[index].url = url;
-                        updateAdminSettings({ merchantMediaAds: updated });
+                        patchAdsDraft({ merchantMediaAds: updated });
                       }}
                       label="صورة الإعلان"
                       aspectRatio="landscape"
                       showUrlOption={true}
                     />
+
+                    <div>
+                      <label className="block text-[9px] font-bold text-gray-400 mb-1">نص شارة الإعلان</label>
+                      <input
+                        type="text"
+                        placeholder={DEFAULT_SPONSORED_AD_BADGE}
+                        value={ad.badge ?? ''}
+                        onChange={(e) => {
+                          const updated = [...(adsDraft.merchantMediaAds || [])];
+                          updated[index].badge = e.target.value;
+                          patchAdsDraft({ merchantMediaAds: updated });
+                        }}
+                        className="w-full border p-2 rounded-lg text-[10px]"
+                      />
+                    </div>
 
                     <div className="grid grid-cols-2 gap-2">
                       <div>
@@ -5569,9 +5846,9 @@ export const AdminPanel: React.FC = () => {
                           placeholder="شركة تصوير منتجات"
                           value={ad.title || ''} 
                           onChange={(e) => {
-                            const updated = [...(adminSettings.merchantMediaAds || [])];
+                            const updated = [...(adsDraft.merchantMediaAds || [])];
                             updated[index].title = e.target.value;
-                            updateAdminSettings({ merchantMediaAds: updated });
+                            patchAdsDraft({ merchantMediaAds: updated });
                           }}
                           className="w-full border p-2 rounded-lg text-[10px]"
                         />
@@ -5583,9 +5860,9 @@ export const AdminPanel: React.FC = () => {
                           placeholder="تصوير احترافي بأسعار ممتازة"
                           value={ad.desc || ''} 
                           onChange={(e) => {
-                            const updated = [...(adminSettings.merchantMediaAds || [])];
+                            const updated = [...(adsDraft.merchantMediaAds || [])];
                             updated[index].desc = e.target.value;
-                            updateAdminSettings({ merchantMediaAds: updated });
+                            patchAdsDraft({ merchantMediaAds: updated });
                           }}
                           className="w-full border p-2 rounded-lg text-[10px]"
                         />
@@ -5599,9 +5876,9 @@ export const AdminPanel: React.FC = () => {
                         placeholder="https://... أو رقم هاتف"
                         value={ad.link || ''} 
                         onChange={(e) => {
-                          const updated = [...(adminSettings.merchantMediaAds || [])];
+                          const updated = [...(adsDraft.merchantMediaAds || [])];
                           updated[index].link = e.target.value;
-                          updateAdminSettings({ merchantMediaAds: updated });
+                          patchAdsDraft({ merchantMediaAds: updated });
                         }}
                         className="w-full border p-2 rounded-lg text-[10px]"
                       />
@@ -5615,16 +5892,44 @@ export const AdminPanel: React.FC = () => {
                       type: 'image', 
                       url: '', 
                       title: 'عنوان جديد', 
-                      desc: 'أضف وصفاً هنا', 
+                      desc: 'أضف وصفاً هنا',
+                      badge: DEFAULT_SPONSORED_AD_BADGE,
                       link: '' 
                     };
-                    updateAdminSettings({ merchantMediaAds: [...(adminSettings.merchantMediaAds || []), newAd] });
+                    patchAdsDraft({ merchantMediaAds: [...(adsDraft.merchantMediaAds || []), newAd] });
                   }}
                   className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:text-[#9952FF] hover:border-[#e9daff] transition min-h-[250px]"
                 >
                   <Plus size={24} />
-                  <span className="text-xs font-bold mt-2">إضافة إعلان تصوير جديد</span>
+                  <span className="text-xs font-bold mt-2">إضافة إعلان جديد</span>
                 </button>
+              </div>
+              </div>
+            </div>
+
+            <div className="sticky bottom-4 z-30">
+              <div className={`rounded-2xl shadow-lg border p-4 flex flex-wrap items-center justify-between gap-3 transition ${adsDirty ? 'bg-white border-[#e9daff]' : 'bg-slate-50 border-slate-100'}`}>
+                <p className={`text-xs font-bold ${adsDirty ? 'text-[#9952FF]' : 'text-slate-400'}`}>
+                  {adsDirty ? 'لديك تغييرات غير محفوظة' : 'لا توجد تغييرات معلّقة'}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleResetAdsDraft}
+                    disabled={!adsDirty || adsSaving}
+                    className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 text-[10px] font-black flex items-center gap-1 disabled:opacity-40 hover:bg-slate-50 transition"
+                  >
+                    <RotateCcw size={12} /> تجاهل
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveAdsSettings}
+                    disabled={!adsDirty || adsSaving}
+                    className="px-4 py-2 rounded-xl bg-[#9952FF] text-white text-[10px] font-black flex items-center gap-1 disabled:opacity-40 hover:bg-[#8844ee] transition"
+                  >
+                    <Save size={12} /> {adsSaving ? 'جاري الحفظ...' : 'حفظ التغييرات'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

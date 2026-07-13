@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Home, Briefcase, MapPin, Plus, Star, Trash2, X, Check, Pencil } from 'lucide-react';
-import { LocationPicker } from '@shared/components/LocationPicker';
+import { CustomerLocationPicker } from '@/components/CustomerLocationPicker';
 import type { CustomerSavedLocation, Province } from '@shared/types';
 import {
   createSavedLocation,
@@ -44,8 +44,8 @@ function locationIcon(label: string) {
 }
 
 const fieldClass =
-  'w-full bg-slate-50 border border-slate-100 px-4 py-3.5 rounded-2xl text-xs font-black text-slate-900 focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple transition-all outline-none';
-const labelClass = 'block text-[10px] font-black text-slate-500 mb-2 mr-1';
+  'w-full bg-white/10 border border-white/20 px-4 py-3.5 rounded-2xl text-xs font-black text-white placeholder:text-white/50 focus:ring-4 focus:ring-vibrant-purple/20 focus:border-vibrant-purple transition-all outline-none';
+const labelClass = 'block text-[10px] font-black text-white/80 mb-2 mr-1';
 
 function AddressFields({
   draft,
@@ -267,10 +267,10 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
   };
 
   const renderLocationForm = (mode: 'add' | 'edit') => (
-    <div className="space-y-4 p-4 rounded-2xl bg-white/95 border border-white/20 animate-fade-in text-right">
+    <div className="space-y-4 p-4 rounded-2xl bg-white/10 border border-white/15 animate-fade-in text-right">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-black text-slate-800">{mode === 'add' ? 'موقع جديد' : 'تعديل الموقع'}</span>
-        <button type="button" onClick={resetDraft} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500">
+        <span className="text-xs font-black text-white">{mode === 'add' ? 'موقع جديد' : 'تعديل الموقع'}</span>
+        <button type="button" onClick={resetDraft} className="p-1.5 rounded-lg hover:bg-white/10 text-white/70">
           <X size={16} />
         </button>
       </div>
@@ -286,7 +286,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
               className={`px-3 py-2 rounded-xl text-[10px] font-black border transition-colors ${
                 preset === name
                   ? 'bg-vibrant-purple text-white border-vibrant-purple'
-                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  : 'bg-white/10 text-white/80 border-white/20 hover:bg-white/15'
               }`}
             >
               {name}
@@ -298,7 +298,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
             className={`px-3 py-2 rounded-xl text-[10px] font-black border transition-colors ${
               preset === 'custom'
                 ? 'bg-vibrant-purple text-white border-vibrant-purple'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                : 'bg-white/10 text-white/80 border-white/20 hover:bg-white/15'
             }`}
           >
             مكان آخر
@@ -317,7 +317,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
 
       <AddressFields draft={addressDraft} onChange={setAddressDraft} provinces={provinces} />
 
-      <LocationPicker
+      <CustomerLocationPicker
         key={`${mode}-${editingId ?? 'new'}-${draftLat}-${draftLng}`}
         initialLat={draftLat}
         initialLng={draftLng}
@@ -327,7 +327,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
           setDraftMapAddress(address);
         }}
         label="تحديد الموقع على الخريطة"
-        labelClassName="block text-xs font-bold text-slate-600 mb-1"
+        labelClassName={labelClassName}
         required
       />
 

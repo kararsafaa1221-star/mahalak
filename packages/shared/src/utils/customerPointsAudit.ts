@@ -1,4 +1,6 @@
 import {
+  calcOrderDeliveryPoints,
+  getOrderPointsEligibleAmount,
   calcTierUpgradeBonus,
   getTierPeriodStart,
   resolveLoyaltySettings,
@@ -178,7 +180,7 @@ export function buildCustomerPointsAudit(input: BuildCustomerPointsAuditInput): 
 
   for (const order of deliveredOrders) {
     const orderDate = parseDate(order.createdAt);
-    const purchasePoints = Math.floor((order.total || 0) / 1000) * (loyalty.pointsPer1000Iqd || 1);
+    const purchasePoints = calcOrderDeliveryPoints(getOrderPointsEligibleAmount(order), loyalty);
     const { tierBonus, state } = applyTierStateForOrder(tierState, orderDate, loyalty);
     tierState = state;
 
@@ -197,7 +199,7 @@ export function buildCustomerPointsAudit(input: BuildCustomerPointsAuditInput): 
         storeName: storeNameFor(input.stores, order.storeId, order.storeName),
         occurredAt: order.createdAt,
         orderId: order.id,
-        orderTotal: order.total,
+        orderTotal: getOrderPointsEligibleAmount(order),
       });
       bySource.order_purchase += purchasePoints;
     }
@@ -212,7 +214,7 @@ export function buildCustomerPointsAudit(input: BuildCustomerPointsAuditInput): 
         storeName: storeNameFor(input.stores, order.storeId, order.storeName),
         occurredAt: order.createdAt,
         orderId: order.id,
-        orderTotal: order.total,
+        orderTotal: getOrderPointsEligibleAmount(order),
       });
       bySource.tier_upgrade += tierBonus;
     }

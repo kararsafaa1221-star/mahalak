@@ -3,7 +3,7 @@ import { CAPACITOR_ALLOW_NAVIGATION } from '../../packages/shared/src/constants/
 
 const config: CapacitorConfig = {
   appId: 'iq.mahalak.app',
-  appName: 'محلك - زبون',
+  appName: 'محلك',
   webDir: 'dist',
   bundledWebRuntime: false,
   server: {

@@ -11,6 +11,9 @@ export interface ActivityLogMeta {
   points?: number;
   price?: number;
   province?: string;
+  audience?: 'customers' | 'merchants' | 'both';
+  customerCount?: number;
+  merchantCount?: number;
   /** Override auto-generated description. */
   description?: string;
   /** Changed store profile field keys (for generic updates). */
@@ -159,8 +162,21 @@ export function formatTargetAr(actionKey: string, targetId?: string | null, meta
   }
 
   if (actionKey === 'broadcast.send') {
-    if (!targetId || targetId === 'all' || targetId === 'ALL') return 'جميع الزبائن';
-    return `زبائن ${meta?.province ?? targetId}`;
+    const audience = meta?.audience as string | undefined;
+    const province = meta?.province ?? (targetId?.includes(':') ? targetId.split(':')[1] : targetId);
+    const hasProvince = province && province !== 'all' && province !== 'ALL';
+
+    if (audience === 'merchants') {
+      return hasProvince ? `تجار ${province}` : 'جميع التجار';
+    }
+    if (audience === 'both') {
+      return hasProvince ? `زبائن وتجار ${province}` : 'جميع الزبائن والتجار';
+    }
+    if (!targetId || targetId === 'all' || targetId === 'ALL' || targetId === 'customers:all') {
+      return 'جميع الزبائن';
+    }
+    if (hasProvince) return `زبائن ${province}`;
+    return 'جميع الزبائن';
   }
 
   if (actionKey === 'database.seed' || actionKey === 'database.generate_virtual' || actionKey === 'database.delete_virtual') {

@@ -8,6 +8,7 @@
 
 @import "tailwindcss";
 @config "../tailwind.config.js";
+@source "./**/*.{js,ts,jsx,tsx}";
 
 @layer base {
   /* Override Tailwind preflight `color: inherit` — body uses light text on dark shell */
@@ -162,11 +163,38 @@ body {
   border-image: linear-gradient(90deg, rgba(11, 19, 32, 1) 0%, rgba(123, 61, 255, 1) 100%) 1;
 }
 
+/* Reports page — total stat badge on chart cards */
+.report-stat-badge {
+  color: rgba(255, 255, 255, 1) !important;
+  background: linear-gradient(90deg, rgba(123, 61, 255, 1) 0%, rgba(11, 19, 32, 1) 100%);
+  border: 1px solid rgba(0, 0, 0, 1);
+  border-image: linear-gradient(90deg, rgba(11, 19, 32, 1) 0%, rgba(123, 61, 255, 1) 100%) 1;
+}
+
 /* Merchant dashboard — unified gradient card (purple → navy) */
 .merchant-brand-card {
-  background-image: linear-gradient(90deg, #7B3DFF 0%, #0B1320 100%);
+  background: linear-gradient(90deg, rgba(123, 61, 255, 1) 0%, rgba(11, 19, 32, 1) 100%);
   border: 1px solid transparent;
-  border-image: linear-gradient(90deg, rgba(11, 19, 32, 1) 0%, rgba(123, 61, 255, 1) 100%) 1;
+  border-image: linear-gradient(90deg, rgba(11, 19, 32, 0) 0%, rgba(123, 61, 255, 1) 100%) 1;
+}
+
+/* Merchant themed pages (home, products, orders, reports, delivery, marketing) — yellow accent text on brand cards */
+.reports-page .merchant-brand-card {
+  color: #fff700;
+}
+
+.reports-page .merchant-brand-card :is(.text-white, .text-slate-300, .text-slate-400, .text-slate-850, .text-slate-405) {
+  color: #fff700 !important;
+}
+
+.reports-page .merchant-brand-card .text-\[\#E8ECF4\] {
+  color: #fff700 !important;
+}
+
+/* Stat values & body copy that stay white on brand cards */
+.reports-page .merchant-brand-card.text-brand-white,
+.reports-page .merchant-brand-card .text-brand-white {
+  color: rgba(255, 255, 255, 1) !important;
 }
 
 .merchant-gradient-surface {
@@ -197,6 +225,224 @@ body {
 .merchant-dropdown {
   background-color: #131C2E;
   border: 1px solid rgba(123, 61, 255, 0.2);
+}
+
+/* إعلانات ممولة — نسبة 16:9 مطابقة لضبط المقاس في لوحة الإدارة (800×450) */
+.sponsored-ad-slider {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  height: auto;
+  min-height: 0;
+}
+
+.sponsored-ad-slider--full {
+  aspect-ratio: 16 / 9;
+  height: auto;
+  min-height: 0;
+}
+
+.sponsored-ad-slider--compact {
+  aspect-ratio: 16 / 9;
+  height: auto;
+  min-height: 0;
+}
+
+.sponsored-ad-slider__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+}
+
+.sponsored-ad-slider__nav--prev {
+  right: 0.75rem;
+  left: auto;
+}
+
+.sponsored-ad-slider__nav--next {
+  left: 0.75rem;
+  right: auto;
+}
+
+.sponsored-ad-slider__copy {
+  width: fit-content;
+  max-width: 88%;
+  margin-inline-end: auto;
+  gap: 0.2rem;
+}
+
+.sponsored-ad-slider__badge {
+  font-size: 0.5rem;
+  line-height: 1.1;
+  padding: 0.12rem 0.38rem 0.12rem 0.18rem;
+  margin-bottom: 0.15rem;
+  background: rgba(8, 12, 24, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  color: #ffffff;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.sponsored-ad-slider__badge-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+  color: #1e1033;
+  flex-shrink: 0;
+}
+
+.sponsored-ad-slider__badge-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 9.5rem;
+}
+
+.sponsored-ad-slider__title {
+  font-size: 0.75rem;
+  margin-bottom: 0.1rem;
+  background: linear-gradient(
+    105deg,
+    #ffffff 0%,
+    #f3e8ff 20%,
+    #ffffff 38%,
+    #fcd34d 52%,
+    #ffffff 66%,
+    #c4b5fd 82%,
+    #ffffff 100%
+  );
+  background-size: 220% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  filter: drop-shadow(0 0 10px rgba(123, 61, 255, 0.5))
+    drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
+  animation:
+    sponsored-ad-title-rise 0.65s cubic-bezier(0.22, 1, 0.36, 1) both,
+    sponsored-ad-title-shine 4.5s ease-in-out infinite;
+}
+
+.sponsored-ad-slider__desc {
+  font-size: 0.5625rem;
+  background: linear-gradient(90deg, #ede9fe 0%, #ffffff 45%, #ddd6fe 100%);
+  background-size: 180% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  filter: drop-shadow(0 0 6px rgba(177, 140, 255, 0.4))
+    drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
+  animation:
+    sponsored-ad-desc-rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both,
+    sponsored-ad-desc-glow 3s ease-in-out infinite;
+}
+
+@keyframes sponsored-ad-title-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(3px) drop-shadow(0 0 0 rgba(123, 61, 255, 0));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0) drop-shadow(0 0 10px rgba(123, 61, 255, 0.5))
+      drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
+  }
+}
+
+@keyframes sponsored-ad-title-shine {
+  0%,
+  100% {
+    background-position: 100% 50%;
+  }
+  50% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes sponsored-ad-desc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sponsored-ad-desc-glow {
+  0%,
+  100% {
+    background-position: 0% 50%;
+    filter: drop-shadow(0 0 6px rgba(177, 140, 255, 0.35))
+      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
+  }
+  50% {
+    background-position: 100% 50%;
+    filter: drop-shadow(0 0 10px rgba(177, 140, 255, 0.55))
+      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
+  }
+}
+
+.sponsored-ad-slider.group:hover .sponsored-ad-slider__title {
+  animation:
+    sponsored-ad-title-rise 0.65s cubic-bezier(0.22, 1, 0.36, 1) both,
+    sponsored-ad-title-shine 2.5s ease-in-out infinite;
+}
+
+@media (min-width: 640px) {
+  .sponsored-ad-slider__badge {
+    font-size: 0.5625rem;
+    padding: 0.14rem 0.45rem 0.14rem 0.2rem;
+  }
+
+  .sponsored-ad-slider__badge-icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .sponsored-ad-slider__badge-text {
+    max-width: 11rem;
+  }
+
+  .sponsored-ad-slider__title {
+    font-size: 0.875rem;
+  }
+
+  .sponsored-ad-slider__desc {
+    font-size: 0.625rem;
+  }
+}
+
+@media (min-width: 768px) {
+  .sponsored-ad-slider__title {
+    font-size: 1rem;
+  }
+
+  .sponsored-ad-slider__desc {
+    font-size: 0.6875rem;
+  }
+}
+
+@media (min-width: 640px) {
+  .sponsored-ad-slider__nav--prev {
+    right: 1rem;
+  }
+
+  .sponsored-ad-slider__nav--next {
+    left: 1rem;
+  }
 }
 
 .merchant-icon-tile {
@@ -257,6 +503,237 @@ body {
 
 .animate-scale-up {
   animation: scale-up 0.3s ease-out;
+}
+
+/* Welcome Screen — animated background & card effects */
+@keyframes welcome-star-twinkle {
+  0%, 100% {
+    opacity: 0.15;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.6);
+  }
+}
+
+@keyframes welcome-shimmer-sweep {
+  0% {
+    transform: translateX(-130%) skewX(-12deg);
+  }
+  100% {
+    transform: translateX(130%) skewX(-12deg);
+  }
+}
+
+@keyframes welcome-glow-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 40px rgba(123, 61, 255, 0.25),
+      0 0 80px rgba(123, 61, 255, 0.12),
+      0 24px 48px rgba(0, 0, 0, 0.35);
+  }
+  50% {
+    box-shadow:
+      0 0 70px rgba(123, 61, 255, 0.45),
+      0 0 120px rgba(177, 140, 255, 0.2),
+      0 28px 56px rgba(0, 0, 0, 0.4);
+  }
+}
+
+@keyframes welcome-border-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 300% 50%;
+  }
+}
+
+@keyframes welcome-aurora-shift {
+  0%, 100% {
+    transform: translateX(-15%) translateY(0) rotate(-8deg) scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateX(15%) translateY(-8%) rotate(8deg) scale(1.12);
+    opacity: 0.65;
+  }
+}
+
+@keyframes welcome-particle-rise {
+  0% {
+    transform: translateY(110vh) scale(0);
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.95;
+  }
+  85% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(-25vh) scale(1.2);
+    opacity: 0;
+  }
+}
+
+@keyframes welcome-btn-glow {
+  0%, 100% {
+    box-shadow: 0 8px 32px 0 rgba(177, 140, 255, 0.35);
+  }
+  50% {
+    box-shadow: 0 11.98px 39.96px 0 rgba(177, 140, 255, 0.45);
+  }
+}
+
+@keyframes welcome-icon-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 20px rgba(123, 61, 255, 0.5),
+      0 0 40px rgba(123, 61, 255, 0.25);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      0 0 35px rgba(177, 140, 255, 0.75),
+      0 0 60px rgba(123, 61, 255, 0.4);
+    transform: scale(1.06);
+  }
+}
+
+.welcome-star {
+  position: absolute;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.9);
+  animation: welcome-star-twinkle var(--twinkle-duration, 3s) ease-in-out infinite;
+  animation-delay: var(--twinkle-delay, 0s);
+}
+
+.welcome-star--bright {
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.9), 0 0 16px rgba(177, 140, 255, 0.6);
+}
+
+.welcome-particle {
+  position: absolute;
+  bottom: -5%;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(177, 140, 255, 0.7) 40%, rgba(123, 61, 255, 0.2) 100%);
+  box-shadow: 0 0 12px rgba(177, 140, 255, 0.8);
+  animation: welcome-particle-rise var(--rise-duration, 8s) linear infinite;
+  animation-delay: var(--rise-delay, 0s);
+}
+
+.welcome-aurora {
+  position: absolute;
+  width: 160%;
+  height: 55%;
+  border-radius: 50%;
+  filter: blur(60px);
+  animation: welcome-aurora-shift 8s ease-in-out infinite;
+}
+
+.welcome-aurora--purple {
+  top: -20%;
+  left: -30%;
+  background: radial-gradient(ellipse, rgba(123, 61, 255, 0.55) 0%, transparent 70%);
+}
+
+.welcome-aurora--violet {
+  bottom: -25%;
+  right: -30%;
+  background: radial-gradient(ellipse, rgba(177, 140, 255, 0.45) 0%, transparent 70%);
+  animation-delay: -4s;
+  animation-duration: 10s;
+}
+
+.welcome-light-beam {
+  position: absolute;
+  top: -10%;
+  width: 40%;
+  height: 120%;
+  background: linear-gradient(180deg, rgba(123, 61, 255, 0.25) 0%, transparent 75%);
+  filter: blur(40px);
+  transform-origin: top center;
+}
+
+.welcome-light-beam--left {
+  left: 5%;
+  transform: rotate(-12deg);
+}
+
+.welcome-light-beam--right {
+  right: 5%;
+  transform: rotate(12deg);
+}
+
+.welcome-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(123, 61, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(123, 61, 255, 0.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 45%, black 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 45%, black 20%, transparent 75%);
+}
+
+.welcome-card-glow {
+  animation: welcome-glow-pulse 2.8s ease-in-out infinite;
+}
+
+.welcome-card-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.welcome-card-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.12) 50%,
+    transparent 70%
+  );
+  animation: welcome-shimmer-sweep 3.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.welcome-card-border-glow {
+  position: relative;
+  isolation: isolate;
+}
+
+.welcome-card-border-glow::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 2px;
+  background: linear-gradient(90deg, #7b3dff, #b18cff, #ffffff, #b18cff, #7b3dff);
+  background-size: 300% 100%;
+  animation: welcome-border-flow 2.5s linear infinite;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.85;
+}
+
+.welcome-icon-pulse {
+  animation: welcome-icon-pulse 2s ease-in-out infinite;
+}
+
+.welcome-btn-pulse {
+  animation: welcome-btn-glow 2s ease-in-out infinite;
 }
 
 /* شريط التمرير المخصص (Custom Scrollbar) - مخفي تماماً لتسهيل التنقل باللمس والإيماءات */
@@ -361,10 +838,19 @@ input[type="number"] {
 
 /* Inputs on dark surfaces */
 .input-brand {
-  background-color: #131C2E;
-  background-image: linear-gradient(90deg, rgba(123, 61, 255, 0.35) 0%, #131C2E 55%);
-  border: 1px solid rgba(177, 140, 255, 0.2);
+  background: linear-gradient(90deg, rgba(19, 28, 46, 1) 0%, rgba(11, 19, 32, 1) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   color: #E8ECF4;
+}
+
+select.input-brand {
+  background: linear-gradient(90deg, rgba(123, 61, 255, 1) 0%, rgba(11, 19, 32, 1) 100%);
+  border-color: rgba(255, 245, 245, 1);
+  color: #ffffff;
+}
+
+select.input-brand:focus {
+  border-color: rgba(255, 255, 255, 1);
 }
 
 .input-brand:focus {
@@ -500,4 +986,67 @@ input[type="number"] {
   font-weight: 700;
   border-width: 1px;
   border-style: solid;
+}
+
+/* ── LocationPicker GPS control (Leaflet overlay) ── */
+.mahalak-location-picker-map .leaflet-control-attribution {
+  display: none !important;
+}
+
+.mahalak-location-picker-map .leaflet-bottom.leaflet-right {
+  bottom: 0.4rem;
+  right: 0.4rem;
+}
+
+.mahalak-location-picker-map .leaflet-bottom.leaflet-right .leaflet-control {
+  margin: 0 !important;
+}
+
+.mahalak-gps-control {
+  margin: 0 !important;
+  clear: both;
+}
+
+.mahalak-gps-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  border-radius: 9999px;
+  border: 2px solid #ffffff;
+  background: linear-gradient(90deg, #7b3dff 0%, #0b1320 100%);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.75rem;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  font-family: inherit;
+}
+
+.mahalak-gps-button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.mahalak-gps-button:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.mahalak-gps-button:disabled,
+.mahalak-gps-button.is-loading {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.mahalak-gps-button svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.mahalak-gps-button.is-loading svg {
+  animation: pulse 1.5s ease-in-out infinite;
 }

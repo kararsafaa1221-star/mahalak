@@ -12,6 +12,7 @@ import {
 } from '@shared/constants/loyaltyRewards';
 import {
   formatLoyaltyTemplate,
+  formatOrderDeliveryRewardDescription,
   formatTierResetNoteAr,
   getEffectiveCustomerTierState,
   getNextTierProgress,
@@ -21,6 +22,10 @@ import {
   resolveLoyaltySettings,
 } from '@shared/constants/loyaltySettings';
 import {
+  markWalletRewardsSeen,
+  shouldShowProfileWalletGiftBadge,
+} from '@shared/utils/walletRewardsBadge';
+import {
   buildCustomerProductSharePayload,
   buildCustomerStoreSharePayload,
   buildPlatformShareAction,
@@ -28,26 +33,46 @@ import {
   tryNativeShare,
   type SharePlatform,
 } from '@shared/utils/shareContent';
+import {
+  isShareTrackedUrl,
+  recordShareVisit,
+  splitHashPathAndQuery,
+} from '@shared/lib/shareVisitTracking';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ShoppingBag, Heart, Wallet, User, Users, Search, MapPin, Home,  Phone, Plus, Minus, Check, X, ClipboardList, Share2, Camera,
   Gift, Award, Bell, ShieldAlert, Store as StoreIcon, Trash2, LogOut,
-  Ticket, Copy, Shield, Zap, ChevronRight, ChevronLeft, ShoppingCart, LayoutGrid, Sparkles, Shirt, ChevronDown, Star, Clock, CheckCircle, AlertCircle, AlertTriangle, Info, BellOff, Calendar, Lock, MessageCircle, RefreshCw, Send, FileText,
-  Smartphone, Laptop, Tv, Lightbulb, Bed, Hammer, Car, Bike, BookOpen, Dumbbell, Gem, Candy, Flower2, Briefcase, Beef, Pill, Printer, Coffee, Flame, ArrowRightLeft
+  Ticket, Copy, Shield, Zap, ChevronRight, ChevronLeft, ShoppingCart, LayoutGrid, Sparkles, Shirt, ChevronDown, Star, Clock, CheckCircle, AlertCircle, AlertTriangle, Info, BellOff, Calendar, Lock, MessageCircle, RefreshCw, Send, FileText, Percent,
+  Smartphone, Laptop, Tv, Lightbulb, Bed, Hammer, Car, Bike, BookOpen, Dumbbell, Gem, Candy, Flower2, Briefcase, Beef, Pill, Printer, Coffee, Flame, ArrowRightLeft, Loader2
 } from 'lucide-react';
-import { authService } from '@shared/services/authService';
+import { ProductComparePanel } from '../components/ProductComparePanel';
 import { showToast, showModal } from '@shared/utils/alerts';
+import { formatPromoDiscount } from '@shared/utils/promoCode';
 import { getCallableErrorMessage } from '@shared/utils/firebaseErrors';
+import { readHistoryScrollY, restoreAppScroll, saveScrollToHistoryState } from '@shared/utils/appScrollHistory';
 import {
   canOrderProductQuantity,
   getProductAvailabilityLabel,
   hasTrackedInventory,
   isProductOutOfStock,
 } from '@shared/utils/productInventory';
-import { LocationPicker } from '@shared/components/LocationPicker';
+import { CustomerLocationPicker } from '@/components/CustomerLocationPicker';
 import { VerifiedBadge } from '@shared/components/VerifiedBadge';
+import { ProductImage } from '@shared/components/ProductImage';
+import { prefetchImageUrls } from '@shared/utils/prefetchImages';
 import { StoreGrid } from '@/components/customer/StoreGrid';
-import { StoreProductSections } from '@/components/customer/StoreProductSections';
+import { StoreProductSections } from '@shared/components/StoreProductSections';
+import {
+  resolveStoreTheme,
+  storeGradientProps,
+  storeGradientToLeftProps,
+  storeInfoBarProps,
+  storePageBackgroundProps,
+  storePrimaryBgProps,
+  storeThemeCssVars,
+  themeFieldIconColor,
+  themeFieldTextStyle,
+} from '@shared/utils/storeTheme';
 import { SavedLocationsManager } from '@/components/customer/SavedLocationsManager';
 import { DeliveryLocationPickerSheet } from '@/components/customer/DeliveryLocationPickerSheet';
 import { useCustomerAndroidBack } from '@/hooks/useCustomerAndroidBack';
@@ -56,7 +81,10 @@ import { DeleteAccountSection } from '@shared/components/DeleteAccountSection';
 import { PrivacyPolicyModal } from '@shared/components/PrivacyPolicyModal';
 import { AboutUsModal } from '@shared/components/AboutUsModal';
 import { MahalakLogo, MahalakLogoIcon } from '@shared/components/MahalakLogo';
-import { getStoreOfferBadge } from '@shared/utils/storeOfferBadge';
+import { SponsoredAdSlider } from '@shared/components/SponsoredAdSlider';
+import { WelcomeScreenBackground } from '@shared/components/WelcomeScreenBackground';
+import { getPublishedSponsoredAds, DEFAULT_SPONSORED_AD_BADGE } from '@shared/utils/sponsoredAds';
+import { getStoreOfferBadge, productHasActiveDiscount, storeHasActiveDiscounts, storeHasDiscountOnAllProducts } from '@shared/utils/storeOfferBadge';
 import { MapContainer, TileLayer, Marker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -213,13 +241,15 @@ const CancelOrderButton: React.FC<CancelOrderButtonProps> = ({ order, onCancelCl
   if (order.status !== 'pending' || timeLeft <= 0) return null;
 
   return (
-    <button
-      onClick={() => onCancelClick(order)}
-      className="group flex-1 w-full py-2.5 bg-white text-rose-500 border border-rose-100 hover:border-rose-300 hover:bg-rose-50 rounded-xl font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-2 shadow-sm hover:shadow active:scale-95 transition-all duration-300 min-w-[100px]"
-    >
-      <Clock size={16} className="group-hover:rotate-90 transition-transform duration-300 shrink-0 text-rose-400" />
-      <span className="relative z-10">إلغاء الطلب (متاح لـ {timeLeft} ثانية)</span>
-    </button>
+    <div className="order-actions-container mt-4 pt-3 border-t border-white/20 flex items-stretch justify-center flex-wrap sm:flex-nowrap gap-3 w-full">
+      <button
+        onClick={() => onCancelClick(order)}
+        className="group flex-1 w-full py-2.5 bg-white text-rose-500 border border-rose-100 hover:border-rose-300 hover:bg-rose-50 rounded-xl font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-2 shadow-sm hover:shadow active:scale-95 transition-all duration-300 min-w-[100px]"
+      >
+        <Clock size={16} className="group-hover:rotate-90 transition-transform duration-300 shrink-0 text-rose-400" />
+        <span className="relative z-10">إلغاء الطلب (متاح لـ {timeLeft} ثانية)</span>
+      </button>
+    </div>
   );
 };
 
@@ -242,7 +272,8 @@ export const CustomerApp: React.FC = () => {
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
   const { 
     currentCustomer, setCurrentCustomer, setCurrentMerchant, logoutSession, deleteUserAccountSecure, registerCustomer, lookupCustomerByPhone, checkPhoneAvailable, verifyCustomerLogin, linkCustomerAuthUid, updateCustomerProfile, resetCustomerPasswordSecure,
-    stores: allStores, products: rawProducts, customerWalletPromos, orders, placeOrder, toggleFollowStore, toggleStoreNotification, validatePromoCode,
+    authLoading, authInitialized,
+    stores: allStores, products: rawProducts, customerWalletPromos, orders, placeOrder, toggleFollowStore, toggleStoreNotification, validatePromoCode, refreshStore, subscribeToStore, refreshCustomerWalletPromos,
     notifications, markNotificationAsRead, markAllNotificationsAsRead, convertPointsToPromo,
     customers, provinces, addCustomerPoints, adminSettings, submitStoreReview, storeReviews,
     flashSales, flashSaleRequests,
@@ -254,6 +285,10 @@ export const CustomerApp: React.FC = () => {
     () => loyalty.redemptionPackages.filter((pkg) => pkg.enabled),
     [loyalty.redemptionPackages],
   );
+  const minRedeemPoints = useMemo(() => {
+    if (loyaltyRedemptionPackages.length === 0) return 100;
+    return Math.min(...loyaltyRedemptionPackages.map((pkg) => pkg.points));
+  }, [loyaltyRedemptionPackages]);
   const loyaltyEarnRules = useMemo(
     () => loyalty.earnRules.filter((rule) => rule.enabled),
     [loyalty.earnRules],
@@ -293,7 +328,9 @@ export const CustomerApp: React.FC = () => {
   const MERCHANTS_PAGE_SIZE = 36;
 
   // واجهات الزبون: دخول، تسجيل، OTP، لوحة التطبيق
-  const [view, setView] = useState<'login' | 'signup' | 'otp' | 'forgot' | 'dashboard'>('login');
+  const [view, setView] = useState<'login' | 'signup' | 'otp' | 'forgot' | 'dashboard'>(() =>
+    StorageService.get('LOGGED_IN_CUSTOMER_ID') ? 'dashboard' : 'login',
+  );
   
   // التابات النشطة في الـ Dashboard
   const [activeTab, setActiveTab] = useState<'stores' | 'merchants' | 'products' | 'orders' | 'wallet' | 'profile'>('stores');
@@ -305,8 +342,8 @@ export const CustomerApp: React.FC = () => {
   // تتبع الطلب المحدد من الإشعارات
   const [targetOrderId, setTargetOrderId] = useState<string | null>(null);
 
-  // حالة عرض المنتجات للمقارنة
-  const [showCompareModal, setShowCompareModal] = useState<Product | null>(null);
+  // جلسة مقارنة الأسعار للمنتجات المشابهة
+  const [compareSession, setCompareSession] = useState<{ baseProduct: Product; listOpen: boolean } | null>(null);
 
   // تتبع الطلب المراد إلغاؤه من قبل الزبون
   const [orderToCancel, setOrderToCancel] = useState<any | null>(null);
@@ -319,6 +356,7 @@ export const CustomerApp: React.FC = () => {
   const [catalogSubCategory, setCatalogSubCategory] = useState('');
   const [allProductsSortType, setAllProductsSortType] = useState<'default' | 'price-asc' | 'bestselling' | 'rating-desc'>('default');
   const [catalogFreeDeliveryOnly, setCatalogFreeDeliveryOnly] = useState<boolean>(false);
+  const [catalogDiscountOnly, setCatalogDiscountOnly] = useState<boolean>(false);
 
   // خيارات الفرز لتبويب المتاجر
   const [storesSortType, setStoresSortType] = useState<'default' | 'rating-desc' | 'name-asc' | 'nearest'>('default');
@@ -330,6 +368,7 @@ export const CustomerApp: React.FC = () => {
   const [showStoreProductSorting, setShowStoreProductSorting] = useState(false);
   const [prodSortType, setProdSortType] = useState<'default' | 'price-asc' | 'rating-desc'>('default');
   const [prodFreeDeliveryOnly, setProdFreeDeliveryOnly] = useState<boolean>(false);
+  const [prodDiscountOnly, setProdDiscountOnly] = useState<boolean>(false);
   const [showOnlyDelivered, setShowOnlyDelivered] = useState<boolean>(false);
 
   // إدارة التصفح داخل المتجر المختار
@@ -339,6 +378,7 @@ export const CustomerApp: React.FC = () => {
     // إعادة ضبط الفلترة والفرز المتقدم عند تغيير المتجر المفتوح
     setProdSortType('default');
     setProdFreeDeliveryOnly(false);
+    setProdDiscountOnly(false);
     setStoreProductsSearchQuery('');
     setStoreProductsSelectedSubCategory('');
     setShowStoreProductCategories(false);
@@ -350,14 +390,17 @@ export const CustomerApp: React.FC = () => {
       }
       window['appScrollingStateActiveStoreId'] = store.id;
       setRawSelectedStore(store);
-      setTimeout(() => window.scrollTo({ top: 0, behavior: 'instant' }), 0); // Scroll to top when opening store
+      if (!isPopStateRef.current) {
+        setTimeout(() => window.scrollTo({ top: 0, behavior: 'instant' }), 0);
+      }
     } else {
       window['appScrollingStateActiveStoreId'] = null;
       setRawSelectedStore(null);
-      // Ensure the DOM has a moment to render the previous list before scrolling
-      setTimeout(() => {
-        window.scrollTo({ top: window['appScrollingStateLastScrollY'] || 0, behavior: 'instant' });
-      }, 50);
+      if (!isPopStateRef.current) {
+        setTimeout(() => {
+          window.scrollTo({ top: window['appScrollingStateLastScrollY'] || 0, behavior: 'instant' });
+        }, 50);
+      }
     }
   }, []);
 
@@ -365,20 +408,28 @@ export const CustomerApp: React.FC = () => {
     const map = new Map<string, Store>();
     stores.filter(s => !s.isBanned).forEach(s => {
       const key = s.phone || s.shopName;
-      if (!map.has(key)) {
+      const existing = map.get(key);
+      if (!existing) {
         map.set(key, s);
-      } else {
-        if (s.status === 'active' && map.get(key)?.status !== 'active') {
-          map.set(key, s);
-        }
+      } else if (existing.id === s.id) {
+        map.set(key, s);
+      } else if (s.status === 'active' && existing.status !== 'active') {
+        map.set(key, s);
       }
     });
     return Array.from(map.values());
   }, [stores]);
 
-  const [showFullFeatured, setShowFullFeatured] = useState(false);
-  const [showFullNearby, setShowFullNearby] = useState(false);
-  const [showFullVerified, setShowFullVerified] = useState(false);
+  const liveSelectedStore = useMemo(() => {
+    if (!selectedStore?.id) return selectedStore;
+    return stores.find((s) => s.id === selectedStore.id) ?? selectedStore;
+  }, [selectedStore, stores]);
+
+  const [showNearbyStoresPage, setShowNearbyStoresPage] = useState(false);
+  const [nearbyStoresSearch, setNearbyStoresSearch] = useState('');
+  const [showVerifiedStoresPage, setShowVerifiedStoresPage] = useState(false);
+  const [verifiedStoresSearch, setVerifiedStoresSearch] = useState('');
+  const [showFullOffers, setShowFullOffers] = useState(false);
   const [showCategories, setShowCategories] = useState(false);
   const [showSorting, setShowSorting] = useState(false);
   const [showAllProductsSorting, setShowAllProductsSorting] = useState(false);
@@ -395,6 +446,12 @@ export const CustomerApp: React.FC = () => {
   // تفاصيل المنتج المفتوح
   const [selectedProductDetail, setSelectedProductDetail] = useState<Product | null>(null);
   const [productDetailFrom, setProductDetailFrom] = useState<'store' | 'products' | null>(null);
+
+  const reopenCompareList = useCallback(() => {
+    setCompareSession((prev) => (prev ? { ...prev, listOpen: true } : null));
+    setSelectedProductDetail(null);
+    setProductDetailFrom(null);
+  }, []);
   const [detailQty, setDetailQty] = useState(1);
 
   // نظام المشاركة المطور
@@ -410,6 +467,7 @@ export const CustomerApp: React.FC = () => {
   
   // تأكيد الاستبدال
   const [showRedeemConfirm, setShowRedeemConfirm] = useState<number | null>(null);
+  const [isRedeemingPoints, setIsRedeemingPoints] = useState(false);
 
   // تعديل العنوان السريع من السلة
 
@@ -439,7 +497,38 @@ export const CustomerApp: React.FC = () => {
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [walletView, setWalletView] = useState<'points' | 'gifts'>('points');
+  const [walletSeenRevision, setWalletSeenRevision] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const showProfileGiftBadge = useMemo(() => {
+    if (!currentCustomer?.id) return false;
+    return shouldShowProfileWalletGiftBadge({
+      customerId: currentCustomer.id,
+      points: currentCustomer.points ?? 0,
+      promos: customerWalletPromos,
+      minRedeemPoints,
+    });
+  // walletSeenRevision forces re-check after marking wallet as seen
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCustomer?.id, currentCustomer?.points, customerWalletPromos, minRedeemPoints, walletSeenRevision]);
+
+  useEffect(() => {
+    if (activeTab !== 'wallet' || !currentCustomer?.id) return;
+    markWalletRewardsSeen(currentCustomer.id, currentCustomer.points ?? 0, customerWalletPromos);
+    setWalletSeenRevision((n) => n + 1);
+  }, [activeTab, currentCustomer?.id, currentCustomer?.points, customerWalletPromos]);
+
+  useEffect(() => {
+    if ((activeTab === 'profile' || activeTab === 'wallet') && currentCustomer?.id) {
+      void refreshCustomerWalletPromos();
+    }
+  }, [activeTab, currentCustomer?.id, refreshCustomerWalletPromos]);
+
+  useEffect(() => {
+    if (activeTab === 'wallet' && walletView === 'gifts' && currentCustomer?.id) {
+      void refreshCustomerWalletPromos();
+    }
+  }, [activeTab, walletView, currentCustomer?.id, refreshCustomerWalletPromos]);
 
   // ==========================================
   // نظام التزامن مع تاريخ المتصفح لدعم رجوع الأندرويد وإيماءات اليد
@@ -472,7 +561,8 @@ export const CustomerApp: React.FC = () => {
   };
 
   const parseHashToState = (hash: string) => {
-    const path = hash.replace('#/dashboard', '');
+    const { path: rawPath } = splitHashPathAndQuery(hash);
+    const path = rawPath.replace(/^\/dashboard/, '');
     const parts = path.split('/').filter(Boolean);
     
     const state: any = {
@@ -545,7 +635,7 @@ export const CustomerApp: React.FC = () => {
         
         // المتجر المختار
         if (state.selectedStoreId) {
-          const foundStore = uniqueStores.find(s => s.id === state.selectedStoreId) || null;
+          const foundStore = stores.find(s => s.id === state.selectedStoreId) || null;
           setSelectedStore(foundStore);
         } else {
           setSelectedStore(null);
@@ -577,6 +667,8 @@ export const CustomerApp: React.FC = () => {
           setShowNotifications(state.showNotifications);
         }
 
+        restoreAppScroll(readHistoryScrollY(state));
+
         setTimeout(() => {
           isPopStateRef.current = false;
         }, 50);
@@ -585,7 +677,7 @@ export const CustomerApp: React.FC = () => {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [view, activeTab, uniqueStores, products]);
+  }, [view, activeTab, stores, products]);
 
   React.useEffect(() => {
     if (isPopStateRef.current) return;
@@ -612,14 +704,31 @@ export const CustomerApp: React.FC = () => {
         historyState.showNotifications === currentState.showNotifications;
 
       if (!isSame) {
-        window.history.pushState(currentState, "", hashUrl);
+        saveScrollToHistoryState();
+        window.history.pushState({ ...currentState, scrollY: 0 }, "", hashUrl);
         appNavDepthRef.current += 1;
       }
     } else {
-      window.history.replaceState({ ...currentState, isInitial: true }, "", hashUrl);
+      window.history.replaceState({ ...currentState, isInitial: true, scrollY: window.scrollY }, "", hashUrl);
       appNavDepthRef.current = 1;
     }
   }, [view, activeTab, selectedStore, selectedProductDetail, showCart, showNotifications]);
+
+  React.useEffect(() => {
+    if (view !== 'dashboard') return;
+
+    let timeoutId = 0;
+    const onScroll = () => {
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(saveScrollToHistoryState, 120);
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.clearTimeout(timeoutId);
+    };
+  }, [view]);
 
   // استعادة المتجر/المنتج من الرابط عند تحميل البيانات (يدعم الرجوع والروابط العميقة)
   React.useEffect(() => {
@@ -630,7 +739,7 @@ export const CustomerApp: React.FC = () => {
       : parseHashToState(window.location.hash);
 
     if (navState.selectedStoreId && selectedStore?.id !== navState.selectedStoreId) {
-      const foundStore = uniqueStores.find((s) => s.id === navState.selectedStoreId) || null;
+      const foundStore = stores.find((s) => s.id === navState.selectedStoreId) || null;
       if (foundStore) setSelectedStore(foundStore);
     }
 
@@ -641,7 +750,28 @@ export const CustomerApp: React.FC = () => {
         setProductDetailFrom(navState.selectedStoreId ? 'store' : navState.activeTab === 'products' ? 'products' : 'store');
       }
     }
-  }, [uniqueStores, products, selectedStore, selectedProductDetail, setSelectedStore]);
+  }, [stores, products, selectedStore, selectedProductDetail, setSelectedStore]);
+
+  React.useEffect(() => {
+    if (view !== 'dashboard' || !isShareTrackedUrl(window.location.hash)) return;
+
+    if (selectedProductDetail?.storeId && selectedProductDetail.id) {
+      void recordShareVisit({
+        storeId: selectedProductDetail.storeId,
+        kind: 'product',
+        productId: selectedProductDetail.id,
+        productName: selectedProductDetail.name,
+      });
+      return;
+    }
+
+    if (selectedStore?.id) {
+      void recordShareVisit({
+        storeId: selectedStore.id,
+        kind: 'store',
+      });
+    }
+  }, [view, selectedStore?.id, selectedProductDetail?.id, selectedProductDetail?.storeId, selectedProductDetail?.name]);
 
   // نظام التتبع والموقع
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -683,19 +813,18 @@ export const CustomerApp: React.FC = () => {
   }, [view, currentCustomer, userCoords]);
 
   useEffect(() => {
-    if (currentCustomer && customers.length > 0) {
-      const updatedCustomer = customers.find(c => c.id === currentCustomer.id);
-      
-      if (updatedCustomer) {
-        const validation = validateUserStatus(updatedCustomer, 'customer');
-        if (!validation.valid) {
-          setTimeout(() => {
-            setCurrentCustomer(null);
-            setView('login');
-            setLoginError(validation.message);
-          }, 0);
-        }
-      }
+    if (!currentCustomer || customers.length === 0) return;
+
+    const updatedCustomer = customers.find(c => c.id === currentCustomer.id);
+    if (!updatedCustomer) return;
+
+    const validation = validateUserStatus(updatedCustomer, 'customer');
+    if (!validation.valid) {
+      setTimeout(() => {
+        setCurrentCustomer(null);
+        setView('login');
+        setLoginError(validation.message);
+      }, 0);
     }
   }, [customers, currentCustomer, setCurrentCustomer]);
 
@@ -739,8 +868,31 @@ export const CustomerApp: React.FC = () => {
       setSelectedStore(null);
       setShowFollowedStoresPage(false);
       setFollowedStoresSearch('');
+      setShowVerifiedStoresPage(false);
+      setVerifiedStoresSearch('');
+      setShowNearbyStoresPage(false);
+      setNearbyStoresSearch('');
       startTabTransition(() => setActiveTab(newTabId));
     }
+  };
+
+  const navigateToStore = useCallback((store: Store) => {
+    if (store.isBanned) return;
+    setShowFollowedStoresPage(false);
+    setFollowedStoresSearch('');
+    setShowVerifiedStoresPage(false);
+    setVerifiedStoresSearch('');
+    setShowNearbyStoresPage(false);
+    setNearbyStoresSearch('');
+    startTabTransition(() => {
+      setActiveTab('stores');
+      setSelectedStore(store);
+    });
+  }, [setSelectedStore, startTabTransition]);
+
+  const openLoyaltyWallet = (view: 'points' | 'gifts' = 'points') => {
+    setWalletView(view);
+    handleTabChange('wallet');
   };
 
   const handleConfirmUnsaved = (save: boolean) => {
@@ -798,7 +950,7 @@ export const CustomerApp: React.FC = () => {
       showNotifications,
       showShareModal,
       showRateModal,
-      showCompareModal,
+      showCompareModal: compareSession,
       showUnsavedModal,
       showRedeemConfirm,
       showCartLocationPicker,
@@ -825,7 +977,8 @@ export const CustomerApp: React.FC = () => {
       setShowNotifications,
       setShowShareModal,
       setShowRateModal,
-      setShowCompareModal,
+      setShowCompareModal: setCompareSession,
+      reopenCompareList,
       setShowUnsavedModal,
       setPendingTab,
       setShowRedeemConfirm,
@@ -869,6 +1022,8 @@ export const CustomerApp: React.FC = () => {
 
   // تحديث الجلسة وتعبئة بيانات الملف الشخصي عند تسجيل الدخول
   useEffect(() => {
+    if (authLoading || !authInitialized) return;
+
     if (currentCustomer) {
       Promise.resolve().then(() => {
         if (view !== 'dashboard') setView('dashboard');
@@ -881,14 +1036,18 @@ export const CustomerApp: React.FC = () => {
         setProfileBaseline({ name: currentCustomer.name, locations: normalizedLocations });
         setOrderDeliveryLocationId(defaultLocation?.id ?? null);
       });
-    } else {
+      return;
+    }
+
+    const hasPersistedSession = !!StorageService.get('LOGGED_IN_CUSTOMER_ID');
+    if (!hasPersistedSession) {
       Promise.resolve().then(() => {
         if (view !== 'login' && view !== 'signup' && view !== 'otp' && view !== 'forgot') {
           setView('login');
         }
       });
     }
-  }, [currentCustomer, view]);
+  }, [currentCustomer, view, authLoading, authInitialized]);
 
   const activeOrderLocation = useMemo(() => {
     const sourceLocations = savedLocations.length
@@ -940,6 +1099,7 @@ export const CustomerApp: React.FC = () => {
     setStoresSortType('default');
     setAllProductsSortType('default');
     setCatalogFreeDeliveryOnly(false);
+    setCatalogDiscountOnly(false);
   };
 
   const hasActiveCatalogFilters =
@@ -949,7 +1109,8 @@ export const CustomerApp: React.FC = () => {
     catalogSubCategory !== '' ||
     storesSortType !== 'default' ||
     allProductsSortType !== 'default' ||
-    catalogFreeDeliveryOnly;
+    catalogFreeDeliveryOnly ||
+    catalogDiscountOnly;
 
   const headerLocations = useMemo(() => {
     if (savedLocations.length) return savedLocations;
@@ -1064,50 +1225,9 @@ export const CustomerApp: React.FC = () => {
     }
   };
 
-  const [currentAdIndex, setCurrentAdIndex] = useState(0);
-  const ads = adminSettings.ads || [];
-
-  useEffect(() => {
-    if (ads.length <= 1) return;
-    const interval = setInterval(() => {
-      setCurrentAdIndex(prev => (prev + 1) % ads.length);
-    }, (adminSettings.adInterval || 5) * 1000);
-    return () => clearInterval(interval);
-  }, [ads.length, adminSettings.adInterval]);
-
-  const nextAd = () => setCurrentAdIndex(prev => (prev + 1) % ads.length);
-  const prevAd = () => setCurrentAdIndex(prev => (prev - 1 + ads.length) % ads.length);
-
-  const [touchStart, setTouchStart] = useState<number | null>(null);
-  const [touchEnd, setTouchEnd] = useState<number | null>(null);
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    setTouchStart(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    setTouchEnd(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
-    const distance = touchStart - touchEnd;
-    const isLeftSwipe = distance > 50;
-    const isRightSwipe = distance < -50;
-    if (isLeftSwipe) nextAd();
-    if (isRightSwipe) prevAd();
-    setTouchStart(null);
-    setTouchEnd(null);
-  };
-
   const resolveStoreOfferBadge = useCallback(
     (store: Store) => getStoreOfferBadge(store, products),
     [products],
-  );
-
-  const isFeaturedStore = useCallback(
-    (store: Store) => !!adminSettings.featuredStoreIds?.includes(store.id),
-    [adminSettings.featuredStoreIds],
   );
 
   const getStoreDistanceLabel = useCallback(
@@ -1131,9 +1251,29 @@ export const CustomerApp: React.FC = () => {
     [uniqueStores],
   );
 
-  const featuredStores = useMemo(
-    () => uniqueStores.filter((s) => isStoreSubscriptionActive(s) && isFeaturedStore(s)),
-    [uniqueStores, isFeaturedStore],
+  const filteredVerifiedStores = useMemo(() => {
+    const q = verifiedStoresSearch.trim().toLowerCase();
+    if (!q) return verifiedStores;
+    return verifiedStores.filter(
+      (s) =>
+        s.shopName.toLowerCase().includes(q) ||
+        s.area.toLowerCase().includes(q) ||
+        (s.username && s.username.toLowerCase().includes(q)),
+    );
+  }, [verifiedStores, verifiedStoresSearch]);
+
+  const offerStores = useMemo(
+    () =>
+      uniqueStores
+        .filter((s) => isStoreSubscriptionActive(s) && storeHasDiscountOnAllProducts(s, products))
+        .sort((a, b) => {
+          const badgeA = getStoreOfferBadge(a, products);
+          const badgeB = getStoreOfferBadge(b, products);
+          const percentA = badgeA ? parseInt(badgeA, 10) || 0 : 0;
+          const percentB = badgeB ? parseInt(badgeB, 10) || 0 : 0;
+          return percentB - percentA;
+        }),
+    [uniqueStores, products],
   );
 
   const nearbyStores = useMemo(() => {
@@ -1172,11 +1312,21 @@ export const CustomerApp: React.FC = () => {
     return filtered;
   }, [uniqueStores, adminSettings, currentCustomer?.province, currentCustomer?.lat, currentCustomer?.lng, userCoords]);
 
+  const filteredNearbyStores = useMemo(() => {
+    const q = nearbyStoresSearch.trim().toLowerCase();
+    if (!q) return nearbyStores;
+    return nearbyStores.filter(
+      (s) =>
+        s.shopName.toLowerCase().includes(q) ||
+        s.area.toLowerCase().includes(q) ||
+        (s.username && s.username.toLowerCase().includes(q)),
+    );
+  }, [nearbyStores, nearbyStoresSearch]);
+
   const storeGridCommonProps = {
     onStoreSelect: setSelectedStore,
     getOfferBadge: resolveStoreOfferBadge,
     getStoreRating: (store: Store) => getStoreRating(store.id, store.rating),
-    getIsFeatured: isFeaturedStore,
   } as const;
 
   const filteredStores = React.useMemo(() => {
@@ -1200,6 +1350,10 @@ export const CustomerApp: React.FC = () => {
       if (catalogFreeDeliveryOnly) {
         const delInfo = getStoreDeliveryInfo(s, customerDeliveryProvince || 'بغداد');
         if (!delInfo.isFree) return false;
+      }
+
+      if (catalogDiscountOnly && !storeHasActiveDiscounts(s, products)) {
+        return false;
       }
 
       return matchName && matchProvince && matchCategory && matchSubCat;
@@ -1241,11 +1395,11 @@ export const CustomerApp: React.FC = () => {
     }
 
     return result;
-  }, [view, uniqueStores, catalogSearchQuery, effectiveCatalogProvince, catalogCategory, catalogSubCategory, storesSortType, catalogFreeDeliveryOnly, customerDeliveryCoords, customerDeliveryProvince, storeRatingsMap]);
+  }, [view, uniqueStores, catalogSearchQuery, effectiveCatalogProvince, catalogCategory, catalogSubCategory, storesSortType, catalogFreeDeliveryOnly, catalogDiscountOnly, customerDeliveryCoords, customerDeliveryProvince, storeRatingsMap, products]);
 
   useEffect(() => {
     setVisibleMerchantsCount(MERCHANTS_PAGE_SIZE);
-  }, [catalogSearchQuery, effectiveCatalogProvince, catalogCategory, catalogSubCategory, storesSortType, catalogFreeDeliveryOnly, MERCHANTS_PAGE_SIZE]);
+  }, [catalogSearchQuery, effectiveCatalogProvince, catalogCategory, catalogSubCategory, storesSortType, catalogFreeDeliveryOnly, catalogDiscountOnly, MERCHANTS_PAGE_SIZE]);
 
   const visibleFilteredStores = useMemo(
     () => filteredStores.slice(0, visibleMerchantsCount),
@@ -1587,12 +1741,25 @@ export const CustomerApp: React.FC = () => {
     setProductDetailFrom(null);
   };
 
-  const productDetailBackLabel =
-    productDetailFrom === 'products'
-      ? 'رجوع للمنتجات'
-      : productDetailFrom === 'store' || selectedStore
-        ? 'رجوع للمتجر'
-        : 'رجوع للمنتجات';
+  const handleAppBack = useCallback(() => {
+    if (appNavDepthRef.current > 1) {
+      saveScrollToHistoryState();
+      window.history.back();
+      return true;
+    }
+    return false;
+  }, []);
+
+  const handleProductDetailBack = () => {
+    if (compareSession && !compareSession.listOpen) {
+      setCompareSession((prev) => (prev ? { ...prev, listOpen: true } : null));
+      closeProductDetail();
+      return;
+    }
+    if (!handleAppBack()) {
+      closeProductDetail();
+    }
+  };
 
   React.useEffect(() => {
     if (!selectedProductDetail) setProductDetailFrom(null);
@@ -1662,10 +1829,11 @@ export const CustomerApp: React.FC = () => {
   // حساب أسعار السلة
   const subtotal = cart.reduce((acc, curr) => acc + (curr.product.finalPrice * curr.quantity), 0);
 
-  // رسوم التوصيل = مجموع رسوم كل متجر (إذا ماكو توصيل مجاني)
+  // رسوم التوصيل = مجموع رسوم كل متجر (يستخدم محافظة موقع التوصيل المختار، نفس ما يحسبه الطلب الفعلي)
   const deliveryCost = Object.values(cartByStore).reduce((acc, group) => {
     const hasFreeDeliveryItem = group.items.some(item => item.product.isFreeDelivery);
-    const delInfo = getStoreDeliveryInfo(group.store, currentCustomer?.province || 'بغداد');
+    const province = activeOrderLocation?.province || currentCustomer?.province || 'بغداد';
+    const delInfo = getStoreDeliveryInfo(group.store, province);
     if (delInfo.isFree || hasFreeDeliveryItem) return acc; // توصيل مجاني
     return acc + delInfo.price;
   }, 0);
@@ -1737,6 +1905,10 @@ export const CustomerApp: React.FC = () => {
       });
     }
 
+    if (catalogDiscountOnly) {
+      filtered = filtered.filter(productHasActiveDiscount);
+    }
+
     if (catalogCategory) {
       filtered = filtered.filter(p => {
         const store = storeMap.get(p.storeId);
@@ -1776,7 +1948,17 @@ export const CustomerApp: React.FC = () => {
     }
 
     return filtered;
-  }, [view, products, catalogSearchQuery, allProductsSortType, catalogFreeDeliveryOnly, effectiveCatalogProvince, storeMap, bestsellerCounts, customerDeliveryProvince, catalogCategory, catalogSubCategory]);
+  }, [view, products, catalogSearchQuery, allProductsSortType, catalogFreeDeliveryOnly, catalogDiscountOnly, effectiveCatalogProvince, storeMap, bestsellerCounts, customerDeliveryProvince, catalogCategory, catalogSubCategory]);
+
+  const compareEligibleProducts = useMemo(
+    () =>
+      products.filter((p) => {
+        if (p.status !== 'published') return false;
+        const store = storeMap.get(p.storeId);
+        return store && store.status === 'active' && !store.isBanned;
+      }),
+    [products, storeMap],
+  );
 
   const catalogDisplayProducts = useMemo(
     () =>
@@ -1848,6 +2030,10 @@ export const CustomerApp: React.FC = () => {
       filtered = filtered.filter(p => p.isFreeDelivery || isStoreFree);
     }
 
+    if (prodDiscountOnly) {
+      filtered = filtered.filter(productHasActiveDiscount);
+    }
+
     // ترتيب بحسب التحديد
     if (prodSortType === 'price-asc') {
       filtered = [...filtered].sort((a, b) => {
@@ -1871,8 +2057,52 @@ export const CustomerApp: React.FC = () => {
     storeProductsSelectedSubCategory,
     prodSortType,
     prodFreeDeliveryOnly,
+    prodDiscountOnly,
     currentCustomer?.province,
   ]);
+
+  // تحميل مسبق لصور المتاجر والمنتجات لتظهر فوراً عند فتح الصفحات
+  useEffect(() => {
+    if (view !== 'dashboard') return;
+    prefetchImageUrls(uniqueStores.map((s) => s.logo));
+  }, [view, uniqueStores]);
+
+  useEffect(() => {
+    if (view !== 'dashboard') return;
+    prefetchImageUrls(
+      products.filter((p) => p.status === 'published').map((p) => p.image),
+    );
+  }, [view, products]);
+
+  useEffect(() => {
+    if (view !== 'dashboard' || activeTab !== 'products') return;
+    prefetchImageUrls(catalogDisplayProducts.slice(0, 30).map((p) => p.image));
+  }, [view, activeTab, catalogDisplayProducts]);
+
+  useEffect(() => {
+    if (!selectedStore) return;
+    prefetchImageUrls([selectedStore.logo, ...storeProducts.map((p) => p.image)]);
+  }, [selectedStore, storeProducts]);
+
+  // Real-time per-store listener: fires immediately with latest data when the
+  // user opens any store page (bypasses the collection snapshot cache entirely).
+  useEffect(() => {
+    if (!selectedStore?.id) return;
+    const unsub = subscribeToStore(selectedStore.id, () => {/* stores state is updated inside */});
+    return unsub;
+  }, [selectedStore?.id, subscribeToStore]);
+
+  useEffect(() => {
+    if (!liveSelectedStore || !selectedStore) return;
+    if (liveSelectedStore === selectedStore) return;
+    const prevTheme = JSON.stringify(selectedStore.storeTheme ?? null);
+    const nextTheme = JSON.stringify(liveSelectedStore.storeTheme ?? null);
+    if (prevTheme !== nextTheme) {
+      setRawSelectedStore(liveSelectedStore);
+    }
+  }, [liveSelectedStore, selectedStore]);
+
+  const selectedStoreTheme = useMemo(() => resolveStoreTheme(liveSelectedStore), [liveSelectedStore]);
 
   const handleApplyPromo = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1937,93 +2167,85 @@ export const CustomerApp: React.FC = () => {
 
     setIsPlacingOrder(true);
     try {
-      let promoCodeForOrder: string | undefined = appliedPromo?.code;
-      let promoDiscountForOrder = discountAmount;
-
-      if (appliedPromo) {
-        const promoCheck = await validatePromoCode({
-          code: appliedPromo.code,
-          customerId: currentCustomer.id,
-          storeIdsInCart: Object.keys(cartByStore),
-          customerProvince: deliveryProvince,
-          subtotal: cart.reduce((sum, item) => sum + (item.product.finalPrice * item.quantity), 0),
-        });
-        if (!promoCheck.valid) {
-          alert(promoCheck.message || 'كود الخصم لم يعد صالحاً. تمت إزالته من الطلب.');
-          setAppliedPromo(null);
-          return;
-        }
-        if (promoCheck.discount != null) {
-          promoDiscountForOrder = promoCheck.discount;
-          setAppliedPromo((prev) => (prev ? { ...prev, discountValue: promoCheck.discount! } : prev));
-        }
-        promoCodeForOrder = promoCheck.code || appliedPromo.code;
-      }
-
-      let summary = '';
-      let totalValue = 0;
-      const placedOrderIds: string[] = [];
+      // placeOrderSecure validates the promo server-side; no need for a pre-flight
+      // validatePromoCode call (which is a redundant Cloud Function round-trip and
+      // requires authUid to be linked — causing failures with points-based LP- codes).
+      const promoCodeForOrder: string | undefined = appliedPromo?.code;
+      const promoDiscountForOrder = discountAmount;
       const firstStoreId = storeGroups[0][0];
 
-      for (const [storeId, group] of storeGroups) {
+      // Build per-store payloads
+      const storePayloads = storeGroups.map(([storeId, group]) => {
         const store = group.store;
         const storeItems = group.items;
-
         const storeSubtotal = storeItems.reduce((acc, item) => acc + (item.product.finalPrice * item.quantity), 0);
         const delInfo = getStoreDeliveryInfo(store, deliveryProvince);
         const hasFreeDelivery = delInfo.isFree || storeItems.some((item) => item.product.isFreeDelivery);
         const storeDeliveryCost = hasFreeDelivery ? 0 : delInfo.price;
         const storeDiscount = storeId === firstStoreId ? promoDiscountForOrder : 0;
         const storeTotal = Math.max(0, storeSubtotal + storeDeliveryCost - storeDiscount);
+        return {
+          storeId,
+          store,
+          storeItems,
+          storeSubtotal,
+          storeDeliveryCost,
+          storeDiscount,
+          storeTotal,
+          promoCode: storeId === firstStoreId ? promoCodeForOrder : undefined,
+        };
+      });
 
+      // Place all store orders in parallel for speed
+      const orderResults = await Promise.all(
+        storePayloads.map(({ store, storeItems, storeSubtotal, storeDeliveryCost, storeDiscount, storeTotal, promoCode }) =>
+          placeOrder(
+            {
+              storeId: store.id,
+              storeName: store.shopName,
+              customerId: currentCustomer.id,
+              customerName: currentCustomer.name,
+              customerPhone: currentCustomer.phone,
+              customerAddress: deliveryAddress,
+              customerProvince: deliveryProvince,
+              customerLat: deliveryLocation.lat,
+              customerLng: deliveryLocation.lng,
+              items: storeItems.map((item) => ({
+                productId: item.product.id,
+                productName: item.product.name,
+                price: item.product.finalPrice,
+                quantity: item.quantity,
+                image: item.product.image,
+              })),
+              subtotal: storeSubtotal,
+              deliveryPrice: storeDeliveryCost,
+              discountAmount: storeDiscount,
+              total: storeTotal,
+            },
+            promoCode,
+          ).then((orderId) => ({ orderId, store, storeTotal, storeItems })),
+        ),
+      );
+
+      const placedOrderIds = orderResults.map((r) => r.orderId);
+      let summary = '';
+      let totalValue = 0;
+      for (const { store, storeTotal, storeItems } of orderResults) {
         totalValue += storeTotal;
-
-        const newOrderId = await placeOrder(
-          {
-            storeId: store.id,
-            storeName: store.shopName,
-            customerId: currentCustomer.id,
-            customerName: currentCustomer.name,
-            customerPhone: currentCustomer.phone,
-            customerAddress: deliveryAddress,
-            customerProvince: deliveryProvince,
-            customerLat: deliveryLocation.lat,
-            customerLng: deliveryLocation.lng,
-            items: storeItems.map((item) => ({
-              productId: item.product.id,
-              productName: item.product.name,
-              price: item.product.finalPrice,
-              quantity: item.quantity,
-              image: item.product.image,
-            })),
-            subtotal: storeSubtotal,
-            deliveryPrice: storeDeliveryCost,
-            discountAmount: storeDiscount,
-            total: storeTotal,
-          },
-          storeId === firstStoreId ? promoCodeForOrder : undefined,
-        );
-
-        placedOrderIds.push(newOrderId);
         summary += `📦 "${store.shopName}": ${storeItems.length} منتجات - ${(storeTotal || 0).toLocaleString()} د.ع\n`;
       }
-
       summary += `\n💰 الإجمالي الكلي: ${(totalValue || 0).toLocaleString()} د.ع`;
       setOrderSummary(summary);
 
-      if (placedOrderIds.length === 1) {
-        setTargetOrderId(placedOrderIds[0]);
-      } else {
-        setTargetOrderId(null);
-      }
-
+      setTargetOrderId(placedOrderIds.length === 1 ? placedOrderIds[0] : null);
       setShowOrderSuccess(true);
       setCart([]);
       setAppliedPromo(null);
       setShowCart(false);
     } catch (err) {
       console.error('[handlePlaceOrder]', err);
-      alert(getCallableErrorMessage(err, 'تعذر إرسال الطلب. حاول مرة أخرى أو أزل كود الخصم.'));
+      const msg = getCallableErrorMessage(err, 'تعذر إرسال الطلب. حاول مرة أخرى.');
+      showToast('error', 'فشل الإرسال', msg);
     } finally {
       setIsPlacingOrder(false);
     }
@@ -2088,6 +2310,35 @@ export const CustomerApp: React.FC = () => {
     setIframeUrl(url);
   };
 
+  const ads = useMemo(() => getPublishedSponsoredAds(adminSettings.ads), [adminSettings.ads]);
+
+  const handleCustomerSponsoredAdClick = useCallback((ad: { targetType?: string; targetId?: string; storeId?: string; targetStoreId?: string; link?: string }) => {
+    if (ad.targetType === 'store') {
+      const s = stores.find((store) => store.id === ad.targetId);
+      if (s && !s.isBanned) setSelectedStore(s);
+      return;
+    }
+
+    if (ad.targetType === 'product') {
+      const storeId = ad.storeId || ad.targetStoreId;
+      const store = stores.find((item) => item.id === storeId);
+      const product = products.find((item) => item.id === ad.targetId);
+      if (store && !store.isBanned) {
+        setSelectedStore(store);
+        if (product) {
+          setProductDetailFrom('store');
+          setSelectedProductDetail(product);
+          setDetailQty(1);
+        }
+      }
+      return;
+    }
+
+    if (ad.targetType === 'link' && ad.link) {
+      openExternalUrl(ad.link);
+    }
+  }, [stores, products]);
+
   const openShareModal = async (type: 'store' | 'product', data: any) => {
     shareRewardGrantedRef.current = false;
 
@@ -2140,10 +2391,22 @@ export const CustomerApp: React.FC = () => {
   };
 
   const confirmRedeemPoints = async () => {
-    if (!showRedeemConfirm) return;
-    const res = await convertPointsToPromo(currentCustomer!.id, showRedeemConfirm);
+    if (!showRedeemConfirm || isRedeemingPoints) return;
+    const pointsRequired = showRedeemConfirm;
     setShowRedeemConfirm(null);
-    alert(res.message);
+    setIsRedeemingPoints(true);
+    try {
+      const res = await convertPointsToPromo(currentCustomer!.id, pointsRequired);
+      if (res.success) {
+        showToast('success', 'تم الاستبدال!', `كود الخصم: ${res.code}`);
+        setWalletView('gifts');
+        setActiveTab('wallet');
+      } else {
+        showToast('error', 'تعذر الاستبدال', res.message);
+      }
+    } finally {
+      setIsRedeemingPoints(false);
+    }
   };
 
   // تسجيل الخروج للزبون
@@ -2202,7 +2465,7 @@ export const CustomerApp: React.FC = () => {
     // الشاشة العامة للزبون (Customer Main Tabs)
     // ==========================================
     return (
-      <div className="min-h-screen max-w-[100vw] overflow-x-hidden bg-mahalak-gradient flex flex-col text-right font-sans selection:bg-violet/30 selection:text-violet pb-20" dir="rtl">
+      <div className={`min-h-screen max-w-[100vw] flex flex-col text-right font-sans selection:bg-violet/30 selection:text-violet pb-20 relative ${selectedStore ? 'overflow-x-hidden bg-mahalak-gradient' : 'overflow-x-hidden overflow-y-auto bg-deep-navy'}`} dir="rtl">
         {showPushPrompt && (
           <PushPermissionPrompt
             userType="customer"
@@ -2210,17 +2473,30 @@ export const CustomerApp: React.FC = () => {
             onLocationGranted={(coords) => setUserCoords(coords)}
           />
         )}
+        {!selectedStore && <WelcomeScreenBackground />}
         {selectedStore ? (
-          <div className="min-h-screen bg-mahalak-gradient flex flex-col animate-slide-up">
+          <div
+            className={`min-h-screen flex flex-col animate-slide-up ${storePageBackgroundProps(selectedStoreTheme).className}`}
+            style={{
+              ...storeThemeCssVars(selectedStoreTheme),
+              ...storePageBackgroundProps(selectedStoreTheme).style,
+            }}
+          >
             {/* خلفية المتجر العلوية ومعلوماته */}
             <header className="relative bg-white shadow-xs transition-all duration-300">
-              <div className="h-16 sm:h-20 bg-gradient-to-l from-vibrant-purple to-deep-navy overflow-hidden relative">
-                 <div className="absolute inset-0 opacity-15 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320]"></div>
+              <div
+                className={`h-16 sm:h-20 overflow-hidden relative ${storeGradientToLeftProps(selectedStoreTheme).className}`}
+                style={storeGradientToLeftProps(selectedStoreTheme).style}
+              >
+                 <div
+                   className="absolute inset-0 opacity-15"
+                   style={{ background: selectedStoreTheme.headerBackground }}
+                 />
               </div>
               
               <div className="absolute top-3 right-3 z-10 flex gap-2">
                 <button 
-                  onClick={() => setSelectedStore(null)} 
+                  onClick={() => { if (!handleAppBack()) setSelectedStore(null); }} 
                   className="px-2.5 py-1 bg-white hover:bg-slate-50 rounded-xl text-slate-700 shadow-xs border border-slate-100 hover:scale-105 active:scale-95 transition-all flex items-center gap-1 font-bold text-[9.5px] sm:text-xs font-tajawal"
                 >
                   <ChevronRight size={14} />
@@ -2228,12 +2504,18 @@ export const CustomerApp: React.FC = () => {
                 </button>
               </div>
 
-              <div className="max-w-4xl mx-auto px-3 py-4 sm:p-5 flex flex-col md:flex-row items-center md:items-center relative gap-3 text-center md:text-right w-full bg-deep-navy border border-vibrant-purple">
+              <div
+                className={`max-w-4xl mx-auto px-3 py-4 sm:p-5 flex flex-col md:flex-row items-center md:items-center relative gap-3 text-center md:text-right w-full ${storeInfoBarProps(selectedStoreTheme).className}`}
+                style={storeInfoBarProps(selectedStoreTheme).style}
+              >
                 <div className="relative shrink-0">
-                  <img 
-                    src={selectedStore.logo || undefined} 
-                    alt={selectedStore.shopName} 
-                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl object-cover border-2 border-white shadow-md -mt-10 bg-white relative z-10"
+                  <ProductImage
+                    src={selectedStore.logo}
+                    alt={selectedStore.shopName}
+                    size="custom"
+                    priority
+                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl border-2 border-white shadow-md -mt-10 bg-white relative z-10 overflow-hidden"
+                    imageClassName="rounded-xl"
                   />
                   {(selectedStore.isVerified || (selectedStore as any).is_verified) && (
                     <div className="absolute -bottom-1 -left-1 z-20" title="موثق رسمياً">
@@ -2245,7 +2527,12 @@ export const CustomerApp: React.FC = () => {
                 <div className="flex-1 text-center md:text-right mt-1 md:mt-0 md:mr-3 w-full">
                   <div className="flex flex-col md:flex-row md:items-center gap-1.5 justify-center md:justify-start">
                     <div className="flex items-center gap-2 justify-center md:justify-start">
-                      <h1 className="text-sm sm:text-base md:text-lg font-black text-violet tracking-tight font-tajawal">{selectedStore.shopName}</h1>
+                      <h1
+                        className={`text-sm sm:text-base md:text-lg font-black tracking-tight font-tajawal ${selectedStoreTheme.enabled ? '' : 'text-violet'}`}
+                        style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.shopNameColor) : undefined}
+                      >
+                        {selectedStore.shopName}
+                      </h1>
                       <div className="flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded-md text-[9px] font-black border border-amber-100/50">
                         <Sparkles size={10} />
                         <span>{getStoreRating(selectedStore.id, selectedStore.rating)}</span>
@@ -2253,11 +2540,6 @@ export const CustomerApp: React.FC = () => {
                     </div>
                     
                     <div className="flex flex-wrap items-center gap-1.5 justify-center md:justify-start">
-                      {adminSettings.featuredStoreIds?.includes(selectedStore.id) && (
-                        <div className="flex items-center gap-1 px-1.5 py-0.5 bg-gradient-to-r from-amber-400 to-amber-500 text-white rounded-md text-[8.5px] font-black shadow-xs">
-                          <Zap size={9} fill="currentColor" /> مميز
-                        </div>
-                      )}
                       {(selectedStore.badges || [])
                         .filter((badgeId) => badgeId !== 'premium')
                         .map(badgeId => {
@@ -2273,15 +2555,24 @@ export const CustomerApp: React.FC = () => {
                   </div>
                   
                   <div className="flex flex-col items-center md:items-start gap-1.5 mt-1.5">
-                    <div className="flex flex-wrap items-center gap-3 justify-center md:justify-start text-[9px] sm:text-[10px] font-bold text-slate-400">
+                    <div
+                      className={`flex flex-wrap items-center gap-3 justify-center md:justify-start text-[9px] sm:text-[10px] font-bold ${
+                        selectedStoreTheme.enabled ? '' : 'text-slate-400'
+                      }`}
+                      style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.infoBarTextColor) : undefined}
+                    >
                       <div className="flex items-center gap-1">
-                        <MapPin size={11} className="text-vibrant-purple" />
+                        <MapPin
+                          size={11}
+                          style={selectedStoreTheme.enabled ? { color: themeFieldIconColor(selectedStoreTheme.fields.iconColor) } : undefined}
+                          className={selectedStoreTheme.enabled ? '' : 'text-vibrant-purple'}
+                        />
                         <span>{selectedStore.province}</span>
                       </div>
                       {selectedStore.showPhone !== false && (
                         <div className="flex items-center gap-1">
-                          <Phone size={11} className="text-emerald-500" />
-                          <span className="tracking-wide text-white" dir="ltr">{selectedStore.phone}</span>
+                          <Phone size={11} className={selectedStoreTheme.enabled ? '' : 'text-emerald-500'} style={selectedStoreTheme.enabled ? { color: selectedStoreTheme.iconColor } : undefined} />
+                          <span className="tracking-wide" dir="ltr">{selectedStore.phone}</span>
                         </div>
                       )}
                     </div>
@@ -2296,7 +2587,20 @@ export const CustomerApp: React.FC = () => {
                         </div>
                       );
                     })()}
-                    <div className="px-2 py-0.5 bg-violet/10 text-white border border-violet/25 rounded-lg text-[8.5px] sm:text-[9.5px] font-black">
+                    <div
+                      className={`px-2 py-0.5 rounded-lg text-[8.5px] sm:text-[9.5px] font-black border ${
+                        selectedStoreTheme.enabled ? '' : 'bg-violet/10 text-white border-violet/25'
+                      }`}
+                      style={
+                        selectedStoreTheme.enabled
+                          ? {
+                              backgroundColor: `${selectedStoreTheme.primaryColor}22`,
+                              color: selectedStoreTheme.infoBarTextColor,
+                              borderColor: `${selectedStoreTheme.infoBarBorderColor}66`,
+                            }
+                          : undefined
+                      }
+                    >
                       📦 {storeProducts.length} منتج
                     </div>
                   </div>
@@ -2312,7 +2616,11 @@ export const CustomerApp: React.FC = () => {
                       }
                       setShowRateModal({ type: 'store', data: selectedStore });
                     }}
-                    className="flex items-center justify-center gap-1 px-3 py-1.5 bg-gradient-to-r from-vibrant-purple to-deep-navy text-white rounded-xl font-bold text-[9.5px] transition-all border border-white/50 font-tajawal active:scale-95"
+                    className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl font-bold text-[9.5px] transition-all border border-white/50 font-tajawal active:scale-95 ${storeGradientProps(selectedStoreTheme).className}`}
+                    style={{
+                      ...storeGradientProps(selectedStoreTheme).style,
+                      ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
+                    }}
                   >
                     <Sparkles size={11} />
                     <span>قيّم المتجر</span>
@@ -2327,9 +2635,23 @@ export const CustomerApp: React.FC = () => {
                     }}
                     className={`flex items-center justify-center gap-1 px-3.5 py-1.5 rounded-xl font-bold text-[9.5px] transition-all active:scale-95 border font-tajawal ${
                       isFollowing 
-                      ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-2xs' 
-                      : 'bg-gradient-to-r from-vibrant-purple to-deep-navy text-white border-white/50'
+                      ? (selectedStoreTheme.enabled ? 'text-white shadow-2xs' : 'bg-vibrant-purple text-white border-vibrant-purple shadow-2xs')
+                      : `text-white border-white/50 ${storeGradientProps(selectedStoreTheme).className}`
                     }`}
+                    style={
+                      isFollowing && selectedStoreTheme.enabled
+                        ? {
+                            backgroundColor: selectedStoreTheme.primaryColor,
+                            borderColor: selectedStoreTheme.primaryColor,
+                            ...themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor),
+                          }
+                        : !isFollowing
+                          ? {
+                              ...storeGradientProps(selectedStoreTheme).style,
+                              ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
+                            }
+                          : undefined
+                    }
                   >
                     {isFollowing ? <Heart size={11} fill="currentColor" /> : <Plus size={11} />}
                     <span>{isFollowing ? 'متابع' : 'متابعة'}</span>
@@ -2346,8 +2668,16 @@ export const CustomerApp: React.FC = () => {
                     className={`p-1.5 rounded-xl border transition-all active:scale-95 shadow-2xs ${
                       isNotifOn 
                       ? 'bg-amber-50 text-amber-600 border-amber-100' 
-                      : 'bg-gradient-to-r from-vibrant-purple to-deep-navy text-white border-white hover:border-white/50'
+                      : `text-white border-white hover:border-white/50 ${storeGradientProps(selectedStoreTheme).className}`
                     }`}
+                    style={
+                      !isNotifOn
+                        ? {
+                            ...storeGradientProps(selectedStoreTheme).style,
+                            ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
+                          }
+                        : undefined
+                    }
                   >
                     <Bell size={12} fill={isNotifOn ? 'currentColor' : 'none'} />
                   </button>
@@ -2355,7 +2685,11 @@ export const CustomerApp: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => openShareModal('store', selectedStore)}
-                    className="relative z-10 p-1.5 bg-gradient-to-r from-vibrant-purple to-black text-white border border-white rounded-xl shadow-2xs transition-all active:scale-95 cursor-pointer"
+                    className={`relative z-10 p-1.5 text-white border border-white rounded-xl shadow-2xs transition-all active:scale-95 cursor-pointer ${storeGradientProps(selectedStoreTheme).className}`}
+                    style={{
+                      ...storeGradientProps(selectedStoreTheme).style,
+                      ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
+                    }}
                     title="مشاركة المتجر"
                     aria-label="مشاركة المتجر"
                   >
@@ -2382,13 +2716,25 @@ export const CustomerApp: React.FC = () => {
 
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-6 bg-vibrant-purple rounded-full"></div>
-                  <h2 className="text-xs sm:text-sm font-black text-white">منتجات المتجر</h2>
+                  <div
+                    className={`w-1.5 h-6 rounded-full ${selectedStoreTheme.enabled ? '' : 'bg-vibrant-purple'}`}
+                    style={selectedStoreTheme.enabled ? { backgroundColor: selectedStoreTheme.primaryColor } : undefined}
+                  />
+                  <h2
+                    className={`text-xs sm:text-sm font-black ${selectedStoreTheme.enabled ? '' : 'text-white'}`}
+                    style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.sectionTitleColor) : undefined}
+                  >
+                    منتجات المتجر
+                  </h2>
                 </div>
                 {cart.length > 0 && (
                   <button 
                     onClick={() => setShowCart(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-vibrant-purple text-white rounded-lg font-bold text-[9.5px] font-tajawal animate-pulse shadow-sm shadow-violet/20"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg font-bold text-[9.5px] font-tajawal animate-pulse shadow-sm ${storePrimaryBgProps(selectedStoreTheme).className}`}
+                    style={{
+                      ...storePrimaryBgProps(selectedStoreTheme).style,
+                      ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
+                    }}
                   >
                     <ShoppingBag size={12} />
                     <span>السلة ({cart.length})</span>
@@ -2397,13 +2743,20 @@ export const CustomerApp: React.FC = () => {
               </div>
 
               {/* لوحة البحث والفلترة — خاصة بالمتجر (بدون محافظة) */}
-              <div id="store-product-filters" className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] p-4 sm:p-5 rounded-[2.2rem] border border-white/10 brand-gradient-border shadow-sm space-y-4 mb-6 scroll-mt-28 font-tajawal">
+              <div
+                id="store-product-filters"
+                className={`p-4 sm:p-5 rounded-[2.2rem] border border-white/10 brand-gradient-border shadow-sm space-y-4 mb-6 scroll-mt-28 font-tajawal ${storeGradientProps(selectedStoreTheme).className}`}
+                style={storeGradientProps(selectedStoreTheme).style}
+              >
                 <div className="flex justify-between items-center mb-1">
-                  <h3 className="font-black text-white text-sm flex items-center gap-2">
-                    <Search size={16} className="text-[#E9DAFF]" />
+                  <h3
+                    className={`font-black text-sm flex items-center gap-2 ${selectedStoreTheme.enabled ? '' : 'text-white'}`}
+                    style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : undefined}
+                  >
+                    <Search size={16} style={selectedStoreTheme.enabled ? { color: selectedStoreTheme.iconColor } : undefined} className={selectedStoreTheme.enabled ? '' : 'text-[#E9DAFF]'} />
                     <span>البحث والفلترة</span>
                   </h3>
-                  {(storeProductsSearchQuery || storeProductsSelectedSubCategory || prodSortType !== 'default' || prodFreeDeliveryOnly) && (
+                  {(storeProductsSearchQuery || storeProductsSelectedSubCategory || prodSortType !== 'default' || prodFreeDeliveryOnly || prodDiscountOnly) && (
                     <button
                       type="button"
                       onClick={() => {
@@ -2411,8 +2764,14 @@ export const CustomerApp: React.FC = () => {
                         setStoreProductsSelectedSubCategory('');
                         setProdSortType('default');
                         setProdFreeDeliveryOnly(false);
+                        setProdDiscountOnly(false);
                       }}
-                      className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white border border-[#7B3DFF] hover:opacity-90 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer"
+                      className={`text-white hover:opacity-90 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer border ${storeGradientProps(selectedStoreTheme).className}`}
+                      style={{
+                        ...storeGradientProps(selectedStoreTheme).style,
+                        borderColor: selectedStoreTheme.enabled ? selectedStoreTheme.infoBarBorderColor : '#7B3DFF',
+                        ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
+                      }}
                     >
                       <RefreshCw size={12} />
                       <span>مسح الفلاتر</span>
@@ -2440,7 +2799,7 @@ export const CustomerApp: React.FC = () => {
                     <span className="text-[11px] font-black flex items-center gap-1.5 flex-wrap">
                       🏷️ تصنيفات المنتجات الرئيسية
                       {selectedStore?.category && (
-                        <span className="bg-white/15 text-[#FFF700] text-[9.5px] px-2 py-0.5 rounded-full font-bold border border-white/20">
+                        <span className="bg-white/15 text-[9.5px] px-2 py-0.5 rounded-full font-bold border border-white/20" style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.filterBadgeColor) : undefined}>
                           {getStoreCategoryLabel(selectedStore.category)}
                         </span>
                       )}
@@ -2468,9 +2827,14 @@ export const CustomerApp: React.FC = () => {
                               onClick={() => setStoreProductsSelectedSubCategory('')}
                               className={`px-3 py-1.5 rounded-xl text-[9.5px] font-bold border shrink-0 cursor-pointer active:scale-95 ${
                                 storeProductsSelectedSubCategory === ''
-                                  ? 'bg-white text-vibrant-purple border-white font-extrabold shadow-sm'
+                                  ? 'bg-white border-white font-extrabold shadow-sm'
                                   : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
                               }`}
+                              style={
+                                storeProductsSelectedSubCategory === '' && selectedStoreTheme.enabled
+                                  ? themeFieldTextStyle(selectedStoreTheme.fields.filterChipActiveText)
+                                  : undefined
+                              }
                             >
                               الكل
                             </button>
@@ -2481,9 +2845,14 @@ export const CustomerApp: React.FC = () => {
                                 onClick={() => setStoreProductsSelectedSubCategory(sub)}
                                 className={`px-3 py-1.5 rounded-xl text-[9.5px] font-bold border shrink-0 cursor-pointer active:scale-95 ${
                                   storeProductsSelectedSubCategory === sub
-                                    ? 'bg-white text-vibrant-purple border-white font-extrabold shadow-sm'
+                                    ? 'bg-white border-white font-extrabold shadow-sm'
                                     : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
                                 }`}
+                                style={
+                                  storeProductsSelectedSubCategory === sub && selectedStoreTheme.enabled
+                                    ? themeFieldTextStyle(selectedStoreTheme.fields.filterChipActiveText)
+                                    : undefined
+                                }
                               >
                                 {sub}
                               </button>
@@ -2504,13 +2873,18 @@ export const CustomerApp: React.FC = () => {
                     <span className="text-[11px] font-black flex items-center gap-1.5 flex-wrap">
                       📊 خيارات الفرز والترتيب للمنتجات
                       {prodSortType !== 'default' && (
-                        <span className="bg-white/15 text-[#FFF700] text-[9.5px] px-2 py-0.5 rounded-full font-bold border border-white/20">
+                        <span className="bg-white/15 text-[9.5px] px-2 py-0.5 rounded-full font-bold border border-white/20" style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.filterBadgeColor) : undefined}>
                           {prodSortType === 'price-asc' ? 'السعر: الأقل للأعلى' : 'الأكثر تقييماً'}
                         </span>
                       )}
                       {prodFreeDeliveryOnly && (
                         <span className="bg-emerald-500/20 text-emerald-300 text-[9.5px] px-2 py-0.5 rounded-full border border-emerald-400/30 font-bold">
                           🚚 توصيل مجاني
+                        </span>
+                      )}
+                      {prodDiscountOnly && (
+                        <span className="bg-rose-500/20 text-rose-200 text-[9.5px] px-2 py-0.5 rounded-full border border-rose-400/30 font-bold">
+                          🏷️ خصومات
                         </span>
                       )}
                     </span>
@@ -2526,9 +2900,14 @@ export const CustomerApp: React.FC = () => {
                           onClick={() => setProdSortType('default')}
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             prodSortType === 'default'
-                              ? 'bg-white text-vibrant-purple border-white shadow-sm'
+                              ? 'bg-white border-white shadow-sm'
                               : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
                           }`}
+                          style={
+                            prodSortType === 'default' && selectedStoreTheme.enabled
+                              ? themeFieldTextStyle(selectedStoreTheme.fields.filterChipActiveText)
+                              : undefined
+                          }
                         >
                           🔄 الافتراضي
                         </button>
@@ -2537,9 +2916,14 @@ export const CustomerApp: React.FC = () => {
                           onClick={() => setProdSortType('price-asc')}
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             prodSortType === 'price-asc'
-                              ? 'bg-white text-vibrant-purple border-white shadow-sm'
+                              ? 'bg-white border-white shadow-sm'
                               : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
                           }`}
+                          style={
+                            prodSortType === 'price-asc' && selectedStoreTheme.enabled
+                              ? themeFieldTextStyle(selectedStoreTheme.fields.filterChipActiveText)
+                              : undefined
+                          }
                         >
                           📈 السعر من الأقل للأعلى
                         </button>
@@ -2548,25 +2932,44 @@ export const CustomerApp: React.FC = () => {
                           onClick={() => setProdSortType('rating-desc')}
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             prodSortType === 'rating-desc'
-                              ? 'bg-white text-vibrant-purple border-white shadow-sm'
+                              ? 'bg-white border-white shadow-sm'
                               : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
                           }`}
+                          style={
+                            prodSortType === 'rating-desc' && selectedStoreTheme.enabled
+                              ? themeFieldTextStyle(selectedStoreTheme.fields.filterChipActiveText)
+                              : undefined
+                          }
                         >
                           ⭐ الأكثر تقييماً
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setProdFreeDeliveryOnly((prev) => !prev)}
-                        className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border flex items-center gap-1.5 cursor-pointer active:scale-95 ${
-                          prodFreeDeliveryOnly
-                            ? 'bg-emerald-400 text-deep-navy border-emerald-400 shadow-sm'
-                            : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
-                        }`}
-                      >
-                        <span>🚚 توصيل مجاني فقط</span>
-                        {prodFreeDeliveryOnly && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
-                      </button>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setProdDiscountOnly((prev) => !prev)}
+                          className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                            prodDiscountOnly
+                              ? 'bg-rose-500 text-white border-rose-500 shadow-sm'
+                              : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
+                          }`}
+                        >
+                          <span>🏷️ خصومات فقط</span>
+                          {prodDiscountOnly && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setProdFreeDeliveryOnly((prev) => !prev)}
+                          className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                            prodFreeDeliveryOnly
+                              ? 'bg-emerald-400 text-deep-navy border-emerald-400 shadow-sm'
+                              : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
+                          }`}
+                        >
+                          <span>🚚 توصيل مجاني فقط</span>
+                          {prodFreeDeliveryOnly && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2577,6 +2980,8 @@ export const CustomerApp: React.FC = () => {
                   variant="onDark"
                   products={storeProducts}
                   storeCategoryId={selectedStore.category}
+                  storeTheme={selectedStoreTheme}
+                  showStoreName={false}
                   getStoreName={() => selectedStore.shopName}
                   onProductClick={(prod) => openProductDetail(prod, 'store')}
                   onAddToCart={addToCart}
@@ -2630,35 +3035,35 @@ export const CustomerApp: React.FC = () => {
             {/* تم حذف زر السلة العائم لتنظيف واجهة المستخدم */}
           </div>
         ) : (
-          <>
-            {/* الهيدر العلوي - تصميم عصري */}
-            <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-slate-200/60 transition-all">
-              <div className="max-w-4xl mx-auto px-4 h-16 flex justify-between items-center text-violet gap-2">
+          <div className="relative z-10 flex flex-col flex-1 min-h-0">
+            {/* الهيدر العلوي - تصميم موحد مع WelcomeScreen */}
+            <header className="sticky top-0 z-40 customer-welcome-header transition-all shadow-sm">
+              <div className="max-w-4xl mx-auto px-4 h-16 flex justify-between items-center gap-2">
                 
                 <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                   {activeTab !== 'stores' && (
                     <button 
-                      onClick={() => handleTabChange('stores')}
-                      className="p-2 bg-slate-50 text-[#EFEFF0] rounded-xl hover:bg-slate-100 transition-all border border-slate-100 ml-1 flex items-center justify-center shadow-sm shrink-0"
-                      title="الرجوع للرئيسية"
+                      onClick={() => handleTabChange(activeTab === 'wallet' ? 'profile' : 'stores')}
+                      className="p-2 merchant-icon-tile text-slate-300 rounded-xl hover:bg-white/15 hover:text-white transition-all border border-transparent ml-1 flex items-center justify-center shrink-0"
+                      title={activeTab === 'wallet' ? 'الرجوع لحسابي' : 'الرجوع للرئيسية'}
                     >
                       <ChevronRight size={20} />
                     </button>
                   )}
                   <MahalakLogo className="h-9 w-9 sm:h-10 sm:w-10 shrink-0 object-contain" />
                   <div className="min-w-0 flex-1 text-right relative">
-                    <h2 className="text-xs sm:text-sm font-black leading-tight truncate">محلك</h2>
+                    <h2 className="text-xs sm:text-sm font-black leading-tight truncate text-white">محلك</h2>
                     <button
                       type="button"
                       onClick={() => {
                         setShowNotifications(false);
                         setShowHeaderLocationPicker((prev) => !prev);
                       }}
-                      className="flex items-center gap-1 max-w-full text-[9px] sm:text-[10px] font-bold text-slate-500 hover:text-vibrant-purple transition-colors mt-0.5"
+                      className="flex items-center gap-1 max-w-full text-[9px] sm:text-[10px] font-bold text-slate-300 hover:text-white transition-colors mt-0.5"
                       aria-expanded={showHeaderLocationPicker}
                       aria-label="تغيير موقع التوصيل"
                     >
-                      <HeaderLocationIcon size={11} className="shrink-0 text-vibrant-purple" />
+                      <HeaderLocationIcon size={11} className="shrink-0 text-amber-400" />
                       <span className="truncate">{headerLocationSummary}</span>
                       <ChevronDown
                         size={12}
@@ -2757,7 +3162,7 @@ export const CustomerApp: React.FC = () => {
                       setShowHeaderLocationPicker(false);
                       setShowCart(true);
                     }}
-                    className="relative p-2.5 bg-purple-100/50 text-purple-600 hover:bg-purple-100/80 rounded-full transition-all border border-purple-100/40 flex items-center justify-center shadow-sm"
+                    className="relative p-2.5 bg-white/10 text-white hover:bg-white/20 rounded-full transition-all border border-white/20 flex items-center justify-center shadow-sm"
                   >
                     <ShoppingCart size={20} strokeWidth={1.75} />
                     {cart.length > 0 && (
@@ -2778,7 +3183,7 @@ export const CustomerApp: React.FC = () => {
                     <button 
                       onClick={() => {
                         if (unreadNotifsCount > 0 && currentCustomer) markAllNotificationsAsRead(currentCustomer.id, "customer");
-                        setShowNotifications(false);
+                        if (!handleAppBack()) setShowNotifications(false);
                       }}
                       className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 transition-all ml-1"
                     >
@@ -2811,14 +3216,16 @@ export const CustomerApp: React.FC = () => {
                         } else if (n.type === 'promo') {
                           setWalletView('gifts');
                           handleTabChange('wallet');
+                        } else if (n.type === 'system' && (n.title?.includes('نقاط') || n.title?.includes('محفظة'))) {
+                          setWalletView('points');
+                          handleTabChange('wallet');
                         } else if (n.type === 'product' && n.targetId) {
                           const prod = products.find(p => p.id === n.targetId);
                           if (prod) {
                             const store = stores.find(s => s.id === prod.storeId);
                             if (store && !store.isBanned) {
-                              setSelectedStore(store);
+                              navigateToStore(store);
                               openProductDetail(prod, 'store');
-                              handleTabChange('stores');
                             }
                           }
                         } else {
@@ -2830,8 +3237,8 @@ export const CustomerApp: React.FC = () => {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <h4 className={`text-xs mb-1 ${!n.read ? 'font-black text-violet group-hover:text-vibrant-purple' : 'font-bold text-slate-600'}`}>{n.title}</h4>
-                          <p className="text-[11px] text-slate-500 leading-relaxed line-clamp-2">{n.message}</p>
+                          <h4 className={`text-base font-black mb-1 leading-snug ${!n.read ? 'text-slate-900' : 'text-slate-700'}`}>{n.title}</h4>
+                          <p className="text-sm text-slate-500 font-normal leading-relaxed line-clamp-3">{n.message}</p>
                           <div className="flex items-center gap-1.5 mt-2 opacity-60">
                             <Clock size={10} />
                             <span className="text-[9px] font-bold">
@@ -2866,79 +3273,279 @@ export const CustomerApp: React.FC = () => {
         {/* التاب المفتوح حالياً */}
         <main className="flex-1 p-3 sm:p-5 max-w-4xl mx-auto w-full min-w-0 overflow-x-hidden">
           
+          {/* صفحة المتاجر الموثقة */}
+          {activeTab === 'stores' && showVerifiedStoresPage && (
+            <div className="space-y-5 animate-fade-in px-1 text-right font-tajawal" dir="rtl">
+              <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-5 sm:p-6 text-white shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
+                <div className="relative z-10 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowVerifiedStoresPage(false);
+                      setVerifiedStoresSearch('');
+                    }}
+                    className="flex items-center gap-1.5 text-[10px] font-black text-[#E9DAFF] hover:text-white transition-colors"
+                  >
+                    <ChevronRight size={14} />
+                    <span>رجوع للرئيسية</span>
+                  </button>
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                      <VerifiedBadge size={20} />
+                    </div>
+                    <div>
+                      <h1 className="text-lg sm:text-xl font-black font-tajawal">المتاجر الموثقة</h1>
+                      <p className="text-[10px] text-purple-100 font-bold mt-0.5">
+                        {verifiedStores.length} متجر موثّق
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {verifiedStores.length > 3 && (
+                <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 rounded-[2.2rem] shadow-lg">
+                  <div className="relative group">
+                    <Search size={15} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-vibrant-purple transition-colors" />
+                    <input
+                      type="text"
+                      value={verifiedStoresSearch}
+                      onChange={(e) => setVerifiedStoresSearch(e.target.value)}
+                      placeholder="ابحث في المتاجر الموثقة..."
+                      className="w-full bg-white/10 border border-white/20 pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 text-white text-right outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {filteredVerifiedStores.length === 0 ? (
+                <div className="py-20 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] shadow-lg">
+                  <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <VerifiedBadge size={40} />
+                  </div>
+                  <p className="text-white font-black">
+                    {verifiedStores.length === 0
+                      ? 'لا توجد متاجر موثقة حالياً'
+                      : 'لا توجد نتائج لهذا البحث'}
+                  </p>
+                  <p className="text-white text-[10px] mt-2 font-bold px-10 leading-relaxed text-center">
+                    {verifiedStores.length === 0
+                      ? 'ستظهر هنا المتاجر التي تحصل على شارة التوثيق من محلك.'
+                      : 'جرّب كلمات بحث أخرى أو امسح البحث.'}
+                  </p>
+                  {verifiedStores.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowVerifiedStoresPage(false);
+                        setVerifiedStoresSearch('');
+                      }}
+                      className="welcome-btn-pulse mt-6 px-5 py-2.5 bg-brand-horizontal text-white transition rounded-xl text-xs font-black cursor-pointer"
+                    >
+                      العودة للرئيسية
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <StoreGrid
+                  {...storeGridCommonProps}
+                  stores={filteredVerifiedStores}
+                  className="px-1 animate-fade-in"
+                  gridClassName="grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4"
+                  variant="onDark"
+                />
+              )}
+            </div>
+          )}
+
+          {/* صفحة المتاجر القريبة */}
+          {activeTab === 'stores' && showNearbyStoresPage && (
+            <div className="space-y-5 animate-fade-in px-1 text-right font-tajawal" dir="rtl">
+              <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-5 sm:p-6 text-white shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
+                <div className="relative z-10 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNearbyStoresPage(false);
+                      setNearbyStoresSearch('');
+                    }}
+                    className="flex items-center gap-1.5 text-[10px] font-black text-[#E9DAFF] hover:text-white transition-colors"
+                  >
+                    <ChevronRight size={14} />
+                    <span>رجوع للرئيسية</span>
+                  </button>
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                      <MapPin size={20} className="text-white" />
+                    </div>
+                    <div>
+                      <h1 className="text-lg sm:text-xl font-black font-tajawal">المتاجر القريبة منك</h1>
+                      <p className="text-[10px] text-purple-100 font-bold mt-0.5">
+                        {nearbyStores.length} متجر قريب
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {nearbyStores.length > 3 && (
+                <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 rounded-[2.2rem] shadow-lg">
+                  <div className="relative group">
+                    <Search size={15} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-vibrant-purple transition-colors" />
+                    <input
+                      type="text"
+                      value={nearbyStoresSearch}
+                      onChange={(e) => setNearbyStoresSearch(e.target.value)}
+                      placeholder="ابحث في المتاجر القريبة..."
+                      className="w-full bg-white/10 border border-white/20 pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 text-white text-right outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {filteredNearbyStores.length === 0 ? (
+                <div className="py-20 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] shadow-lg">
+                  <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <MapPin size={40} className="text-white" />
+                  </div>
+                  <p className="text-white font-black">
+                    {nearbyStores.length === 0
+                      ? 'لا توجد متاجر قريبة حالياً'
+                      : 'لا توجد نتائج لهذا البحث'}
+                  </p>
+                  <p className="text-white text-[10px] mt-2 font-bold px-10 leading-relaxed text-center">
+                    {nearbyStores.length === 0
+                      ? 'فعّل الموقع أو حدّد محافظتك لعرض المتاجر الأقرب إليك.'
+                      : 'جرّب كلمات بحث أخرى أو امسح البحث.'}
+                  </p>
+                  {nearbyStores.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNearbyStoresPage(false);
+                        setNearbyStoresSearch('');
+                      }}
+                      className="welcome-btn-pulse mt-6 px-5 py-2.5 bg-brand-horizontal text-white transition rounded-xl text-xs font-black cursor-pointer"
+                    >
+                      العودة للرئيسية
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <StoreGrid
+                  {...storeGridCommonProps}
+                  stores={filteredNearbyStores}
+                  getDistanceLabel={getStoreDistanceLabel}
+                  className="px-1 animate-fade-in"
+                  gridClassName="grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4"
+                  variant="onDark"
+                />
+              )}
+            </div>
+          )}
+
+          {/* صفحة متاجر المتابعة */}
+          {activeTab === 'stores' && showFollowedStoresPage && (
+            <div className="space-y-5 animate-fade-in px-1 text-right font-tajawal" dir="rtl">
+              <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-5 sm:p-6 text-white shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
+                <div className="relative z-10 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowFollowedStoresPage(false);
+                      setFollowedStoresSearch('');
+                    }}
+                    className="flex items-center gap-1.5 text-[10px] font-black text-[#E9DAFF] hover:text-white transition-colors"
+                  >
+                    <ChevronRight size={14} />
+                    <span>رجوع للرئيسية</span>
+                  </button>
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                      <Heart size={20} className="text-white" fill="white" />
+                    </div>
+                    <div>
+                      <h1 className="text-lg sm:text-xl font-black font-tajawal">المتاجر التي أتابعها</h1>
+                      <p className="text-[10px] text-purple-100 font-bold mt-0.5">
+                        {followedStoresList.length} متجر في قائمتك
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {followedStoresList.length > 3 && (
+                <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 rounded-[2.2rem] shadow-lg">
+                  <div className="relative group">
+                    <Search size={15} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-vibrant-purple transition-colors" />
+                    <input
+                      type="text"
+                      value={followedStoresSearch}
+                      onChange={(e) => setFollowedStoresSearch(e.target.value)}
+                      placeholder="ابحث في متاجرك المتابَعة..."
+                      className="w-full bg-white/10 border border-white/20 pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 text-white text-right outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {filteredFollowedStores.length === 0 ? (
+                <div className="py-20 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] shadow-lg">
+                  <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <Heart size={40} className="text-white" fill="white" />
+                  </div>
+                  <p className="text-white font-black">
+                    {followedStoresList.length === 0
+                      ? 'لم تتابع أي متجر بعد'
+                      : 'لا توجد نتائج لهذا البحث'}
+                  </p>
+                  <p className="text-white text-[10px] mt-2 font-bold px-10 leading-relaxed text-center">
+                    {followedStoresList.length === 0
+                      ? 'اضغط «متابعة» على أي متجر ليظهر هنا وتصلك عروضه بسهولة.'
+                      : 'جرّب كلمات بحث أخرى أو امسح البحث.'}
+                  </p>
+                  {followedStoresList.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowFollowedStoresPage(false);
+                        setFollowedStoresSearch('');
+                      }}
+                      className="welcome-btn-pulse mt-6 px-5 py-2.5 bg-brand-horizontal text-white transition rounded-xl text-xs font-black cursor-pointer"
+                    >
+                      العودة للرئيسية
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <StoreGrid
+                  {...storeGridCommonProps}
+                  stores={filteredFollowedStores}
+                  className="px-1 animate-fade-in"
+                  variant="onDark"
+                />
+              )}
+            </div>
+          )}
+
           {/* تاب المتاجر والتصفح */}
-          {activeTab === 'stores' && (
+          {activeTab === 'stores' && !showVerifiedStoresPage && !showNearbyStoresPage && !showFollowedStoresPage && (
             <div className="space-y-6">
               {/* شريط الإعلانات المتحرك (Slider) */}
               {ads.length > 0 && (
-                <div 
-                  className="relative overflow-hidden rounded-[2rem] shadow-2xl border-2 border-vibrant-purple/20 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 group h-56 md:h-72 mx-1 hover:shadow-2xl hover:shadow-vibrant-purple/25/10 transition-all duration-300"
-                  onTouchStart={handleTouchStart}
-                  onTouchMove={handleTouchMove}
-                  onTouchEnd={handleTouchEnd}
-                >
-                  {ads.map((ad: any, idx: number) => (
-                    <div 
-                      key={ad.id} 
-                      onClick={() => {
-                        if (ad.targetType === 'store') {
-                          const s = stores.find(store => store.id === ad.targetId);
-                          if (s && !s.isBanned) setSelectedStore(s);
-                        } else if (ad.targetType === 'product') {
-                          const s = stores.find(store => store.id === (ad.storeId || ad.targetStoreId));
-                          if (s && !s.isBanned) {
-                            setSelectedStore(s);
-                          }
-                        } else if (ad.targetType === 'link' && ad.link) {
-                          openExternalUrl(ad.link);
-                        }
-                      }}
-                      className={`absolute inset-0 transition-all duration-700 ease-in-out cursor-pointer ${idx === currentAdIndex ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none'}`}
-                    >
-                      <img src={ad.url || undefined} className="w-full h-full object-cover transition-transform duration-[8s] ease-out group-hover:scale-110 filter brightness-[0.85] contrast-[1.05]" alt="إعلان" />
-                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/95 via-transparent to-black/15 flex flex-col justify-end p-6 sm:p-8 text-white text-right">
-                        <span className="flex items-center gap-1.5 bg-gradient-to-r from-amber-500 via-[#7B3DFF] to-pink-500 text-[10px] font-black tracking-wide shrink-0 px-3 py-1 rounded-full mb-2.5 w-fit shadow-lg border border-white/20 select-none animate-pulse">
-                          <Sparkles size={10} className="animate-spin duration-300" />
-                          إعلان مميز ممول ✨
-                        </span>
-                        <h3 className="text-lg sm:text-2xl md:text-3xl font-black leading-tight drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)] mb-1 sm:mb-2 tracking-tight group-hover:text-purple-100 transition-colors">{ad.title || 'اكتشف أفضل العروض في منطقتك!'}</h3>
-                        <p className="text-xs sm:text-sm text-slate-200 drop-shadow-[0_1px_4px_rgba(0,0,0,0.6)] font-medium leading-relaxed max-w-2xl line-clamp-2 md:line-clamp-none opacity-90">{ad.desc || 'تسوّق الآن مع محلك'}</p>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* أزرار التنقل */}
-                  {ads.length > 1 && (
-                    <>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); prevAd(); }} 
-                        className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 bg-black/20 hover:bg-vibrant-purple text-white hover:scale-105 backdrop-blur-md rounded-full transition-all duration-300 z-20 flex items-center justify-center border border-white/20 shadow-lg cursor-pointer md:opacity-0 md:group-hover:opacity-100"
-                        aria-label="السابق"
-                      >
-                        <ChevronLeft size={22} className="stroke-[3]" />
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); nextAd(); }} 
-                        className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 bg-black/20 hover:bg-vibrant-purple text-white hover:scale-105 backdrop-blur-md rounded-full transition-all duration-300 z-20 flex items-center justify-center border border-white/20 shadow-lg cursor-pointer md:opacity-0 md:group-hover:opacity-100"
-                        aria-label="التالي"
-                      >
-                        <ChevronRight size={22} className="stroke-[3]" />
-                      </button>
-                    </>
-                  )}
-                  
-                  {/* مؤشرات النقاط */}
-                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex space-x-1.5 space-x-reverse z-20 bg-deep-navy/50 px-3 py-1.5 rounded-full backdrop-blur-xs border border-white/10">
-                    {ads.map((_: any, idx: number) => (
-                      <button 
-                        key={idx} 
-                        onClick={(e) => { e.stopPropagation(); setCurrentAdIndex(idx); }}
-                        className={`h-2 rounded-full transition-all duration-300 cursor-pointer ${idx === currentAdIndex ? 'w-6 bg-vibrant-purple' : 'w-2 bg-white/50 hover:bg-white'}`} 
-                        aria-label={`شريحة ${idx + 1}`}
-                      />
-                    ))}
-                  </div>
-                </div>
+                <SponsoredAdSlider
+                  ads={ads}
+                  adInterval={adminSettings.adInterval || 5}
+                  badgeLabel={adminSettings.adBadgeText ?? DEFAULT_SPONSORED_AD_BADGE}
+                  className="mx-1"
+                  onAdClick={handleCustomerSponsoredAdClick}
+                />
               )}
 
               {/* عروض فلاش سيلز */}
@@ -2984,39 +3591,70 @@ export const CustomerApp: React.FC = () => {
                 );
               })()}
 
-              {/* قسم المتاجر الموثقة - يظهر مباشرة تحت الإعلان المميز */}
+              {/* قسم العروض — متاجر لديها خصم على كل المنتجات المنشورة */}
               <div
-                className="bg-gradient-to-r from-vibrant-purple to-deep-navy rounded-[2rem] border border-slate-100 brand-gradient-border p-5 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group mx-1"
+                className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-2xl relative overflow-hidden group mx-1"
               >
-                <div className="absolute top-0 left-0 w-24 h-24 bg-blue-500/5 rounded-full -ml-8 -mt-8"></div>
+                <div className="absolute top-0 left-0 w-24 h-24 bg-rose-500/5 rounded-full -ml-8 -mt-8"></div>
                 <div className="relative z-10">
                   <div className="flex items-center justify-between mb-5">
                     <div className="flex items-center gap-2">
-                      <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-                        <VerifiedBadge size={18} />
+                      <div className="p-2 bg-rose-50 text-rose-600 rounded-xl">
+                        <Percent size={18} />
                       </div>
-                      <h3 className="font-black text-white text-xs tracking-tight">المتاجر الموثقة</h3>
+                      <h3 className="font-black text-white text-xs tracking-tight">العروض</h3>
                     </div>
-                    <button 
-                      onClick={() => setShowFullVerified(!showFullVerified)}
-                      className="text-[10px] font-black text-vibrant-purple hover:text-violet transition"
-                    >
-                      {showFullVerified ? 'أقل' : 'الكل'}
-                    </button>
+                    {offerStores.length > 4 && (
+                      <button
+                        onClick={() => setShowFullOffers(!showFullOffers)}
+                        className="text-[10px] font-black text-white hover:text-violet transition"
+                      >
+                        {showFullOffers ? 'أقل' : 'الكل'}
+                      </button>
+                    )}
                   </div>
-                  
-                  {verifiedStores.length === 0 ? (
-                    <div className="py-8 text-center text-white text-xs font-bold italic">لا توجد متاجر موثقة حالياً</div>
+
+                  {offerStores.length === 0 ? (
+                    <div className="py-8 text-center text-white text-xs font-bold italic">لا توجد عروض حالياً</div>
                   ) : (
                     <StoreGrid
                       {...storeGridCommonProps}
-                      stores={showFullVerified ? verifiedStores : verifiedStores.slice(0, 4)}
+                      stores={showFullOffers ? offerStores : offerStores.slice(0, 4)}
                       gridClassName="grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-4"
                       variant="onDark"
                     />
                   )}
                 </div>
               </div>
+
+              {/* دخول صفحة المتاجر الموثقة */}
+              <button
+                type="button"
+                onClick={() => setShowVerifiedStoresPage(true)}
+                className="w-full flex items-center justify-between gap-3 welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.2rem] px-4 py-3 shadow-lg hover:bg-white/10 transition-all active:scale-[0.99] mx-1"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                    <VerifiedBadge size={15} />
+                  </div>
+                  <div className="text-right min-w-0">
+                    <p className="text-[10.5px] font-black text-white leading-tight">المتاجر الموثقة</p>
+                    <p className="text-[9px] font-bold text-purple-100 truncate">
+                      {verifiedStores.length > 0
+                        ? `${verifiedStores.length} متجر موثّق — اضغط للعرض`
+                        : 'لا توجد متاجر موثقة حالياً'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 text-white">
+                  {verifiedStores.length > 0 && (
+                    <span className="text-[10px] font-black bg-white/15 border border-white/20 px-2 py-0.5 rounded-lg">
+                      {verifiedStores.length}
+                    </span>
+                  )}
+                  <ChevronLeft size={16} className="text-[#E9DAFF]" />
+                </div>
+              </button>
 
               {/* الفعاليات المركزية */}
               {flashSales.some(f => (f.status === 'active' || (f.status === 'upcoming' && new Date() >= new Date(f.startTime) && new Date() < new Date(f.endTime)))) && (
@@ -3058,7 +3696,15 @@ export const CustomerApp: React.FC = () => {
                                      <div key={req.id} onClick={() => { setSelectedStore(store); openProductDetail(promoProduct, 'store'); }} className="bg-white/10 hover:bg-white/20 transition cursor-pointer backdrop-blur-md rounded-2xl p-3 border border-white/20 text-right group">
                                        <div className="overflow-hidden rounded-xl mb-3 h-24 relative shadow-inner bg-white/5">
                                          <div className="absolute top-0 right-0 bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded-bl-lg rounded-tr-xl z-20 shadow-md">عرض خاص</div>
-                                         <img src={p.image || undefined} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" alt="" />
+                                         <ProductImage
+                                           src={p.image}
+                                           alt={p.name}
+                                           size="custom"
+                                           priority
+                                           variant="dark"
+                                           className="w-full h-full"
+                                           imageClassName="group-hover:scale-110 transition duration-500"
+                                         />
                                        </div>
                                        <h4 className="font-bold text-xs truncate drop-shadow-md mb-1">{p.name}</h4>
                                        <div className="flex gap-2 items-center flex-wrap">
@@ -3077,187 +3723,11 @@ export const CustomerApp: React.FC = () => {
                 </div>
               )}
 
-              {/* قسم المتاجر المميزة والقريبة - تصميم Bento عصري */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 px-1">
-                {/* المتاجر المميزة */}
-                <div
-                  className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[2rem] border border-slate-100 brand-gradient-border p-5 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group"
-                >
-                  <div className="absolute top-0 left-0 w-24 h-24 bg-amber-500/5 rounded-full -ml-8 -mt-8"></div>
-                  <div className="relative z-10">
-                    <div className="flex items-center justify-between mb-5">
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 bg-amber-100 text-amber-600 rounded-xl">
-                          <Award size={18} />
-                        </div>
-                        <h3 className="font-black text-white text-xs tracking-tight">المتاجر المميزة</h3>
-                      </div>
-                      <button 
-                        onClick={() => setShowFullFeatured(!showFullFeatured)}
-                        className="text-[10px] font-black text-vibrant-purple hover:text-violet transition"
-                      >
-                        {showFullFeatured ? 'أقل' : 'الكل'}
-                      </button>
-                    </div>
-                    
-                    <StoreGrid
-                      {...storeGridCommonProps}
-                      stores={showFullFeatured ? featuredStores : featuredStores.slice(0, 2)}
-                      gridClassName="grid-cols-2 gap-x-3 gap-y-5"
-                      variant="onDark"
-                    />
-                  </div>
-                </div>
-
-                {/* المتاجر القريبة */}
-                <div
-                  className="bg-gradient-to-br from-[#7B3DFF] to-[#0B1320] rounded-[2rem] border border-slate-100 brand-gradient-border p-5 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group"
-                >
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-2xl"></div>
-                  <div className="relative z-10 flex flex-col h-full">
-                    <div className="flex items-center justify-between mb-5">
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 bg-white/20 text-white rounded-xl backdrop-blur-md">
-                          <MapPin size={18} />
-                        </div>
-                        <h3 className="font-black text-white text-xs tracking-tight">المتاجر القريبة منك</h3>
-                      </div>
-                      <button 
-                        onClick={() => setShowFullNearby(!showFullNearby)}
-                        className="text-[10px] font-black text-white hover:text-white transition"
-                      >
-                        {showFullNearby ? 'أقل' : 'الكل'}
-                      </button>
-                    </div>
-
-                    {nearbyStores.length === 0 ? (
-                      <div className="py-4 text-center text-[#cba8ff] text-[10px] font-bold italic">لا توجد متاجر حالياً</div>
-                    ) : (
-                      <StoreGrid
-                        {...storeGridCommonProps}
-                        stores={showFullNearby ? nearbyStores : nearbyStores.slice(0, 2)}
-                        getDistanceLabel={getStoreDistanceLabel}
-                        gridClassName="grid-cols-2 gap-x-3 gap-y-5"
-                        variant="onDark"
-                      />
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-            )}
-
-          {/* تبويب المتاجر والبحث المتقدم المطور */}
-          {activeTab === 'merchants' && showFollowedStoresPage && (
-            <div className="space-y-5 animate-fade-in px-1 text-right font-tajawal" dir="rtl">
-              <div className="bg-brand-horizontal rounded-[2.5rem] p-5 sm:p-6 text-white shadow-xl shadow-purple-150/10 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
-                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
-                <div className="relative z-10 space-y-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowFollowedStoresPage(false);
-                      setFollowedStoresSearch('');
-                    }}
-                    className="flex items-center gap-1.5 text-[10px] font-black text-[#E9DAFF] hover:text-white transition-colors"
-                  >
-                    <ChevronRight size={14} />
-                    <span>رجوع لكل المتاجر</span>
-                  </button>
-                  <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
-                      <Heart size={20} className="text-white" fill="white" />
-                    </div>
-                    <div>
-                      <h1 className="text-lg sm:text-xl font-black font-tajawal">المتاجر التي أتابعها</h1>
-                      <p className="text-[10px] text-purple-100 font-bold mt-0.5">
-                        {followedStoresList.length} متجر في قائمتك
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {followedStoresList.length > 3 && (
-                <div className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] p-4 rounded-[2.2rem] border border-slate-100 brand-gradient-border shadow-sm">
-                  <div className="relative group">
-                    <Search size={15} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-vibrant-purple transition-colors" />
-                    <input
-                      type="text"
-                      value={followedStoresSearch}
-                      onChange={(e) => setFollowedStoresSearch(e.target.value)}
-                      placeholder="ابحث في متاجرك المتابَعة..."
-                      className="w-full bg-slate-50 border border-vibrant-purple pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 text-white text-right outline-none"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {filteredFollowedStores.length === 0 ? (
-                <div className="py-20 text-center bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[2.5rem] border border-slate-100 brand-gradient-border shadow-sm">
-                  <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <Heart size={40} className="text-white" fill="white" />
-                  </div>
-                  <p className="text-white font-black">
-                    {followedStoresList.length === 0
-                      ? 'لم تتابع أي متجر بعد'
-                      : 'لا توجد نتائج لهذا البحث'}
-                  </p>
-                  <p className="text-white text-[10px] mt-2 font-bold px-10 leading-relaxed text-center">
-                    {followedStoresList.length === 0
-                      ? 'اضغط «متابعة» على أي متجر ليظهر هنا وتصلك عروضه بسهولة.'
-                      : 'جرّب كلمات بحث أخرى أو امسح البحث.'}
-                  </p>
-                  {followedStoresList.length === 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowFollowedStoresPage(false);
-                        setFollowedStoresSearch('');
-                      }}
-                      className="mt-6 px-5 py-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white transition rounded-xl text-xs font-black cursor-pointer border border-[#7B3DFF]"
-                    >
-                      تصفّح المتاجر
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <StoreGrid
-                  {...storeGridCommonProps}
-                  stores={filteredFollowedStores}
-                  className="px-1 animate-fade-in"
-                  variant="onDark"
-                />
-              )}
-            </div>
-          )}
-
-          {activeTab === 'merchants' && !showFollowedStoresPage && (
-            <div className="space-y-6 animate-fade-in px-1 text-right animate-fade-in" dir="rtl">
-              {/* ترويسة الصفحة الإبداعية للمتاجر */}
-              <div className="bg-gradient-to-b from-vibrant-purple to-deep-navy rounded-[2.5rem] p-6 text-white shadow-xl shadow-purple-150/10 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
-                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
-                
-                <div className="relative z-10 space-y-2">
-                  <div className="flex items-center gap-2.5">
-                    <MahalakLogo className="h-5 w-5 shrink-0 object-contain" />
-                    <span className="text-[10px] uppercase font-black tracking-widest text-white">دليل المتاجر والأسواق في العراق</span>
-                  </div>
-                  <h1 className="text-xl sm:text-2xl font-black font-tajawal">المتاجر والبيجات العراقية</h1>
-                  <p className="text-[10.5px] text-purple-100 font-bold max-w-xl leading-relaxed whitespace-pre-line" id="stores-sub-heading-para">
-                    اتصفح وتسوق بسهولة .... جميع متاجر وبيجات جميع محافظات العراق في مكان واحد 
-                    كل ما تطلب اكثر كل ما تحصل مكافئات ونقاط تكدر تحولها لخصومات
-                  </p>
-                </div>
-              </div>
-
               {currentCustomer && (
                 <button
                   type="button"
                   onClick={() => setShowFollowedStoresPage(true)}
-                  className="w-full flex items-center justify-between gap-3 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-slate-100 brand-gradient-border rounded-[2.2rem] px-4 py-3 shadow-sm hover:opacity-95 transition-all active:scale-[0.99]"
+                  className="w-full flex items-center justify-between gap-3 welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.2rem] px-4 py-3 shadow-lg hover:bg-white/10 transition-all active:scale-[0.99] mx-1"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
@@ -3283,8 +3753,60 @@ export const CustomerApp: React.FC = () => {
                 </button>
               )}
 
+              {/* دخول صفحة المتاجر القريبة */}
+              <button
+                type="button"
+                onClick={() => setShowNearbyStoresPage(true)}
+                className="w-full flex items-center justify-between gap-3 welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.2rem] px-4 py-3 shadow-lg hover:bg-white/10 transition-all active:scale-[0.99] mx-1"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                    <MapPin size={15} className="text-white" />
+                  </div>
+                  <div className="text-right min-w-0">
+                    <p className="text-[10.5px] font-black text-white leading-tight">المتاجر القريبة منك</p>
+                    <p className="text-[9px] font-bold text-purple-100 truncate">
+                      {nearbyStores.length > 0
+                        ? `${nearbyStores.length} متجر — اضغط للعرض`
+                        : 'لا توجد متاجر قريبة حالياً'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 text-white">
+                  {nearbyStores.length > 0 && (
+                    <span className="text-[10px] font-black bg-white/15 border border-white/20 px-2 py-0.5 rounded-lg">
+                      {nearbyStores.length}
+                    </span>
+                  )}
+                  <ChevronLeft size={16} className="text-[#E9DAFF]" />
+                </div>
+              </button>
+            </div>
+            )}
+
+          {/* تبويب المتاجر والبحث المتقدم المطور */}
+          {activeTab === 'merchants' && (
+            <div className="space-y-6 animate-fade-in px-1 text-right animate-fade-in" dir="rtl">
+              {/* ترويسة الصفحة الإبداعية للمتاجر */}
+              <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-6 text-white shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
+                
+                <div className="relative z-10 space-y-2">
+                  <div className="flex items-center gap-2.5">
+                    <MahalakLogo className="h-5 w-5 shrink-0 object-contain" />
+                    <span className="text-[10px] uppercase font-black tracking-widest text-white">دليل المتاجر والأسواق في العراق</span>
+                  </div>
+                  <h1 className="text-xl sm:text-2xl font-black font-tajawal">المتاجر والبيجات العراقية</h1>
+                  <p className="text-[10.5px] text-purple-100 font-bold max-w-xl leading-relaxed whitespace-pre-line" id="stores-sub-heading-para">
+                    اتصفح وتسوق بسهولة .... جميع متاجر وبيجات جميع محافظات العراق في مكان واحد 
+                    كل ما تطلب اكثر كل ما تحصل مكافئات ونقاط تكدر تحولها لخصومات
+                  </p>
+                </div>
+              </div>
+
               {/* لوحة البحث المتقدم والفلترة المزدوجة للمتاجر */}
-              <div className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] p-4 sm:p-5 rounded-[2.2rem] border border-slate-100 brand-gradient-border shadow-sm space-y-4 font-tajawal">
+              <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 sm:p-5 rounded-[2.2rem] shadow-lg space-y-4 font-tajawal">
                 {/* Header for Filter panel */}
                 <div className="flex justify-between items-center mb-1">
                   <h3 className="font-black text-white text-sm flex items-center gap-2">
@@ -3294,7 +3816,7 @@ export const CustomerApp: React.FC = () => {
                   {hasActiveCatalogFilters && (
                     <button
                       onClick={resetCatalogFilters}
-                      className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white border border-[#7B3DFF] hover:opacity-90 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer"
+                      className="welcome-btn-pulse text-white hover:opacity-95 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer"
                     >
                       <RefreshCw size={12} />
                       <span>مسح الفلاتر</span>
@@ -3312,7 +3834,7 @@ export const CustomerApp: React.FC = () => {
                       value={catalogSearchQuery}
                       onChange={(e) => setCatalogSearchQuery(e.target.value)}
                       placeholder="ابحث باسم المتجر، أو المنطقة..." 
-                      className="w-full bg-slate-50 border border-vibrant-purple pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 text-white text-right outline-none"
+                      className="w-full bg-white/10 border border-white/20 pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 text-white text-right outline-none"
                     />
                   </div>
 
@@ -3321,10 +3843,10 @@ export const CustomerApp: React.FC = () => {
                     <select 
                       value={catalogProvinceSelectValue}
                       onChange={(e) => handleCatalogProvinceChange(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-100 pr-4 pl-10 py-3.75 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple outline-none appearance-none text-white text-right hover:border-vibrant-purple/25 transition-all cursor-pointer"
+                      className="w-full bg-white/10 border border-white/20 pr-4 pl-10 py-3.75 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple outline-none appearance-none text-white text-right hover:border-vibrant-purple/25 transition-all cursor-pointer"
                     >
-                      <option value="">كل محافظات العراق (18)</option>
-                      {provinces.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                      <option value="" className="text-slate-800">كل محافظات العراق (18)</option>
+                      {provinces.map(p => <option key={p.id} value={p.name} className="text-slate-800">{p.name}</option>)}
                     </select>
                     <ChevronDown size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   </div>
@@ -3336,7 +3858,7 @@ export const CustomerApp: React.FC = () => {
                 )}
 
                 {/* تصفية التصنيفات كقائمة أفقية قابلة للتمرير - مخفية وتظهر عند ضغط ع السهم */}
-                <div className="pt-2 border-t border-slate-100/60 font-tajawal">
+                <div className="pt-2 border-t border-white/10 font-tajawal">
                   <button
                     type="button"
                     onClick={() => setShowCategories(!showCategories)}
@@ -3364,7 +3886,7 @@ export const CustomerApp: React.FC = () => {
                           className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-[10px] font-black border transition-all shrink-0 cursor-pointer active:scale-95 ${
                             !catalogCategory
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-md shadow-purple-500/10'
-                              : 'bg-slate-50 text-slate-600 border-slate-100 hover:border-violet/25'
+                              : 'bg-white/10 text-white/80 border-white/20 hover:border-violet/25'
                           }`}
                         >
                           {getCategoryIcon('all', !catalogCategory, 14)}
@@ -3383,7 +3905,7 @@ export const CustomerApp: React.FC = () => {
                               className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-[10px] font-black border transition-all shrink-0 cursor-pointer active:scale-95 ${
                                 isSelected
                                   ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-md shadow-purple-500/10'
-                                  : 'bg-slate-50 text-slate-600 border-slate-100 hover:border-violet/25'
+                                  : 'bg-white/10 text-white/80 border-white/20 hover:border-violet/25'
                               }`}
                             >
                               {getCategoryIcon(cat.id, isSelected, 14)}
@@ -3395,8 +3917,8 @@ export const CustomerApp: React.FC = () => {
 
                       {/* التصنيفات الفرعية الذكية في حال تم التحديد */}
                       {catalogCategory && catalogCategory.sub && catalogCategory.sub.length > 0 && (
-                        <div className="pt-2 border-t border-slate-50 space-y-2 animate-fade-in">
-                          <span className="text-[9.5px] font-black text-slate-400 block px-1">التصنيف الفرعي:</span>
+                        <div className="pt-2 border-t border-white/10 space-y-2 animate-fade-in">
+                          <span className="text-[9.5px] font-black text-slate-300 block px-1">التصنيف الفرعي:</span>
                           <div className="flex overflow-x-auto gap-1.5 pb-1.5 scrollbar-none" dir="rtl">
                             <button
                               type="button"
@@ -3404,7 +3926,7 @@ export const CustomerApp: React.FC = () => {
                               className={`px-3 py-1.5 rounded-xl text-[9.5px] font-bold border shrink-0 cursor-pointer active:scale-95 ${
                                 catalogSubCategory === ''
                                   ? 'bg-purple-100 text-vibrant-purple border-purple-200 font-extrabold'
-                                  : 'bg-slate-50 text-slate-500 border-slate-100'
+                                  : 'bg-white/10 text-white/70 border-white/20'
                               }`}
                             >
                               الكل
@@ -3417,7 +3939,7 @@ export const CustomerApp: React.FC = () => {
                                 className={`px-3 py-1.5 rounded-xl text-[9.5px] font-bold border shrink-0 cursor-pointer active:scale-95 ${
                                   catalogSubCategory === sub
                                     ? 'bg-purple-100 text-vibrant-purple border-purple-200 font-extrabold'
-                                    : 'bg-slate-50 text-slate-500 border-slate-100'
+                                    : 'bg-white/10 text-white/70 border-white/20'
                                 }`}
                               >
                                 {sub}
@@ -3431,7 +3953,7 @@ export const CustomerApp: React.FC = () => {
                 </div>
 
                 {/* لوحة خيارات الترتيب والفرز المتقدمة للمتاجر - مخفية وتظهر عند ضغط ع السهم */}
-                <div className="pt-2 border-t border-slate-100/60 font-tajawal">
+                <div className="pt-2 border-t border-white/10 font-tajawal">
                   <button
                     type="button"
                     onClick={() => setShowSorting(!showSorting)}
@@ -3450,6 +3972,11 @@ export const CustomerApp: React.FC = () => {
                           🚚 توصيل مجاني
                         </span>
                       )}
+                      {catalogDiscountOnly && (
+                        <span className="bg-rose-50 text-rose-600 text-[9.5px] px-2 py-0.5 rounded-full border border-rose-100 font-bold">
+                          🏷️ خصومات
+                        </span>
+                      )}
                     </span>
                     <ChevronDown size={14} className={`text-slate-400 hover:text-vibrant-purple transition-transform duration-300 ${showSorting ? 'rotate-180' : ''}`} />
                   </button>
@@ -3457,7 +3984,7 @@ export const CustomerApp: React.FC = () => {
                   {showSorting && (
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3.5 animate-fade-in" id="sorting-collapsible-container">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[9.5px] font-black text-slate-400 ml-1">ترتيب حسب:</span>
+                        <span className="text-[9.5px] font-black text-slate-300 ml-1">ترتيب حسب:</span>
                         
                         {/* الافتراضي */}
                         <button
@@ -3466,7 +3993,7 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             storesSortType === 'default'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25'
                           }`}
                         >
                           🔄 الافتراضي
@@ -3479,7 +4006,7 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             storesSortType === 'rating-desc'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25'
                           }`}
                         >
                           ⭐ الأعلى تقييماً
@@ -3492,7 +4019,7 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             storesSortType === 'name-asc'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25'
                           }`}
                         >
                           🔤 الاسم أ-ي
@@ -3505,22 +4032,36 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             storesSortType === 'nearest'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25'
                           }`}
                         >
                           📍 الأقرب مسافة
                         </button>
                       </div>
 
-                      {/* توصيل مجاني فقط */}
-                      <div className="flex items-center">
+                      {/* فلاتر إضافية */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setCatalogDiscountOnly(prev => !prev)}
+                          className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                            catalogDiscountOnly
+                              ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                              : 'bg-white/10 text-white/70 border-white/20'
+                          }`}
+                        >
+                          <span>🏷️ خصومات فقط</span>
+                          {catalogDiscountOnly && (
+                            <span className="w-1.5 h-1.5 bg-white rounded-full"></span>
+                          )}
+                        </button>
                         <button
                           type="button"
                           onClick={() => setCatalogFreeDeliveryOnly(prev => !prev)}
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border flex items-center gap-1.5 cursor-pointer active:scale-95 ${
                             catalogFreeDeliveryOnly
                               ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100'
+                              : 'bg-white/10 text-white/70 border-white/20'
                           }`}
                         >
                           <span>🚚 توصيل مجاني للمحافظة</span>
@@ -3537,14 +4078,14 @@ export const CustomerApp: React.FC = () => {
               {/* شبكة عرض المتاجر المفلترة */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between px-1">
-                  <h2 className="text-sm font-black text-violet flex items-center gap-2">
+                  <h2 className="text-sm font-black text-white flex items-center gap-2">
                     <MahalakLogo className="h-[18px] w-[18px] shrink-0 object-contain" />
                     <span>المتاجر ({filteredStores.length})</span>
                   </h2>
                 </div>
 
                 {filteredStores.length === 0 ? (
-                  <div className="py-20 text-center bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[2.5rem] border border-slate-100 brand-gradient-border shadow-sm">
+                  <div className="py-20 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] shadow-lg">
                     <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-6">
                        <Search size={40} className="text-white" />
                     </div>
@@ -3553,7 +4094,7 @@ export const CustomerApp: React.FC = () => {
                     {hasActiveCatalogFilters && (
                       <button
                         onClick={resetCatalogFilters}
-                        className="mt-6 px-5 py-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white transition rounded-xl text-xs font-black cursor-pointer border border-[#7B3DFF]"
+                        className="welcome-btn-pulse mt-6 px-5 py-2.5 bg-brand-horizontal text-white transition rounded-xl text-xs font-black cursor-pointer"
                       >
                         إعادة ضبط جميع خيارات البحث والفلاتر
                       </button>
@@ -3572,7 +4113,7 @@ export const CustomerApp: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setVisibleMerchantsCount(c => c + MERCHANTS_PAGE_SIZE)}
-                      className="px-6 py-3 rounded-2xl bg-vibrant-purple text-white text-sm font-black shadow-lg hover:bg-deep-navy transition"
+                      className="welcome-btn-pulse px-6 py-3 rounded-2xl bg-brand-horizontal text-white text-sm font-black transition"
                     >
                       عرض المزيد ({filteredStores.length - visibleMerchantsCount} متجر)
                     </button>
@@ -3584,9 +4125,9 @@ export const CustomerApp: React.FC = () => {
 
           {/* تبويب المنتجات العام الجديد */}
           {activeTab === 'products' && (
-            <div className="space-y-6 animate-fade-in px-1" dir="rtl">
+            <div className="space-y-6 px-1" dir="rtl">
               {/* ترويسة الصفحة الإبداعية */}
-              <div className="bg-gradient-to-b from-[#7B3DFF] to-[#0B1320] rounded-[2.5rem] p-6 text-white shadow-[0.95px_0px_20px_25px_rgba(0,0,0,0.15),0.95px_0px_8px_10px_rgba(0,0,0,0.15)] relative overflow-hidden">
+              <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-6 text-white shadow-2xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
                 <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
                 
@@ -3603,7 +4144,7 @@ export const CustomerApp: React.FC = () => {
               </div>
 
               {/* لوحة البحث المتقدم والفلترة المزدوجة */}
-              <div id="catalog-product-filters" className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] p-4 sm:p-5 rounded-[2.2rem] border border-slate-100 brand-gradient-border shadow-sm space-y-4 scroll-mt-28 font-tajawal">
+              <div id="catalog-product-filters" className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 sm:p-5 rounded-[2.2rem] shadow-lg space-y-4 scroll-mt-28 font-tajawal">
                 {/* Header for Filter panel */}
                 <div className="flex justify-between items-center mb-1">
                   <h3 className="font-black text-white text-sm flex items-center gap-2">
@@ -3613,7 +4154,7 @@ export const CustomerApp: React.FC = () => {
                   {hasActiveCatalogFilters && (
                     <button
                       onClick={resetCatalogFilters}
-                      className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white border border-[#7B3DFF] hover:opacity-90 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer"
+                      className="welcome-btn-pulse text-white hover:opacity-95 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer"
                     >
                       <RefreshCw size={12} />
                       <span>مسح الفلاتر</span>
@@ -3630,7 +4171,7 @@ export const CustomerApp: React.FC = () => {
                       value={catalogSearchQuery}
                       onChange={(e) => setCatalogSearchQuery(e.target.value)}
                       placeholder="البحث باسم المنتج، المتجر، الماركة أو القسم..." 
-                      className="w-full bg-slate-50 border border-slate-100 pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 font-tajawal text-slate-700 text-right outline-none"
+                      className="w-full bg-white/10 border border-white/20 pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple transition-all placeholder:text-slate-350 font-tajawal text-white text-right outline-none"
                     />
                   </div>
 
@@ -3639,10 +4180,10 @@ export const CustomerApp: React.FC = () => {
                     <select 
                       value={catalogProvinceSelectValue}
                       onChange={(e) => handleCatalogProvinceChange(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-100 pr-4 pl-10 py-3.75 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple outline-none appearance-none font-tajawal text-slate-700 text-right"
+                      className="w-full bg-white/10 border border-white/20 pr-4 pl-10 py-3.75 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/10 focus:border-vibrant-purple outline-none appearance-none font-tajawal text-white text-right"
                     >
-                      <option value="">كل محافظات العراق (18)</option>
-                      {provinces.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                      <option value="" className="text-slate-800">كل محافظات العراق (18)</option>
+                      {provinces.map(p => <option key={p.id} value={p.name} className="text-slate-800">{p.name}</option>)}
                     </select>
                     <ChevronDown size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   </div>
@@ -3654,7 +4195,7 @@ export const CustomerApp: React.FC = () => {
                 )}
 
                 {/* تصفية التصنيفات كقائمة أفقية قابلة للتمرير للمنتجات - مخفية وتظهر عند ضغط ع السهم */}
-                <div className="pt-2 border-t border-slate-100/60 font-tajawal">
+                <div className="pt-2 border-t border-white/10 font-tajawal">
                   <button
                     type="button"
                     onClick={() => setShowAllProductsCategories(!showAllProductsCategories)}
@@ -3682,7 +4223,7 @@ export const CustomerApp: React.FC = () => {
                           className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-[10px] font-black border transition-all shrink-0 cursor-pointer active:scale-95 ${
                             !catalogCategory
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-md shadow-purple-500/10'
-                              : 'bg-slate-50 text-slate-600 border-slate-100 hover:border-violet/25'
+                              : 'bg-white/10 text-white/80 border-white/20 hover:border-violet/25'
                           }`}
                         >
                           {getCategoryIcon('all', !catalogCategory, 14)}
@@ -3701,7 +4242,7 @@ export const CustomerApp: React.FC = () => {
                               className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-[10px] font-black border transition-all shrink-0 cursor-pointer active:scale-95 ${
                                 isSelected
                                   ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-md shadow-purple-500/10'
-                                  : 'bg-slate-50 text-slate-600 border-slate-100 hover:border-violet/25'
+                                  : 'bg-white/10 text-white/80 border-white/20 hover:border-violet/25'
                               }`}
                             >
                               {getCategoryIcon(cat.id, isSelected, 14)}
@@ -3713,8 +4254,8 @@ export const CustomerApp: React.FC = () => {
 
                       {/* التصنيفات الفرعية الذكية في حال تم التحديد */}
                       {catalogCategory && catalogCategory.sub && catalogCategory.sub.length > 0 && (
-                        <div className="pt-2 border-t border-slate-50 space-y-2 animate-fade-in">
-                          <span className="text-[9.5px] font-black text-slate-400 block px-1">التصنيف الفرعي:</span>
+                        <div className="pt-2 border-t border-white/10 space-y-2 animate-fade-in">
+                          <span className="text-[9.5px] font-black text-slate-300 block px-1">التصنيف الفرعي:</span>
                           <div className="flex overflow-x-auto gap-1.5 pb-1.5 scrollbar-none" dir="rtl">
                             <button
                               type="button"
@@ -3722,7 +4263,7 @@ export const CustomerApp: React.FC = () => {
                               className={`px-3 py-1.5 rounded-xl text-[9.5px] font-bold border shrink-0 cursor-pointer active:scale-95 ${
                                 catalogSubCategory === ''
                                   ? 'bg-purple-100 text-vibrant-purple border-purple-200 font-extrabold'
-                                  : 'bg-slate-50 text-slate-500 border-slate-100'
+                                  : 'bg-white/10 text-white/70 border-white/20'
                               }`}
                             >
                               الكل
@@ -3735,7 +4276,7 @@ export const CustomerApp: React.FC = () => {
                                 className={`px-3 py-1.5 rounded-xl text-[9.5px] font-bold border shrink-0 cursor-pointer active:scale-95 ${
                                   catalogSubCategory === sub
                                     ? 'bg-purple-100 text-vibrant-purple border-purple-200 font-extrabold'
-                                    : 'bg-slate-50 text-slate-500 border-slate-100'
+                                    : 'bg-white/10 text-white/70 border-white/20'
                                 }`}
                               >
                                 {sub}
@@ -3749,7 +4290,7 @@ export const CustomerApp: React.FC = () => {
                 </div>
 
                 {/* لوحة خيارات الترتيب والفرز الاحترافي المطور */}
-                <div className="pt-2 border-t border-slate-100/60 font-tajawal">
+                <div className="pt-2 border-t border-white/10 font-tajawal">
                   <button
                     type="button"
                     onClick={() => setShowAllProductsSorting(!showAllProductsSorting)}
@@ -3768,6 +4309,11 @@ export const CustomerApp: React.FC = () => {
                           🚚 توصيل مجاني فقط
                         </span>
                       )}
+                      {catalogDiscountOnly && (
+                        <span className="bg-rose-50 text-rose-600 text-[9.5px] px-2 py-0.5 rounded-full border border-rose-100 font-bold">
+                          🏷️ خصومات
+                        </span>
+                      )}
                     </span>
                     <ChevronDown size={14} className={`text-slate-400 hover:text-vibrant-purple transition-transform duration-300 ${showAllProductsSorting ? 'rotate-180' : ''}`} />
                   </button>
@@ -3775,7 +4321,7 @@ export const CustomerApp: React.FC = () => {
                   {showAllProductsSorting && (
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3.5 animate-fade-in" id="all-products-sorting-collapsible">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[9.5px] font-black text-slate-400 ml-1">ترتيب حسب:</span>
+                        <span className="text-[9.5px] font-black text-slate-300 ml-1">ترتيب حسب:</span>
                         
                         {/* الافتراضي */}
                         <button
@@ -3784,7 +4330,7 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             allProductsSortType === 'default'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25 hover:text-vibrant-purple'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25 hover:text-white'
                           }`}
                         >
                           🔄 الافتراضي
@@ -3797,7 +4343,7 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             allProductsSortType === 'price-asc'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25 hover:text-vibrant-purple'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25 hover:text-white'
                           }`}
                         >
                           📈 السعر: الأقل للأعلى
@@ -3810,7 +4356,7 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             allProductsSortType === 'bestselling'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25 hover:text-vibrant-purple'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25 hover:text-white'
                           }`}
                         >
                           🔥 الأكثر مبيعاً
@@ -3823,22 +4369,37 @@ export const CustomerApp: React.FC = () => {
                           className={`px-3.5 py-2 rounded-xl text-[10px] font-black transition-all border cursor-pointer active:scale-95 ${
                             allProductsSortType === 'rating-desc'
                               ? 'bg-vibrant-purple text-white border-vibrant-purple shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-violet/25 hover:text-vibrant-purple'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-violet/25 hover:text-white'
                           }`}
                         >
                           ⭐ الأكثر تقييماً
                         </button>
                       </div>
 
-                      {/* توصيل مجاني فقط */}
-                      <div className="flex items-center">
+                      {/* فلاتر إضافية */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setCatalogDiscountOnly(prev => !prev)}
+                          className={`w-full sm:w-auto px-4 py-2 rounded-xl text-[10px] font-black transition-all border flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
+                            catalogDiscountOnly
+                              ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-rose-200 hover:text-rose-300'
+                          }`}
+                        >
+                          <span>🏷️</span>
+                          <span>خصومات فقط</span>
+                          {catalogDiscountOnly && (
+                            <span className="w-1.5 h-1.5 bg-white rounded-full"></span>
+                          )}
+                        </button>
                         <button
                           type="button"
                           onClick={() => setCatalogFreeDeliveryOnly(prev => !prev)}
                           className={`w-full sm:w-auto px-4 py-2 rounded-xl text-[10px] font-black transition-all border flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
                             catalogFreeDeliveryOnly
                               ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                              : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-emerald-200 hover:text-emerald-600'
+                              : 'bg-white/10 text-white/70 border-white/20 hover:border-emerald-200 hover:text-emerald-300'
                           }`}
                         >
                           <span>🚚</span>
@@ -3855,13 +4416,13 @@ export const CustomerApp: React.FC = () => {
 
               {/* قائمة المنتجات */}
               <div className="flex items-center justify-between px-1">
-                <h2 className="text-sm font-black text-violet flex items-center gap-2">
+                <h2 className="text-sm font-black text-white flex items-center gap-2">
                   <ShoppingBag size={18} className="text-vibrant-purple shrink-0" />
                   <span>المنتجات ({catalogDisplayProducts.length})</span>
                 </h2>
               </div>
               {catalogDisplayProducts.length === 0 ? (
-                <div className="py-24 text-center bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[3rem] border border-slate-100 brand-gradient-border shadow-sm px-10">
+                <div className="py-24 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[3rem] shadow-lg px-10">
                   <div className="w-20 h-20 bg-white/10 rounded-[2rem] flex items-center justify-center mx-auto mb-6 text-white">
                     <Search size={32} />
                   </div>
@@ -3872,7 +4433,7 @@ export const CustomerApp: React.FC = () => {
                   {hasActiveCatalogFilters && (
                     <button
                       onClick={resetCatalogFilters}
-                      className="mt-6 px-5 py-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white transition rounded-xl text-xs font-black cursor-pointer border border-[#7B3DFF]"
+                      className="welcome-btn-pulse mt-6 px-5 py-2.5 bg-brand-horizontal text-white transition rounded-xl text-xs font-black cursor-pointer"
                     >
                       إعادة ضبط جميع خيارات البحث والفلاتر
                     </button>
@@ -3892,6 +4453,13 @@ export const CustomerApp: React.FC = () => {
                     const store = storeMap.get(product.storeId);
                     openShareModal('product', { ...product, shopName: store?.shopName });
                   }}
+                  onStoreClick={(product) => {
+                    const store = storeMap.get(product.storeId);
+                    if (store && !store.isBanned) {
+                      closeProductDetail();
+                      setSelectedStore(store);
+                    }
+                  }}
                 />
               )}
             </div>
@@ -3910,20 +4478,20 @@ export const CustomerApp: React.FC = () => {
                   <>
                     {/* تتبع الطلب المحدد من الإشعارات */}
                     {targetOrderId && (
-                      <div className="bg-violet/10 border border-violet/25 p-5 rounded-[2.5rem] flex flex-col sm:flex-row gap-3 items-center justify-between text-right shadow-2xs">
+                      <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2.5rem] flex flex-col sm:flex-row gap-3 items-center justify-between text-right shadow-2xl">
                         <div className="flex items-center gap-3">
                           <span className="relative flex h-3 w-3 shrink-0">
                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#b07aff] opacity-75"></span>
                             <span className="relative inline-flex rounded-full h-3 w-3 bg-vibrant-purple"></span>
                           </span>
                           <div>
-                            <span className="text-xs font-black text-violet font-tajawal block">عرض تفاصيل الطلب المحدد من التنبيهات</span>
-                            <span className="text-[10px] font-bold text-vibrant-purple font-tajawal">رقم الطلب: {targetOrderId}</span>
+                            <span className="text-xs font-black text-white font-tajawal block">عرض تفاصيل الطلب المحدد من التنبيهات</span>
+                            <span className="text-[10px] font-bold text-[#E9DAFF] font-tajawal">رقم الطلب: {targetOrderId}</span>
                           </div>
                         </div>
                         <button 
                           onClick={() => setTargetOrderId(null)} 
-                          className="text-[10px] font-black text-violet bg-white hover:bg-slate-50 px-4 py-2 rounded-2xl border border-violet/25 transition-colors cursor-pointer shrink-0"
+                          className="welcome-btn-pulse text-[10px] font-black text-white bg-white/10 hover:bg-white/20 px-4 py-2 rounded-2xl border border-white/30 backdrop-blur-md transition-colors cursor-pointer shrink-0"
                         >
                           إلغاء التصفية وعرض كل طلباتي
                         </button>
@@ -3931,8 +4499,8 @@ export const CustomerApp: React.FC = () => {
                     )}
 
                     <div className="flex items-center justify-between flex-wrap gap-3">
-                      <h2 className="text-sm font-black text-violet flex items-center gap-2">
-                        <div className="p-2 bg-violet/20 text-vibrant-purple rounded-xl">
+                      <h2 className="text-sm font-black text-white flex items-center gap-2">
+                        <div className="p-2 bg-white/10 border border-white/20 text-vibrant-purple rounded-xl backdrop-blur-md">
                           <ClipboardList size={18} />
                         </div>
                         <span>تتبع طلباتك</span>
@@ -3940,32 +4508,32 @@ export const CustomerApp: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => setShowOnlyDelivered(!showOnlyDelivered)}
-                          className={`text-[10px] sm:text-xs font-bold px-3 sm:px-4 py-1.5 sm:py-2 rounded-full border transition-colors cursor-pointer shadow-sm ${
+                          className={`text-[10px] sm:text-xs font-bold px-3 sm:px-4 py-1.5 sm:py-2 rounded-full backdrop-blur-md transition-colors cursor-pointer shadow-sm ${
                             showOnlyDelivered
-                              ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
-                              : 'bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white border-[#7B3DFF] hover:opacity-90'
+                              ? 'border bg-emerald-500/20 text-emerald-200 border-emerald-400/40 hover:bg-emerald-500/30'
+                              : 'welcome-btn-pulse text-white hover:opacity-90'
                           }`}
                         >
                           {showOnlyDelivered ? 'عرض الكل' : 'الطلبات المكتملة فقط'}
                         </button>
-                        <div className="text-[10px] text-white font-bold bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] px-3 py-1.5 sm:py-2 rounded-full border border-[#7B3DFF] shadow-sm shrink-0">
+                        <div className="text-[10px] text-white font-bold bg-white/10 border border-white/20 px-3 py-1.5 sm:py-2 rounded-full backdrop-blur-md shadow-sm shrink-0">
                           إجمالي ({displayedOrders.length})
                         </div>
                       </div>
                     </div>
 
                     {displayedOrders.length === 0 ? (
-                      <div className="py-20 text-center bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[2.5rem] border border-slate-100 brand-gradient-border shadow-sm">
-                        <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <div className="py-20 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] shadow-sm">
+                        <div className="w-24 h-24 bg-white/10 border border-white/20 rounded-full flex items-center justify-center mx-auto mb-6">
                           <ShoppingBag size={40} className="text-white" />
                         </div>
                         <p className="text-white font-black">لا توجد طلبات سابقة</p>
-                        <p className="text-white text-[10px] mt-2 px-10 font-bold leading-relaxed">ابدأ بالتسوق من المتاجر المفضلة لديك لتظهر طلباتك هنا</p>
+                        <p className="text-white/70 text-[10px] mt-2 px-10 font-bold leading-relaxed">ابدأ بالتسوق من المتاجر المفضلة لديك لتظهر طلباتك هنا</p>
                       </div>
                     ) : (
                       <div className="space-y-4">
                         {displayedOrders.map(order => (
-                    <div key={order.id} className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[2rem] border border-white/20 brand-gradient-border p-4 sm:p-6 text-right shadow-sm hover:shadow-md transition-shadow relative overflow-hidden flex flex-col gap-5 min-w-0 w-full text-white">
+                    <div key={order.id} className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-4 sm:p-6 text-right shadow-2xl hover:shadow-vibrant-purple/20 transition-all relative overflow-hidden flex flex-col gap-5 min-w-0 w-full text-white">
                       
                       {/* ترويسة الطلب */}
                       <div className="flex justify-between items-start gap-3 min-w-0 w-full">
@@ -3990,7 +4558,7 @@ export const CustomerApp: React.FC = () => {
                            <span className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest">تتبع الحالة</span>
                            <span className={`text-[9px] sm:text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap shrink-0 ${
                               order.status === 'pending' ? 'bg-amber-100 text-amber-600' :
-                              order.status === 'accepted' ? 'bg-violet/20 text-white' :
+                              order.status === 'accepted' ? 'bg-sky-100 text-sky-600' :
                               order.status === 'shipped' ? 'bg-violet/20 text-vibrant-purple' :
                               order.status === 'delivered' ? 'bg-emerald-100 text-emerald-600' :
                               'bg-rose-100 text-rose-600'
@@ -4081,12 +4649,10 @@ export const CustomerApp: React.FC = () => {
                          </div>
                          
                          {/* زر إلغاء الطلب الموقت */}
-                         <div className="order-actions-container mt-4 pt-3 border-t border-white text-white flex items-stretch justify-center flex-wrap sm:flex-nowrap gap-3 w-full">
-                           <CancelOrderButton order={order} onCancelClick={(o) => setOrderToCancel(o)} />
-                         </div>
+                         <CancelOrderButton order={order} onCancelClick={(o) => setOrderToCancel(o)} />
 
                          {/* تفاصيل التوصيل */}
-                         <div className="pt-3 border-t border-white flex flex-col gap-2 min-w-0 w-full">
+                         <div className="pt-3 border-t border-white/20 flex flex-col gap-2 min-w-0 w-full">
                             <div className="flex items-center gap-2">
                               <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
                                  <MapPin size={12} />
@@ -4148,24 +4714,33 @@ export const CustomerApp: React.FC = () => {
             return (
             <div className="space-y-6 animate-fade-in px-1">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-black text-violet flex items-center gap-2">
-                  <div className="p-2 bg-violet/20 text-vibrant-purple rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('profile')}
+                  className="p-2 merchant-icon-tile text-slate-300 rounded-xl hover:bg-white/15 hover:text-white transition-all border border-transparent flex items-center justify-center shrink-0"
+                  title="الرجوع لحسابي"
+                >
+                  <ChevronRight size={20} />
+                </button>
+                <h2 className="text-sm font-black text-white flex items-center gap-2">
+                  <div className="p-2 bg-white/10 border border-white/20 text-vibrant-purple rounded-xl backdrop-blur-md">
                     <Wallet size={18} />
                   </div>
                   <span>{loyalty.texts.pageTitle}</span>
                 </h2>
+                <div className="w-9" />
               </div>
 
-              <div className="bg-brand-horizontal bg-clip-text text-transparent rounded-[2rem] border border-slate-100 brand-gradient-border p-1.5 flex gap-1 shadow-sm">
+              <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-1.5 flex gap-1 shadow-sm">
                 <button
                   onClick={() => setWalletView('points')}
-                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'points' ? 'bg-brand-horizontal text-white shadow-lg shadow-violet/20 border border-vibrant-purple' : 'text-slate-400 hover:bg-slate-50'}`}
+                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'points' ? 'welcome-btn-pulse text-white shadow-lg shadow-violet/20 border border-vibrant-purple/60' : 'text-white/50 hover:bg-white/10 hover:text-white/80'}`}
                 >
                   {loyalty.texts.pointsTabLabel}
                 </button>
                 <button
                   onClick={() => setWalletView('gifts')}
-                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'gifts' ? 'bg-brand-horizontal text-white shadow-[0.96px_0_10px_15px_rgba(0,0,0,0.15),0.96px_0_4px_6px_rgba(0,0,0,0.15)] border border-vibrant-purple' : 'text-slate-400 hover:bg-slate-50'}`}
+                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'gifts' ? 'welcome-btn-pulse text-white shadow-[0.96px_0_10px_15px_rgba(0,0,0,0.15),0.96px_0_4px_6px_rgba(0,0,0,0.15)]' : 'text-white/50 hover:bg-white/10 hover:text-white/80'}`}
                 >
                   {loyalty.texts.giftsTabLabel}
                 </button>
@@ -4174,7 +4749,7 @@ export const CustomerApp: React.FC = () => {
               {walletView === 'points' && (
                 <div className="space-y-6">
                   {/* كارد النقاط ونظام المستويات المحسن */}
-                  <div className="relative overflow-hidden bg-gradient-to-br from-vibrant-purple via-slate-950 to-black rounded-[2.5rem] p-5 text-white shadow-[0_25px_50px_-12px_rgba(0,0,0,0.15)] border border-white/5 brand-gradient-border">
+                  <div className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow relative overflow-hidden rounded-[2.5rem] p-5 text-white shadow-[0_25px_50px_-12px_rgba(0,0,0,0.15)] border border-white/10">
                     <div className="absolute top-0 right-0 w-64 h-64 bg-vibrant-purple/10 rounded-full -mr-32 -mt-32 blur-3xl animate-pulse"></div>
                     <div className="absolute bottom-0 left-0 w-48 h-48 bg-amber-500/5 rounded-full -ml-24 -mb-24 blur-3xl"></div>
                     
@@ -4207,7 +4782,7 @@ export const CustomerApp: React.FC = () => {
                       <div className="bg-white/5 rounded-3xl p-4 border border-white/5">
                         <div className="flex justify-between items-end mb-3">
                            <div className="text-right">
-                              <span className="text-[10px] text-slate-400 font-bold block mb-1">{loyalty.texts.nextTierLabel}</span>
+                              <span className="text-[10px] text-white/50 font-bold block mb-1">{loyalty.texts.nextTierLabel}</span>
                               <p className="text-[11px] font-black text-white">
                                  {walletTierProgress.nextTier
                                    ? `${walletTierProgress.nextTier.labelAr} (متبقي ${walletTierProgress.remaining} طلب)`
@@ -4250,7 +4825,7 @@ export const CustomerApp: React.FC = () => {
                                       'bg-orange-500 text-white ring-4 ring-orange-500/20 scale-110 shadow-lg'
                                     : isAchieved 
                                       ? 'bg-vibrant-purple text-white opacity-60' 
-                                      : 'bg-white/5 text-slate-500 border border-white/10'
+                                      : 'bg-white/5 text-white/40 border border-white/10'
                                   }`}>
                                      {tier.shortIcon}
                                   </div>
@@ -4260,7 +4835,7 @@ export const CustomerApp: React.FC = () => {
                                       tier.key === 'Platinum' ? 'text-slate-300' :
                                       tier.key === 'Gold' ? 'text-amber-400' :
                                       'text-orange-400'
-                                    : isAchieved ? 'text-[#b07aff]' : 'text-slate-600'
+                                    : isAchieved ? 'text-[#b07aff]' : 'text-white/40'
                                   }`}>
                                      {tier.labelAr}
                                   </span>
@@ -4283,13 +4858,13 @@ export const CustomerApp: React.FC = () => {
                           const progressPercent = Math.min(100, Math.round((userPoints / pkg.points) * 100));
                           
                           return (
-                            <div key={pkg.id} className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[2.2rem] p-5 border border-white/20 brand-gradient-border shadow-sm flex flex-col gap-4 group hover:shadow-md transition-all duration-300 relative overflow-hidden">
+                            <div key={pkg.id} className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.2rem] p-5 shadow-lg flex flex-col gap-4 group hover:shadow-vibrant-purple/20 transition-all duration-300 relative overflow-hidden">
                                {/* الجزء العلوي: المعلومات والزر */}
                                <div className="flex items-center justify-between w-full">
                                  <div className="flex items-center gap-3.5 text-right bg-transparent">
                                     <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300 ${
                                       canRedeem 
-                                      ? 'bg-amber-100 text-amber-500 scale-105 shadow-xs shadow-amber-200 animate-pulse' 
+                                      ? 'welcome-icon-pulse bg-amber-100 text-amber-500 scale-105 shadow-xs shadow-amber-200' 
                                       : 'bg-white/10 text-white'
                                     }`}>
                                        <Gift size={24} />
@@ -4310,7 +4885,7 @@ export const CustomerApp: React.FC = () => {
                                    disabled={!canRedeem}
                                    className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all duration-300 active:scale-95 ${
                                      canRedeem 
-                                     ? 'bg-white text-violet shadow-lg shadow-black/10 hover:shadow-xl cursor-pointer hover:scale-[1.03]' 
+                                     ? 'welcome-btn-pulse bg-white text-violet shadow-lg shadow-black/10 hover:shadow-xl cursor-pointer hover:scale-[1.03]' 
                                      : 'bg-white/10 text-white/70 cursor-not-allowed border border-white/20 font-mono'
                                    }`}
                                  >
@@ -4344,9 +4919,9 @@ export const CustomerApp: React.FC = () => {
                   </div>
 
                   {/* معلومات الشحن */}
-                  <div className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-[2rem] border border-white/20 brand-gradient-border p-6 shadow-sm">
+                  <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-6 shadow-sm">
                      <div className="flex items-center gap-3 mb-4">
-                        <div className="p-2 bg-white/10 text-white rounded-xl">
+                        <div className="p-2 bg-white/10 border border-white/20 text-white rounded-xl backdrop-blur-md">
                            <Zap size={18} />
                         </div>
                         <h3 className="font-black text-white text-sm">{loyalty.texts.rechargeTitle}</h3>
@@ -4369,7 +4944,7 @@ export const CustomerApp: React.FC = () => {
                      </div>
                   </div>
 
-                  <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100/50">
+                  <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-6 rounded-[2rem]">
                     <p className="text-[11px] font-black text-white mb-3 flex items-center gap-2">
                        <Award size={16} className="text-vibrant-purple" />
                        {loyalty.texts.earnSectionTitle}
@@ -4386,11 +4961,11 @@ export const CustomerApp: React.FC = () => {
                              {rule.type === 'tier_upgrade' ? (
                                <>
                                  <span className="text-[9.5px] text-white font-medium block text-right">{rule.descriptionAr}</span>
-                                 <div className={`grid ${upgradeGridClass} gap-1.5 mt-2 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] p-2 rounded-xl border border-[#7B3DFF]/50 text-center`}>
+                                 <div className={`grid ${upgradeGridClass} gap-1.5 mt-2 p-2 rounded-xl text-center`}>
                                    {upgradeTiers.map((tier, idx) => (
                                      <div
                                        key={tier.key}
-                                       className={idx > 0 && idx < upgradeTiers.length - 1 ? 'border-x border-slate-200' : ''}
+                                       className={idx > 0 && idx < upgradeTiers.length - 1 ? 'border-x border-white/20' : ''}
                                      >
                                        <span className="text-[8.5px] font-black block text-white">
                                          {tier.labelAr}
@@ -4401,13 +4976,13 @@ export const CustomerApp: React.FC = () => {
                                      </div>
                                    ))}
                                  </div>
-                                 <span className="text-[8.5px] text-white font-extrabold mt-1.5 block text-right bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-[#7B3DFF]">
+                                 <span className="text-[8.5px] text-white font-extrabold mt-1.5 block text-right">
                                    {formatTierResetNoteAr(loyalty.tierResetPeriodMonths)}
                                  </span>
                                </>
                              ) : rule.type === 'order_completed' ? (
                               <span className="text-[9.5px] text-white font-medium text-right block">
-                                {rule.descriptionAr || `كل 1000 د.ع تنفقها تمنحك ${rule.pointsPer1000Iqd ?? loyalty.pointsPer1000Iqd} نقطة تلقائياً.`}
+                                {formatOrderDeliveryRewardDescription(loyalty)}
                               </span>
                              ) : rule.type === 'share_app' ? (
                                <span className="text-[9.5px] text-white font-medium text-right block">
@@ -4429,11 +5004,43 @@ export const CustomerApp: React.FC = () => {
               )}
 
               {walletView === 'gifts' && (() => {
-                const pointCodes = customerWalletPromos.filter(p => p.source === 'points' && p.ownerCustomerId === currentCustomer?.id);
-                const giftCodes = customerWalletPromos.filter(p => p.status === 'active' && (
-                  p.storeId === 'ALL_STORES' || currentCustomer?.storeNotifications.includes(p.storeId || '') || currentCustomer?.followedStores.includes(p.storeId || '')
-                ));
-                const allCodes = [...pointCodes, ...giftCodes];
+                const now = Date.now();
+                const isPromoStillValid = (p: typeof customerWalletPromos[number]) => {
+                  if (p.status !== 'active') return false;
+                  const expiry = p.expirationDate || p.expiresAt;
+                  if (expiry && new Date(expiry).getTime() < now) return false;
+                  const currentUses = p.currentGlobalUses ?? p.usedCount ?? 0;
+                  const maxUses = p.maxGlobalUses ?? p.maxUses ?? 0;
+                  if (maxUses > 0 && currentUses >= maxUses) return false;
+                  return true;
+                };
+
+                const pointCodes = customerWalletPromos.filter(p =>
+                  p.source === 'points'
+                  && p.ownerCustomerId === currentCustomer?.id
+                  && isPromoStillValid(p),
+                );
+
+                const storePromoCodes = customerWalletPromos.filter(p => {
+                  if (p.source === 'points') return false;
+                  if (!isPromoStillValid(p)) return false;
+                  if (p.ownerCustomerId && p.ownerCustomerId !== currentCustomer?.id) return false;
+                  return true;
+                });
+
+                const allCodes = [...pointCodes, ...storePromoCodes].filter((p, idx, arr) =>
+                  arr.findIndex(x => (x.id || x.code) === (p.id || p.code)) === idx
+                );
+
+                const openPromoStore = (storeId?: string | null) => {
+                  if (!storeId || storeId === 'ALL_STORES') return;
+                  const store =
+                    stores.find(s => s.id === storeId)
+                    ?? allStores.find(s => s.id === storeId);
+                  if (store && !store.isBanned) {
+                    navigateToStore(store);
+                  }
+                };
                 
                 return (
                   <div className="space-y-6 animate-fade-in">
@@ -4441,7 +5048,7 @@ export const CustomerApp: React.FC = () => {
                     <motion.div 
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-b from-[#7B3DFF] to-[#0B1320] rounded-[2.5rem] p-8 text-white shadow-2xl shadow-violet/20 relative overflow-hidden"
+                      className="welcome-card-glow welcome-card-border-glow rounded-[2.5rem] p-8 text-white shadow-2xl shadow-violet/20 relative overflow-hidden"
                     >
                        <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl animate-pulse"></div>
                        <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#b07aff]/20 rounded-full -ml-24 -mb-24 blur-2xl"></div>
@@ -4460,17 +5067,17 @@ export const CustomerApp: React.FC = () => {
                     </motion.div>
 
                     {allCodes.length === 0 ? (
-                      <div className="py-24 text-center bg-white rounded-[3rem] border border-slate-100 shadow-sm px-10">
+                      <div className="py-24 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[3rem] shadow-sm px-10">
                         <div className="relative inline-block mb-8">
-                           <div className="w-24 h-24 bg-violet/10 rounded-full flex items-center justify-center animate-bounce duration-[3000ms]">
+                           <div className="w-24 h-24 bg-white/10 border border-white/20 rounded-full flex items-center justify-center animate-bounce duration-[3000ms]">
                               <Ticket size={48} className="text-[#e9daff]" />
                            </div>
                            <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-white shadow-md rounded-2xl flex items-center justify-center">
                               <Search size={20} className="text-vibrant-purple" />
                            </div>
                         </div>
-                        <h4 className="text-violet font-black text-lg mb-2">{loyalty.texts.giftsEmptyTitle}</h4>
-                        <p className="text-slate-400 text-xs font-bold leading-relaxed max-w-xs mx-auto">
+                        <h4 className="text-white font-black text-lg mb-2">{loyalty.texts.giftsEmptyTitle}</h4>
+                        <p className="text-white/70 text-xs font-bold leading-relaxed max-w-xs mx-auto">
                            {loyalty.texts.giftsEmptyText}
                         </p>
                       </div>
@@ -4483,14 +5090,28 @@ export const CustomerApp: React.FC = () => {
                           const formattedDate = dateObj && !isNaN(dateObj.getTime()) 
                             ? dateObj.toLocaleDateString('ar-IQ', { day: 'numeric', month: 'long' }) 
                             : 'كود جديد';
+
+                          const promoStoreId = p.merchantId || p.storeId;
+                          const promoStore = promoStoreId && promoStoreId !== 'ALL_STORES'
+                            ? stores.find(s => s.id === promoStoreId)
+                            : undefined;
+                          const isMerchantLaunch = p.source === 'merchant' || (p.sponsor === 'MERCHANT' && promoStoreId && promoStoreId !== 'ALL_STORES');
+                          const isPointRedemption = p.source === 'points' && (!promoStoreId || promoStoreId === 'ALL_STORES');
                           
                           let promoHeader = p.source === 'points' ? loyalty.texts.promoHeaderPoints : loyalty.texts.promoHeaderStore;
                           if (p.sponsor === 'ADMIN') {
                             promoHeader = loyalty.texts.promoHeaderAdmin;
-                          } else if (p.sponsor === 'MERCHANT' && p.merchantId) {
-                            const storeName = allStores.find(s => s.id === p.merchantId)?.shopName || 'المتجر';
-                            promoHeader = `مكافأة من متجر ${storeName}`;
+                          } else if (isMerchantLaunch && promoStore) {
+                            promoHeader = `كود خصم من متجر ${promoStore.shopName}`;
+                          } else if (p.sponsor === 'MERCHANT' && promoStore) {
+                            promoHeader = `مكافأة من متجر ${promoStore.shopName}`;
                           }
+
+                          const sideBadge = isPointRedemption
+                            ? 'نقاط'
+                            : isMerchantLaunch
+                              ? 'متجر'
+                              : 'هدية';
                           
                           return (
                             <motion.div 
@@ -4502,18 +5123,18 @@ export const CustomerApp: React.FC = () => {
                               className="group relative"
                             >
                                {/* Coupon Card */}
-                               <div className="bg-white rounded-3xl border border-slate-100 shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden flex">
+                               <div className="welcome-card-border-glow bg-white/5 border border-white/20 backdrop-blur-md rounded-3xl shadow-lg hover:shadow-vibrant-purple/20 transition-all duration-300 overflow-hidden flex">
                                   {/* Left Section (Punch Box) */}
-                                  <div className={`w-20 sm:w-28 flex flex-col items-center justify-center border-r border-dashed border-slate-200 relative ${p.source === 'points' ? 'bg-violet/10' : 'bg-amber-50'}`}>
+                                  <div className={`w-20 sm:w-28 flex flex-col items-center justify-center border-r border-dashed border-white/20 relative ${isPointRedemption ? 'bg-violet/10' : 'bg-amber-500/10'}`}>
                                      {/* Punch Holes */}
-                                     <div className="absolute -top-3 -right-3 w-6 h-6 bg-slate-50 rounded-full border border-slate-100 shadow-inner"></div>
-                                     <div className="absolute -bottom-3 -right-3 w-6 h-6 bg-slate-50 rounded-full border border-slate-100 shadow-inner"></div>
+                                     <div className="absolute -top-3 -right-3 w-6 h-6 bg-deep-navy border border-white/10 rounded-full shadow-inner"></div>
+                                     <div className="absolute -bottom-3 -right-3 w-6 h-6 bg-deep-navy border border-white/10 rounded-full shadow-inner"></div>
                                      
-                                     <div className={`p-3 rounded-2xl mb-2 ${p.source === 'points' ? 'bg-violet/20 text-vibrant-purple' : 'bg-amber-100 text-amber-600'}`}>
-                                        {p.sponsor === 'ADMIN' ? <Gift size={24} /> : (p.source === 'points' ? <Sparkles size={24} /> : <Gift size={24} />)}
+                                     <div className={`p-3 rounded-2xl mb-2 ${isPointRedemption ? 'bg-violet/20 text-vibrant-purple' : 'bg-amber-100 text-amber-600'}`}>
+                                        {p.sponsor === 'ADMIN' ? <Gift size={24} /> : (isPointRedemption ? <Sparkles size={24} /> : (isMerchantLaunch ? <StoreIcon size={24} /> : <Gift size={24} />))}
                                      </div>
-                                     <span className={`text-[10px] font-black uppercase tracking-tighter ${p.source === 'points' ? 'text-vibrant-purple' : 'text-amber-600'}`}>
-                                        {p.source === 'points' ? 'نقاط' : 'هدية'}
+                                     <span className={`text-[10px] font-black uppercase tracking-tighter ${isPointRedemption ? 'text-vibrant-purple' : 'text-amber-600'}`}>
+                                        {sideBadge}
                                      </span>
                                   </div>
 
@@ -4527,11 +5148,20 @@ export const CustomerApp: React.FC = () => {
                                                  {promoHeader}
                                               </h4>
                                            </div>
+                                           {promoStore && (
+                                             <button
+                                               type="button"
+                                               onClick={() => openPromoStore(promoStore.id)}
+                                               className="text-[10px] font-bold text-[#fff700] hover:underline flex items-center gap-1 mb-1"
+                                             >
+                                               <StoreIcon size={12} />
+                                               {promoStore.shopName}
+                                             </button>
+                                           )}
                                            <div className="flex items-baseline gap-1">
                                               <span className="text-2xl font-black text-[#fff700]">
-                                                 {(p.discountValue || p.amount || 0).toLocaleString()}
+                                                 {formatPromoDiscount(p)}
                                               </span>
-                                              <span className="text-xs font-black text-white">د.ع</span>
                                            </div>
                                         </div>
                                         <div className="px-3 py-1 bg-brand-horizontal rounded-xl border border-vibrant-purple flex items-center gap-2 select-none">
@@ -4576,11 +5206,23 @@ export const CustomerApp: React.FC = () => {
                                         </div>
                                         
                                         {/* Mobile Tap Tip */}
-                                        <div className="mt-2 text-center">
+                                        <div className="mt-2 space-y-2">
                                            <p className="text-[9px] text-white font-bold flex items-center justify-center gap-1">
                                               <Info size={10} />
-                                              استخدم هذا الكود عند الدفع للحصول على الخصم
+                                              {promoStore
+                                                ? `صالح للاستخدام في متجر «${promoStore.shopName}» فقط`
+                                                : 'استخدم هذا الكود عند الدفع للحصول على الخصم'}
                                            </p>
+                                           {promoStore && (
+                                             <button
+                                               type="button"
+                                               onClick={() => openPromoStore(promoStore.id)}
+                                               className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-[#fff700] text-[10px] font-black transition-all active:scale-95 flex items-center justify-center gap-2"
+                                             >
+                                               <StoreIcon size={14} />
+                                               الدخول إلى المتجر
+                                             </button>
+                                           )}
                                         </div>
                                      </div>
                                   </div>
@@ -4602,15 +5244,15 @@ export const CustomerApp: React.FC = () => {
           {activeTab === 'profile' && (
             <div className="space-y-6 animate-fade-in px-1">
               {/* بطاقة المستخدم الرئيسية */}
-              <div className="bg-brand-horizontal rounded-[2.5rem] border border-slate-100 brand-gradient-border p-8 shadow-sm relative overflow-hidden text-center group">
+              <div className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden text-center group">
                  <div className="absolute top-0 right-0 w-32 h-32 bg-violet/10 rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-700"></div>
                  
                  <div className="relative z-10">
                     <div className="relative inline-block mb-4 sm:mb-4">
-                       <div className="w-20 h-20 rounded-[1.8rem] bg-vibrant-purple flex items-center justify-center text-white text-2xl font-black shadow-xl shadow-violet/20 border-4 border-white">
+                       <div className="w-20 h-20 rounded-[1.8rem] bg-vibrant-purple flex items-center justify-center text-white text-2xl font-black shadow-xl shadow-violet/20 border-4 border-white/40">
                           {currentCustomer?.name?.charAt(0)}
                        </div>
-                       <div className="absolute -bottom-1 -left-1 w-8 h-8 bg-emerald-500 text-white border-4 border-white rounded-2xl flex items-center justify-center shadow-lg">
+                       <div className="absolute -bottom-1 -left-1 w-8 h-8 bg-emerald-500 text-white border-4 border-white/40 rounded-2xl flex items-center justify-center shadow-lg">
                           <Check size={14} />
                        </div>
                     </div>
@@ -4621,12 +5263,16 @@ export const CustomerApp: React.FC = () => {
                     </div>
                     
                     <div className="flex items-center justify-center gap-3">
-                       <div className="px-5 py-2 bg-brand-horizontal border border-vibrant-purple rounded-2xl shrink-0 text-white">
+                       <button
+                         type="button"
+                         onClick={() => openLoyaltyWallet('points')}
+                         className="welcome-btn-pulse px-5 py-2 bg-white/10 border border-white/30 backdrop-blur-md rounded-2xl shrink-0 text-white hover:bg-white/20 transition-colors active:scale-[0.98]"
+                       >
                           <div className="flex items-baseline justify-center gap-1">
                              <span className="text-sm font-black">{currentCustomer?.points ?? 0}</span>
                              <span className="text-[10px] font-black">{loyalty.texts.pointsUnit}</span>
                           </div>
-                       </div>
+                       </button>
                     </div>
                  </div>
               </div>
@@ -4637,10 +5283,10 @@ export const CustomerApp: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowMyInfo(prev => !prev)}
-                      className="w-full text-right bg-brand-horizontal rounded-[2rem] p-5 border border-slate-100 brand-gradient-border shadow-sm flex items-center justify-between hover:border-violet/25 transition-colors group"
+                      className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
                     >
                       <div className="flex items-center gap-4">
-                        <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                        <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
                           <User size={20} />
                         </div>
                         <div className="text-right">
@@ -4652,27 +5298,27 @@ export const CustomerApp: React.FC = () => {
                     </button>
 
                     {showMyInfo && (
-                      <div className="p-6 space-y-6 bg-brand-horizontal rounded-[2rem] border border-slate-100 brand-gradient-border shadow-sm animate-fade-in">
+                      <div className="p-6 space-y-6 welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] shadow-sm animate-fade-in">
                         <div className="grid md:grid-cols-2 gap-4">
                           <div>
-                            <label className="block text-[10px] font-black text-white mb-2 mr-1">رقم الهاتف (لا يمكن تغييره)</label>
-                            <div className="flex items-center gap-3 bg-slate-100 border border-slate-200 px-4 py-3.5 rounded-2xl opacity-60">
-                              <Phone size={14} className="text-slate-400" />
-                              <span className="text-xs font-black text-slate-500 tracking-wider">
+                            <label className="block text-[10px] font-black text-white/80 mb-2 mr-1">رقم الهاتف (لا يمكن تغييره)</label>
+                            <div className="flex items-center gap-3 bg-white/10 border border-white/20 px-4 py-3.5 rounded-2xl opacity-70 backdrop-blur-md">
+                              <Phone size={14} className="text-white/60" />
+                              <span className="text-xs font-black text-white/70 tracking-wider">
                                 {currentCustomer?.phone}
                               </span>
                               <div className="mr-auto">
-                                <Lock size={12} className="text-slate-400" />
+                                <Lock size={12} className="text-white/60" />
                               </div>
                             </div>
                           </div>
                           <div>
-                            <label className="block text-[10px] font-black text-slate-400 mb-2 mr-1">الاسم الكامل</label>
+                            <label className="block text-[10px] font-black text-white/80 mb-2 mr-1">الاسم الكامل</label>
                             <input
                               type="text"
                               value={profileForm.name}
                               onChange={e => setProfileForm(prev => ({ ...prev, name: e.target.value }))}
-                              className="w-full bg-slate-50 border border-slate-100 px-4 py-3.5 rounded-2xl text-xs font-black focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple transition-all outline-none"
+                              className="w-full bg-white/10 border border-white/20 text-white px-4 py-3.5 rounded-2xl text-xs font-black placeholder:text-white/40 focus:ring-4 focus:ring-vibrant-purple/20 focus:border-vibrant-purple transition-all outline-none backdrop-blur-md"
                             />
                           </div>
                         </div>
@@ -4680,7 +5326,7 @@ export const CustomerApp: React.FC = () => {
                         <div className="pt-2">
                           <button
                             onClick={handleSaveProfile}
-                            className="w-full py-4 bg-vibrant-purple text-white rounded-2xl text-sm font-black shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-[0.98]"
+                            className="welcome-btn-pulse w-full py-4 bg-vibrant-purple text-white rounded-2xl text-sm font-black shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-[0.98]"
                           >
                             حفظ التغييرات
                           </button>
@@ -4692,10 +5338,10 @@ export const CustomerApp: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowSavedLocations(prev => !prev)}
-                      className="w-full text-right bg-brand-horizontal rounded-[2rem] p-5 border border-slate-100 brand-gradient-border shadow-sm flex items-center justify-between hover:border-violet/25 transition-colors group"
+                      className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
                     >
                       <div className="flex items-center gap-4">
-                        <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                        <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
                           <MapPin size={20} />
                         </div>
                         <div className="text-right">
@@ -4711,7 +5357,7 @@ export const CustomerApp: React.FC = () => {
                     </button>
 
                     {showSavedLocations && (
-                      <div className="p-6 space-y-6 bg-brand-horizontal rounded-[2rem] border border-slate-100 brand-gradient-border shadow-sm animate-fade-in">
+                      <div className="p-6 space-y-6 welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] shadow-sm animate-fade-in">
                         <SavedLocationsManager
                           locations={savedLocations}
                           onChange={setSavedLocations}
@@ -4723,7 +5369,7 @@ export const CustomerApp: React.FC = () => {
                         <div className="pt-2">
                           <button
                             onClick={handleSaveProfile}
-                            className="w-full py-4 bg-vibrant-purple text-white rounded-2xl text-sm font-black shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-[0.98]"
+                            className="welcome-btn-pulse w-full py-4 bg-vibrant-purple text-white rounded-2xl text-sm font-black shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-[0.98]"
                           >
                             حفظ التغييرات
                           </button>
@@ -4731,14 +5377,41 @@ export const CustomerApp: React.FC = () => {
                       </div>
                     )}
 
-                  {/* 3. خيارات أخرى */}
+                  {/* 3. المحفظة والجوائز */}
+                    <button
+                      type="button"
+                      onClick={() => openLoyaltyWallet('points')}
+                      className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                          <Wallet size={20} />
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-black text-white block">المحفظة والجوائز</span>
+                          <span className="text-[10px] text-white font-bold">
+                            رصيدك {currentCustomer?.points ?? 0} {loyalty.texts.pointsUnit} — الأكواد والخصومات
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {showProfileGiftBadge && (
+                          <span className="bg-yellow-500 text-violet text-[8px] px-1.5 py-0.5 rounded-full font-black animate-bounce shadow-sm border border-white">
+                            🎁
+                          </span>
+                        )}
+                        <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+                      </div>
+                    </button>
+
+                  {/* 4. خيارات أخرى */}
                     <button 
                       type="button"
                       onClick={() => { setShowPasswordChange(true); setPwStep(1); }}
-                      className="w-full text-right bg-brand-horizontal rounded-[2rem] p-5 border border-slate-100 brand-gradient-border shadow-sm flex items-center justify-between hover:border-violet/25 transition-colors group"
+                      className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
                     >
                       <div className="flex items-center gap-4">
-                         <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                         <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
                             <Shield size={20} />
                          </div>
                          <div className="text-right">
@@ -4752,10 +5425,10 @@ export const CustomerApp: React.FC = () => {
                     <button 
                       type="button"
                       onClick={() => openExternalUrl("https://wa.me/9647735187868")} 
-                      className="w-full text-right bg-brand-horizontal rounded-[2rem] p-5 border border-slate-100 brand-gradient-border shadow-sm flex items-center justify-between hover:border-violet/25 transition-colors group cursor-pointer"
+                      className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group cursor-pointer"
                     >
                       <div className="flex items-center gap-4">
-                         <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                         <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
                             <MessageCircle size={20} />
                          </div>
                          <div className="text-right">
@@ -4769,10 +5442,10 @@ export const CustomerApp: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowAboutUs(true)}
-                      className="w-full text-right bg-brand-horizontal rounded-[2rem] p-5 border border-slate-100 brand-gradient-border shadow-sm flex items-center justify-between hover:border-violet/25 transition-colors group"
+                      className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
                     >
                       <div className="flex items-center gap-4">
-                        <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                        <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
                           <StoreIcon size={20} />
                         </div>
                         <div className="text-right">
@@ -4786,10 +5459,10 @@ export const CustomerApp: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowPrivacyPolicy(true)}
-                      className="w-full text-right bg-brand-horizontal rounded-[2rem] p-5 border border-slate-100 brand-gradient-border shadow-sm flex items-center justify-between hover:border-violet/25 transition-colors group"
+                      className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
                     >
                       <div className="flex items-center gap-4">
-                        <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                        <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
                           <FileText size={20} />
                         </div>
                         <div className="text-right">
@@ -4809,7 +5482,7 @@ export const CustomerApp: React.FC = () => {
                  />
                  <button 
                   onClick={handleLogoutClick}
-                  className="w-full py-5 bg-rose-50 text-rose-600 rounded-[2rem] font-black text-sm flex items-center justify-center gap-3 border border-rose-100 hover:bg-rose-600 hover:text-white transition-all shadow-sm active:scale-95"
+                  className="w-full py-5 bg-rose-500/10 text-rose-200 rounded-[2rem] font-black text-sm flex items-center justify-center gap-3 border border-rose-400/30 backdrop-blur-md hover:bg-rose-600 hover:text-white hover:border-rose-600 transition-all shadow-sm active:scale-95"
                  >
                     <LogOut size={20} />
                     <span>تسجيل الخروج من الحساب</span>
@@ -4885,32 +5558,31 @@ export const CustomerApp: React.FC = () => {
           )}
 
         </main>
-        </>
+          </div>
         )}
-        <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200/60 z-50 shadow-[0_-5px_20px_rgba(0,0,0,0.03)] select-none">
-          <div className="max-w-4xl mx-auto w-full flex justify-around items-center px-4 py-3">
+        <nav className={`fixed bottom-0 left-0 right-0 z-50 select-none overflow-x-auto flex justify-around p-2 ${selectedStore ? 'merchant-nav-mobile' : 'customer-welcome-nav'}`}>
+          <div className="max-w-4xl mx-auto w-full flex justify-around items-center">
             {[
               { id: 'stores', label: 'الرئيسية', icon: MahalakLogoIcon, iconSize: 24 },
               /*{ id: 'reels', label: 'الفيديو', icon: Tv },*/
               { id: 'merchants', label: 'المتاجر', icon: StoreIcon },
               { id: 'products', label: 'المنتجات', icon: ShoppingBag },
               { id: 'orders', label: 'طلباتي', icon: ClipboardList, badge: customerOrders.filter(o => o.status === 'pending').length },
-              { id: 'wallet', label: 'المحفظة', icon: Wallet, gift: currentCustomer.points >= 100 },
-              { id: 'profile', label: 'حسابي', icon: User }
+              { id: 'profile', label: 'حسابي', icon: User, gift: showProfileGiftBadge }
             ].map((tab) => {
-              const active = activeTab === tab.id && !selectedStore;
-              const iconSize = 'iconSize' in tab ? tab.iconSize : 20;
+              const active = (activeTab === tab.id || (tab.id === 'profile' && activeTab === 'wallet')) && !selectedStore;
+              const iconSize = 'iconSize' in tab ? tab.iconSize : 18;
               return (
                 <button
                   key={tab.id}
                   onClick={() => handleTabChange(tab.id)}
-                  className={`flex flex-col items-center px-2 py-1.5 rounded-xl transition-all duration-300 relative ${active ? 'text-vibrant-purple scale-105' : 'text-slate-400 hover:text-slate-600'}`}
+                  className={`flex flex-col items-center px-2 py-1.5 rounded-xl transition-all duration-300 relative ${active ? (selectedStore ? 'text-violet' : 'text-white scale-105') : 'text-slate-400 hover:text-slate-300'}`}
                 >
-                  <div className={`p-1.5 rounded-lg mb-1 transition-all ${active ? 'bg-vibrant-purple text-white shadow-brand-glow' : 'bg-transparent'}`}>
+                  <div className={`p-1.5 rounded-lg mb-1 transition-all ${active ? 'bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white shadow-brand-glow' : 'bg-transparent'}`}>
                     {tab.id === 'stores' ? (
-                      <MahalakLogoIcon size={iconSize} inverted={active} />
+                      <MahalakLogoIcon size={iconSize} inverted={active} className={`w-5 h-5 ${active ? 'text-white' : 'text-vibrant-purple'}`} />
                     ) : (
-                      <tab.icon size={iconSize} className={active ? 'text-white' : 'text-vibrant-purple'} />
+                      <tab.icon size={iconSize} className={`w-5 h-5 ${active ? 'text-white' : 'text-vibrant-purple'}`} />
                     )}
                   </div>
                   
@@ -4926,9 +5598,7 @@ export const CustomerApp: React.FC = () => {
                     </span>
                   )}
 
-                  <span className={`text-[9px] font-bold tracking-tighter transition-all ${active ? 'opacity-100' : 'opacity-70'}`}>
-                    {tab.label}
-                  </span>
+                  <span className={`text-[9px] font-bold ${selectedStore ? 'text-slate-300' : active ? 'text-white' : 'text-slate-400'}`}>{tab.label}</span>
                 </button>
               );
             })}
@@ -4939,7 +5609,7 @@ export const CustomerApp: React.FC = () => {
         {selectedStore && (
           <div className="fixed bottom-24 left-6 z-[60]">
             <button 
-              onClick={() => setSelectedStore(null)}
+              onClick={() => { if (!handleAppBack()) setSelectedStore(null); }}
               className="px-4 py-3 bg-gradient-to-r from-vibrant-purple to-[#7B3DFF] text-white hover:from-[#381a66] hover:to-[#0B1320] rounded-full flex items-center gap-2 shadow-xl shadow-purple-500/30 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer font-black text-xs border border-white/20 font-tajawal"
               title="رجوع"
             >
@@ -4956,7 +5626,7 @@ export const CustomerApp: React.FC = () => {
               <div className="p-3 bg-deep-navy text-white flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-2">
                   <button 
-                    onClick={() => setShowCart(false)}
+                    onClick={() => { if (!handleAppBack()) setShowCart(false); }}
                     className="p-1 px-2 border border-white/20 rounded-lg hover:bg-white/10 transition-all flex items-center gap-0.5 font-bold text-[9px]"
                   >
                     <ChevronRight size={12} />
@@ -5130,7 +5800,7 @@ export const CustomerApp: React.FC = () => {
                             value={promoInput}
                             onChange={(e) => setPromoInput(e.target.value)}
                             className="flex-1 border border-white bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] p-1.5 rounded-lg text-[10px] text-center text-white placeholder:text-white/60 focus:ring-1 focus:ring-vibrant-purple focus:outline-none font-mono uppercase"
-                            style={{ direction: 'ltr' }}
+                            style={{ direction: 'ltr', color: 'white' }}
                           />
                           <button type="submit" className="px-3 py-1.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] hover:opacity-90 text-white font-bold text-[10px] rounded-lg transition shrink-0 border border-white">تطبيق</button>
                         </div>
@@ -5156,7 +5826,7 @@ export const CustomerApp: React.FC = () => {
                       
                       {/* تفصيل رسوم التوصيل لكل متجر */}
                       {Object.entries(cartByStore).map(([storeId, group]) => {
-                        const delInfo = getStoreDeliveryInfo(group.store, currentCustomer?.province || 'بغداد');
+                        const delInfo = getStoreDeliveryInfo(group.store, activeOrderLocation?.province || currentCustomer?.province || 'بغداد');
                         const hasFree = delInfo.isFree || group.items.some(i => i.product.isFreeDelivery);
                         return (
                           <div key={storeId} className="flex justify-between text-[8.5px]">
@@ -5258,17 +5928,29 @@ export const CustomerApp: React.FC = () => {
                 <div className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] shrink-0 px-3 sm:px-4 py-3 flex items-center justify-between gap-2 z-50 shadow-lg pt-[max(0.75rem,env(safe-area-inset-top))]">
                   <button
                     type="button"
-                    onClick={closeProductDetail}
+                    onClick={handleProductDetailBack}
                     className="flex items-center gap-1.5 text-white bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl px-3 sm:px-4 py-2.5 text-[11px] sm:text-xs font-black transition-all active:scale-95 cursor-pointer font-tajawal shrink-0"
-                    title={productDetailBackLabel}
+                    title={compareSession && !compareSession.listOpen ? 'رجوع لقائمة المقارنة' : 'رجوع'}
                   >
                     <ChevronRight size={18} strokeWidth={2.5} />
-                    <span>{productDetailBackLabel}</span>
+                    <span>{compareSession && !compareSession.listOpen ? 'رجوع للمقارنة' : 'رجوع'}</span>
                   </button>
 
-                  <p className="flex-1 min-w-0 text-center text-[10px] sm:text-[11px] text-purple-100 font-bold truncate px-1">
-                    {selectedProductDetail.name}
-                  </p>
+                  <div className="flex-1 min-w-0 flex justify-center px-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const store = selectedStore ?? storeMap.get(selectedProductDetail.storeId);
+                        if (!store || store.isBanned) return;
+                        closeProductDetail();
+                        setSelectedStore(store);
+                      }}
+                      className="inline-flex max-w-full px-3 py-1 rounded-full border border-white text-white text-[10px] sm:text-[11px] font-bold truncate cursor-pointer hover:bg-white/10 transition-colors active:scale-95"
+                      title={selectedStore?.shopName ?? storeMap.get(selectedProductDetail.storeId)?.shopName ?? 'المتجر'}
+                    >
+                      {selectedStore?.shopName ?? storeMap.get(selectedProductDetail.storeId)?.shopName ?? 'المتجر'}
+                    </button>
+                  </div>
 
                   <button
                     type="button"
@@ -5287,10 +5969,13 @@ export const CustomerApp: React.FC = () => {
                 <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
                   {/* صورة المنتج */}
                   <div className="w-full md:w-5/12 h-[36vh] md:h-full bg-slate-100 relative shrink-0 flex items-center justify-center">
-                    <img
-                      src={selectedProductDetail.image || undefined}
+                    <ProductImage
+                      src={selectedProductDetail.image}
                       alt={selectedProductDetail.name}
-                      className="w-full h-full object-contain object-center select-none"
+                      size="custom"
+                      priority
+                      objectFit="contain"
+                      className="w-full h-full"
                     />
                     <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-deep-navy/40 to-transparent pointer-events-none" />
                     {(selectedProductDetail.discountType !== 'none' || selectedProductDetail.isFreeDelivery) && (
@@ -5314,11 +5999,11 @@ export const CustomerApp: React.FC = () => {
 
                   {/* تفاصيل المنتج */}
                   <div className="w-full md:w-7/12 flex flex-col overflow-hidden relative flex-1">
-                    <div className="p-5 md:p-6 overflow-y-auto flex-1 space-y-4 pb-36">
+                    <div className="p-5 md:p-6 overflow-y-auto flex-1 space-y-4 pb-36 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320]">
 
                       {/* التصنيف والتوفر */}
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] font-black text-vibrant-purple px-3 py-1 bg-violet/10 rounded-xl border border-violet/25">
+                        <span className="text-[10px] font-black text-[#FFF700] px-3 py-1 bg-violet/10 rounded-xl border border-white/25">
                           {selectedProductDetail.category || 'غير مصنف'}
                         </span>
                         {hasTrackedInventory(selectedProductDetail.inventory) ? (
@@ -5327,12 +6012,12 @@ export const CustomerApp: React.FC = () => {
                               ? 'bg-violet/10 text-vibrant-purple border border-violet/25'
                               : 'bg-rose-50 text-rose-600 border border-rose-150'
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${Number(selectedProductDetail.inventory) > 0 ? 'bg-vibrant-purple' : 'bg-rose-500'}`} />
+                            <span className={`w-1.5 h-1.5 rounded-full ${Number(selectedProductDetail.inventory) > 0 ? 'bg-[#FFF700]' : 'bg-rose-500'}`} />
                             {getProductAvailabilityLabel(selectedProductDetail.inventory)}
                           </span>
                         ) : (
-                          <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1.5 bg-violet/10 text-vibrant-purple border border-violet/25 shrink-0">
-                            <span className="w-1.5 h-1.5 rounded-full bg-vibrant-purple" />
+                          <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1.5 bg-violet/10 text-white border border-violet/25 shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#FFF700]" />
                             {getProductAvailabilityLabel(selectedProductDetail.inventory)}
                           </span>
                         )}
@@ -5341,11 +6026,11 @@ export const CustomerApp: React.FC = () => {
                       {/* العنوان والماركة */}
                       <div className="space-y-1">
                         {selectedProductDetail.brand?.trim() && (
-                          <span className="text-vibrant-purple/70 font-mono text-[11px] font-bold tracking-wider block">
+                          <span className="text-white/70 font-mono text-[11px] font-bold tracking-wider block">
                             {selectedProductDetail.brand}
                           </span>
                         )}
-                        <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-deep-navy leading-tight break-words">
+                        <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-white leading-tight break-words">
                           {selectedProductDetail.name}
                         </h2>
                       </div>
@@ -5365,20 +6050,20 @@ export const CustomerApp: React.FC = () => {
                       {selectedProductDetail.discountType !== 'none' ? (
                         <div className="bg-brand-horizontal rounded-2xl p-4 flex justify-between items-center shadow-lg border border-white/10">
                           <div>
-                            <span className="text-[10px] text-purple-100 font-bold block mb-0.5">السعر بعد الخصم</span>
+                            <span className="text-[10px] text-[#FFF700] font-bold block mb-0.5">السعر بعد الخصم</span>
                             <div className="flex items-baseline gap-1">
-                              <span className="text-2xl sm:text-3xl font-black text-white">
+                              <span className="text-2xl sm:text-3xl font-black text-[#FFF700]">
                                 {selectedProductDetail.finalPrice.toLocaleString()}
                               </span>
-                              <span className="text-xs font-black text-purple-100">د.ع</span>
+                              <span className="text-xs font-black text-white">د.ع</span>
                             </div>
                           </div>
                           <div className="text-left">
-                            <span className="text-[10px] text-purple-100 font-medium block mb-0.5">السعر الأصلي</span>
-                            <span className="text-sm font-bold text-white/60 line-through block">
+                            <span className="text-[10px] text-[#FFF700] font-medium block mb-0.5">السعر الأصلي</span>
+                            <span className="text-sm font-bold text-red-500/60 line-through block">
                               {selectedProductDetail.price.toLocaleString()} د.ع
                             </span>
-                            <span className="mt-1 inline-block bg-white/15 text-white text-[9px] font-black px-2 py-0.5 rounded-md border border-white/20">
+                            <span className="mt-1 inline-block bg-white/15 text-[#FFF700] text-[9px] font-black px-2 py-0.5 rounded-md border border-white/20">
                               خصم {selectedProductDetail.discountType === 'percent'
                                 ? `${selectedProductDetail.discountValue}%`
                                 : `${Math.round((selectedProductDetail.discountValue / selectedProductDetail.price) * 100)}%`}
@@ -5405,12 +6090,12 @@ export const CustomerApp: React.FC = () => {
                       {/* العرض الخاص */}
                       {selectedProductDetail.specialOffer?.trim() && (
                         <div className="bg-violet/10 border border-violet/25 border-dashed rounded-2xl p-4 flex items-start gap-3">
-                          <div className="p-2.5 bg-vibrant-purple/15 text-vibrant-purple rounded-xl shrink-0">
+                          <div className="p-2.5 bg-vibrant-purple/15 text-white rounded-xl shrink-0">
                             <Ticket size={18} />
                           </div>
                           <div className="flex-1">
-                            <p className="text-[9px] font-black uppercase text-vibrant-purple tracking-wider mb-0.5">عرض خاص</p>
-                            <p className="text-xs font-black text-deep-navy">{selectedProductDetail.specialOffer}</p>
+                            <p className="text-[9px] font-black uppercase text-[#FFF700] tracking-wider mb-0.5">عرض خاص</p>
+                            <p className="text-xs font-black text-white">{selectedProductDetail.specialOffer}</p>
                           </div>
                         </div>
                       )}
@@ -5424,47 +6109,47 @@ export const CustomerApp: React.FC = () => {
                         (selectedProductDetail.length && String(selectedProductDetail.length).trim()) ||
                         (selectedProductDetail.width && String(selectedProductDetail.width).trim())) && (
                         <div className="space-y-2">
-                          <h3 className="text-xs font-black text-deep-navy border-r-4 border-vibrant-purple pr-2.5">
+                          <h3 className="text-xs font-black text-[#FFF700] border-r-4 border-vibrant-purple pr-2.5">
                             مواصفات المنتج
                           </h3>
-                          <div className="grid grid-cols-2 gap-2 bg-slate-50 border border-violet/15 p-2.5 rounded-2xl">
+                          <div className="grid grid-cols-2 gap-2 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/15 p-2.5 rounded-2xl">
                             {selectedProductDetail.condition?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-100">
-                                <span className="text-slate-400 text-[10px] font-bold">الحالة</span>
-                                <span className="text-[10.5px] font-black text-deep-navy">
+                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                                <span className="text-[#FFF700] text-[10px] font-bold">الحالة</span>
+                                <span className="text-[10.5px] font-black text-white">
                                   {selectedProductDetail.condition === 'new' ? 'جديد' : selectedProductDetail.condition === 'used' ? 'مستعمل' : selectedProductDetail.condition}
                                 </span>
                               </div>
                             )}
                             {selectedProductDetail.warranty?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-100">
-                                <span className="text-slate-400 text-[10px] font-bold">الضمان</span>
+                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                                <span className="text-[#FFF700] text-[10px] font-bold">الضمان</span>
                                 <span className="text-[10.5px] font-black text-vibrant-purple">{selectedProductDetail.warranty}</span>
                               </div>
                             )}
                             {selectedProductDetail.color?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-100">
-                                <span className="text-slate-400 text-[10px] font-bold">اللون</span>
-                                <span className="text-[10.5px] font-black text-deep-navy">{selectedProductDetail.color}</span>
+                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                                <span className="text-[#FFF700] text-[10px] font-bold">اللون</span>
+                                <span className="text-[10.5px] font-black text-white">{selectedProductDetail.color}</span>
                               </div>
                             )}
                             {selectedProductDetail.size?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-100">
-                                <span className="text-slate-400 text-[10px] font-bold">المقاس</span>
+                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                                <span className="text-[#FFF700] text-[10px] font-bold">المقاس</span>
                                 <span className="text-[10.5px] font-black text-vibrant-purple bg-violet/10 px-2 py-0.5 rounded">{selectedProductDetail.size}</span>
                               </div>
                             )}
                             {selectedProductDetail.weight?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-100">
-                                <span className="text-slate-400 text-[10px] font-bold">الوزن</span>
-                                <span className="text-[10.5px] font-black text-deep-navy font-mono">{selectedProductDetail.weight}</span>
+                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                                <span className="text-[#FFF700] text-[10px] font-bold">الوزن</span>
+                                <span className="text-[10.5px] font-black text-white font-mono">{selectedProductDetail.weight}</span>
                               </div>
                             )}
                             {((selectedProductDetail.length && String(selectedProductDetail.length).trim()) ||
                               (selectedProductDetail.width && String(selectedProductDetail.width).trim())) && (
-                              <div className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-100 col-span-2">
-                                <span className="text-slate-400 text-[10px] font-bold">الأبعاد</span>
-                                <span className="text-[10.5px] font-black text-deep-navy font-mono" dir="ltr">
+                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border col-span-2">
+                                <span className="text-[#FFF700] text-[10px] font-bold">الأبعاد</span>
+                                <span className="text-[10.5px] font-black text-white font-mono" dir="ltr">
                                   {selectedProductDetail.length || '—'} × {selectedProductDetail.width || '—'}
                                 </span>
                               </div>
@@ -5475,10 +6160,13 @@ export const CustomerApp: React.FC = () => {
 
                       {/* الوصف */}
                       <div className="space-y-2">
-                        <h3 className="text-xs font-black text-deep-navy border-r-4 border-vibrant-purple pr-2.5">
+                        <h3 className="text-xs font-black text-[#FFF700] border-r-4 border-vibrant-purple pr-2.5">
                           نبذة ووصف المنتج
                         </h3>
-                        <div className="bg-slate-50 border border-violet/15 p-4 rounded-2xl text-slate-600 text-xs leading-relaxed font-tajawal break-words">
+                        <div
+                          className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-[rgba(181,141,255,0.15)] p-4 rounded-2xl text-white text-xs leading-relaxed font-tajawal break-words"
+                          style={{ borderImage: 'linear-gradient(90deg, rgba(11, 19, 32, 0.15) 0%, rgba(123, 61, 255, 1) 100%) 1' }}
+                        >
                           {selectedProductDetail.description || 'هذا المنتج المميز متوفر الآن في متجرنا الرسمي.'}
                         </div>
                       </div>
@@ -5550,7 +6238,10 @@ export const CustomerApp: React.FC = () => {
 
                         <button
                           type="button"
-                          onClick={() => setShowCompareModal(selectedProductDetail)}
+                          onClick={() => {
+                            if (!selectedProductDetail) return;
+                            setCompareSession({ baseProduct: selectedProductDetail, listOpen: true });
+                          }}
                           className="w-12 h-12 bg-white/15 hover:bg-white/25 border border-white/25 text-white rounded-2xl flex items-center justify-center transition-all active:scale-[0.95] shrink-0 cursor-pointer"
                           title="مقارنة الأسعار"
                         >
@@ -5589,13 +6280,20 @@ export const CustomerApp: React.FC = () => {
                   <div className="flex gap-3">
                     <button 
                       onClick={confirmRedeemPoints}
-                      className="flex-1 bg-vibrant-purple text-white font-black py-4 rounded-2xl transition hover:bg-deep-navy"
+                      disabled={isRedeemingPoints}
+                      className="flex-1 bg-vibrant-purple text-white font-black py-4 rounded-2xl transition hover:bg-deep-navy disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
-                      نعم، استبدل الآن
+                      {isRedeemingPoints ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          <span>جاري التحويل...</span>
+                        </>
+                      ) : 'نعم، استبدل الآن'}
                     </button>
                     <button 
-                      onClick={() => setShowRedeemConfirm(null)}
-                      className="flex-1 bg-slate-100 text-slate-600 font-bold py-4 rounded-2xl transition hover:bg-slate-200"
+                      onClick={() => { if (!isRedeemingPoints) setShowRedeemConfirm(null); }}
+                      disabled={isRedeemingPoints}
+                      className="flex-1 bg-slate-100 text-slate-600 font-bold py-4 rounded-2xl transition hover:bg-slate-200 disabled:opacity-50"
                     >
                       إلغاء
                     </button>
@@ -5679,111 +6377,23 @@ export const CustomerApp: React.FC = () => {
           )}
         </AnimatePresence>
 
-        {/* مودال مقارنة المنتجات */}
+        {/* لوحة مقارنة المنتجات المشابهة */}
         <AnimatePresence>
-          {showCompareModal && (
-            <div className="fixed inset-0 bg-deep-navy/40 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white rounded-[2rem] w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
-              >
-                <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 relative shrink-0" dir="rtl">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-sky-100 text-sky-600 rounded-xl flex items-center justify-center border border-sky-200">
-                      <ArrowRightLeft size={20} />
-                    </div>
-                    <div className="text-right">
-                      <h3 className="font-black text-violet text-lg">المنتجات المشابهة</h3>
-                      <p className="text-xs text-slate-500 font-bold">مقارنة "{showCompareModal.name}" بالمنتجات الأخرى</p>
-                    </div>
-                  </div>
-                  <button onClick={() => setShowCompareModal(null)} className="p-2 bg-white text-slate-400 hover:text-rose-500 rounded-full transition-colors border shadow-sm"><X size={16} /></button>
-                </div>
-                
-                <div className="p-6 overflow-y-auto space-y-4 text-right flex-1 bg-slate-50/50" dir="rtl">
-                  {(() => {
-                    let similarProducts = products.filter(p => 
-                      p.id !== showCompareModal.id && 
-                      p.storeId !== showCompareModal.storeId && // استبعاد منتجات نفس المتجر
-                      (p.categoryId === showCompareModal.categoryId || 
-                       showCompareModal.name.toLowerCase().includes(p.name.toLowerCase()) || 
-                       p.name.toLowerCase().includes(showCompareModal.name.toLowerCase()))
-                    );
-                    
-                    if (similarProducts.length === 0) {
-                      return (
-                        <div className="p-10 text-center mahalak-brand-surface rounded-2xl">
-                          <Info size={40} className="mx-auto mb-4 text-slate-300" />
-                          <p className="font-bold text-slate-500">لم يتم العثور على منتجات مشابهة في متاجر أخرى حالياً.</p>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {similarProducts.map(p => {
-                           const store = stores.find(s => s.id === p.storeId);
-                           const finalPriceOrig = showCompareModal.finalPrice || showCompareModal.price;
-                           const finalPriceSim = p.finalPrice || p.price;
-                           const priceDiff = finalPriceOrig - finalPriceSim;
-                           
-                           return (
-                             <div key={p.id} className="bg-white rounded-2xl shadow-sm border border-slate-150 p-4 hover:border-sky-300 transition-colors group relative flex flex-col justify-between">
-                               <div>
-                                 <div className="flex gap-3 mb-3">
-                                   <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-50 border border-slate-100 shrink-0">
-                                     <img src={p.image || "https://images.unsplash.com/photo-1560393464-5c69a73c5770?q=80&w=2601"} alt={p.name} className="w-full h-full object-cover" />
-                                   </div>
-                                   <div className="flex-1 min-w-0">
-                                     <h4 className="font-black text-slate-800 text-sm truncate">{p.name}</h4>
-                                     <p className="text-[10px] font-bold text-slate-400 truncate flex items-center gap-1 mt-1">
-                                       <StoreIcon size={10} />
-                                       <span>{store?.shopName || 'متجر غير معروف'}</span>
-                                     </p>
-                                   </div>
-                                 </div>
-                                 
-                                 <div className="bg-slate-50 rounded-xl p-3 mb-3 grid grid-cols-2 gap-2 text-center items-center">
-                                   <div className="flex flex-col border-l border-slate-200 pl-2">
-                                     <span className="text-[9px] text-slate-400 font-bold mb-1">السعر في {store?.shopName?.split(' ')[0]}</span>
-                                     <span className="text-sky-600 font-black font-mono text-sm">{finalPriceSim.toLocaleString()} <span className="text-[8px]">د.ع</span></span>
-                                   </div>
-                                   <div className="flex flex-col pr-2">
-                                     <span className="text-[9px] text-slate-400 font-bold mb-1">السعر الأصلي</span>
-                                     <span className="text-slate-700 font-black font-mono text-sm">{finalPriceOrig.toLocaleString()} <span className="text-[8px]">د.ع</span></span>
-                                   </div>
-                                 </div>
-                                 
-                                 <div className="text-[10px] font-bold mt-2 pt-2 border-t border-slate-100 flex justify-between items-center">
-                                   <span className="text-slate-500">مقارنة السعر:</span>
-                                   <span className={priceDiff > 0 ? 'text-emerald-500 font-black flex gap-1 items-center bg-emerald-50 px-2 py-0.5 rounded-md' : priceDiff < 0 ? 'text-rose-500 font-black flex gap-1 items-center bg-rose-50 px-2 py-0.5 rounded-md' : 'text-slate-400 font-black bg-slate-50 px-2 py-0.5 rounded-md'}>
-                                      {priceDiff > 0 ? `أرخص بـ ${priceDiff.toLocaleString()}` : priceDiff < 0 ? `أغلى بـ ${Math.abs(priceDiff).toLocaleString()}` : 'نفس السعر'}
-                                   </span>
-                                 </div>
-                               </div>
-                               <button 
-                                 onClick={() => {
-                                   setShowCompareModal(null);
-                                   if(store) {
-                                      setSelectedStore(store);
-                                      openProductDetail(p, 'store');
-                                   }
-                                 }}
-                                 className="mt-4 w-full py-2 bg-slate-50 hover:bg-sky-50 text-sky-600 font-black rounded-xl text-xs border border-slate-200 hover:border-sky-300 transition-all cursor-pointer"
-                               >
-                                 عرض صفحة المنتج
-                               </button>
-                             </div>
-                           );
-                        })}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </motion.div>
-            </div>
+          {compareSession?.listOpen && (
+            <ProductComparePanel
+              baseProduct={compareSession.baseProduct}
+              products={compareEligibleProducts}
+              storeMap={storeMap}
+              onClose={() => setCompareSession(null)}
+              onBack={() => setCompareSession(null)}
+              onSelectProduct={(product) => {
+                setCompareSession((prev) => (prev ? { ...prev, listOpen: false } : null));
+                const store = storeMap.get(product.storeId);
+                if (store && !store.isBanned) setSelectedStore(store);
+                openProductDetail(product, 'store');
+              }}
+              onAddToCart={addToCart}
+            />
           )}
         </AnimatePresence>
 
@@ -6072,7 +6682,7 @@ export const CustomerApp: React.FC = () => {
   // شاشات تسجيل دخول الزبون والتسجيل
   // ==========================================
   return (
-    <CustomerAuthPage>
+    <CustomerAuthPage contentKey={view}>
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-black text-white">
             تطبيق محلك للزبائن
@@ -6125,7 +6735,7 @@ export const CustomerApp: React.FC = () => {
                 onChange={(e) => setLoginPassword(e.target.value)}
                 placeholder="••••••••"
                 required
-                className="w-full border border-slate-200 p-3.5 rounded-2xl text-sm text-white focus:ring-2 focus:ring-slate-500 focus:outline-none"
+                className="w-full border border-slate-200 p-3.5 rounded-2xl text-sm text-white placeholder:text-white/50 focus:ring-2 focus:ring-slate-500 focus:outline-none"
               />
             </div>
             <button
@@ -6142,10 +6752,10 @@ export const CustomerApp: React.FC = () => {
             <button
               type="submit"
               disabled={isLoadingAuth}
-              className={`w-full py-4 font-black rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 ${
+              className={`welcome-btn-pulse w-full py-4 font-black rounded-2xl transition-all flex items-center justify-center gap-2 ${
                 isLoadingAuth
-                  ? "bg-vibrant-purple/70 text-white cursor-wait"
-                  : "bg-vibrant-purple text-white shadow-violet/20 hover:bg-deep-navy"
+                  ? 'bg-vibrant-purple/70 text-white cursor-wait'
+                  : 'bg-brand-horizontal text-white hover:opacity-95'
               }`}
             >
               {isLoadingAuth ? (
@@ -6183,12 +6793,12 @@ export const CustomerApp: React.FC = () => {
               </div>
             )}
             <div className="text-center">
-              <h3 className="text-xl font-black text-violet">
+              <h3 className="text-xl font-black text-white">
                 استعادة كلمة المرور
               </h3>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 mb-1.5">
+              <label className="block text-xs font-bold text-white/80 mb-1.5">
                 رقم الهاتف المسجل <span className="text-red-500">*</span>
               </label>
               <div
@@ -6212,7 +6822,7 @@ export const CustomerApp: React.FC = () => {
               </div>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 mb-1.5">
+              <label className="block text-xs font-bold text-white/80 mb-1.5">
                 كلمة المرور الجديدة <span className="text-red-500">*</span>
               </label>
               <input
@@ -6226,7 +6836,7 @@ export const CustomerApp: React.FC = () => {
             </div>
             <button
               type="submit"
-              className="w-full py-4 bg-vibrant-purple text-white font-black rounded-2xl shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all"
+              className="welcome-btn-pulse w-full py-4 bg-brand-horizontal text-white font-black rounded-2xl transition-all hover:opacity-95"
             >
               إرسال رمز OTP
             </button>
@@ -6252,8 +6862,8 @@ export const CustomerApp: React.FC = () => {
               </div>
             )}
             <div className="text-center">
-              <h3 className="text-xl font-black text-violet">تأكيد الرمز</h3>
-              <p className="text-sm text-slate-400 mt-2">
+              <h3 className="text-xl font-black text-white">تأكيد الرمز</h3>
+              <p className="text-sm text-slate-300 mt-2">
                 أدخل الرمز المكون من 6 أرقام المرسل إليك
               </p>
             </div>
@@ -6271,8 +6881,8 @@ export const CustomerApp: React.FC = () => {
             <button
               type="submit"
               disabled={isLoadingAuth}
-              className={`w-full py-4 text-white font-black rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 ${
-                isLoadingAuth ? "bg-gray-400 cursor-not-allowed" : "bg-vibrant-purple shadow-violet/20 hover:bg-deep-navy"
+              className={`welcome-btn-pulse w-full py-4 text-white font-black rounded-2xl transition-all flex items-center justify-center gap-2 ${
+                isLoadingAuth ? 'bg-gray-400 cursor-not-allowed' : 'bg-brand-horizontal hover:opacity-95'
               }`}
             >
               {isLoadingAuth ? (
@@ -6321,7 +6931,7 @@ export const CustomerApp: React.FC = () => {
                   value={custName}
                   onChange={(e) => setCustName(e.target.value)}
                   required
-                  className={`w-full border p-3 rounded-2xl text-sm ${custName.trim() ? "border-green-400" : "border-slate-200"}`}
+                  className={`w-full border p-3 rounded-2xl text-sm text-white placeholder:text-white/50 ${custName.trim() ? "border-green-400" : "border-slate-200"}`}
                 />
               </div>
               <div>
@@ -6358,7 +6968,7 @@ export const CustomerApp: React.FC = () => {
                   onChange={(e) => setCustPassword(e.target.value)}
                   placeholder="لا تقل عن 8 حروف"
                   required
-                  className={`w-full border p-3 rounded-2xl text-sm ${isCustomerPasswordValid ? "border-green-400" : custPassword ? "border-red-400" : "border-slate-200"}`}
+                  className={`w-full border p-3 rounded-2xl text-sm text-white placeholder:text-white/50 ${isCustomerPasswordValid ? "border-green-400" : custPassword ? "border-red-400" : "border-slate-200"}`}
                 />
               </div>
 
@@ -6389,7 +6999,7 @@ export const CustomerApp: React.FC = () => {
                     value={custArea}
                     onChange={(e) => setCustArea(e.target.value)}
                     required
-                    className="w-full border border-slate-200 p-2.5 rounded-2xl text-xs"
+                    className="w-full border border-slate-200 p-2.5 rounded-2xl text-xs text-white placeholder:text-white/50"
                   />
                 </div>
               </div>
@@ -6402,7 +7012,7 @@ export const CustomerApp: React.FC = () => {
                     placeholder="مثال: 809"
                     value={custMahalla}
                     onChange={(e) => setCustMahalla(e.target.value)}
-                    className="w-full border border-slate-200 p-3 rounded-2xl text-sm"
+                    className="w-full border border-slate-200 p-3 rounded-2xl text-sm text-white placeholder:text-white/50"
                   />
                 </div>
                 <div>
@@ -6412,7 +7022,7 @@ export const CustomerApp: React.FC = () => {
                     placeholder="مثال: 21"
                     value={custZuqaq}
                     onChange={(e) => setCustZuqaq(e.target.value)}
-                    className="w-full border border-slate-200 p-3 rounded-2xl text-sm"
+                    className="w-full border border-slate-200 p-3 rounded-2xl text-sm text-white placeholder:text-white/50"
                   />
                 </div>
                 <div>
@@ -6422,7 +7032,7 @@ export const CustomerApp: React.FC = () => {
                     placeholder="مثال: 4"
                     value={custDar}
                     onChange={(e) => setCustDar(e.target.value)}
-                    className="w-full border border-slate-200 p-3 rounded-2xl text-sm"
+                    className="w-full border border-slate-200 p-3 rounded-2xl text-sm text-white placeholder:text-white/50"
                   />
                 </div>
               </div>
@@ -6435,21 +7045,19 @@ export const CustomerApp: React.FC = () => {
                   value={custLandmark}
                   onChange={(e) => setCustLandmark(e.target.value)}
                   required
-                  className="w-full border border-slate-200 p-3 rounded-2xl text-sm"
+                  className="w-full border border-slate-200 p-3 rounded-2xl text-sm text-white placeholder:text-white/50"
                 />
               </div>
 
               {/* موقع الخارطة */}
               <div className="space-y-3 pt-2">
-                <LocationPicker 
+                <CustomerLocationPicker
                   onLocationSelect={(lat, lng) => {
                     setCustLat(lat);
                     setCustLng(lng);
                   }}
                   label="تحديد الموقع على الخريطة"
                   required={true}
-                  labelClassName="block text-xs font-bold text-white mb-1"
-                  hintClassName="text-[10px] text-white font-bold text-center mb-1"
                 />
               </div>
 
@@ -6463,12 +7071,12 @@ export const CustomerApp: React.FC = () => {
             <button
               type="submit"
               disabled={!isSignupFormValid || isLoadingAuth}
-              className={`w-full py-4 font-black rounded-2xl shadow-xl transition-all flex items-center justify-center gap-2 ${
+              className={`welcome-btn-pulse w-full py-4 font-black rounded-2xl transition-all flex items-center justify-center gap-2 ${
                 !isSignupFormValid && !isLoadingAuth
-                  ? "bg-gray-200 text-slate-400 cursor-not-allowed"
+                  ? 'bg-gray-200 text-slate-400 cursor-not-allowed'
                   : isLoadingAuth
-                    ? "bg-vibrant-purple/70 text-white cursor-wait"
-                    : "bg-vibrant-purple text-white hover:bg-deep-navy"
+                    ? 'bg-vibrant-purple/70 text-white cursor-wait'
+                    : 'bg-brand-horizontal text-white hover:opacity-95'
               }`}
             >
               {isLoadingAuth ? (
@@ -6485,7 +7093,7 @@ export const CustomerApp: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setView("login")}
-                className="text-xs font-bold text-slate-400"
+                className="text-xs font-bold text-white"
               >
                 الرجوع لتسجيل الدخول
               </button>

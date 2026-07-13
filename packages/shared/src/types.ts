@@ -65,6 +65,70 @@ export interface Store {
     textColor: string;
     isActive: boolean;
   };
+  /** Merchant-defined colors for the customer-facing store page */
+  storeTheme?: {
+    enabled: boolean;
+    primaryColor: string;
+    secondaryColor: string;
+    accentColor: string;
+    textOnPrimary: string;
+    pageBackground?: string;
+    gradientStyle?: 'linear' | 'radial';
+    gradientDirection?:
+      | 'to-right'
+      | 'to-left'
+      | 'to-bottom'
+      | 'to-top'
+      | 'to-bottom-right'
+      | 'to-bottom-left'
+      | 'to-top-right'
+      | 'to-top-left';
+    radialPosition?:
+      | 'center'
+      | 'top'
+      | 'bottom'
+      | 'top-right'
+      | 'top-left'
+      | 'bottom-right'
+      | 'bottom-left';
+    headerBackground?: string;
+    infoBarBackground?: string;
+    infoBarTextColor?: string;
+    infoBarBorderColor?: string;
+    shopNameColor?: string;
+    sectionTitleColor?: string;
+    pageTextColor?: string;
+    iconColor?: string;
+    filterBadgeColor?: string;
+    filterChipActiveText?: string;
+    buttonTextColor?: string;
+    cardPrimaryColor?: string;
+    cardSecondaryColor?: string;
+    productCardTextColor?: string;
+    productPriceColor?: string;
+    addToCartIconColor?: string;
+    addToCartButtonBg?: string;
+    colorFills?: Partial<
+      Record<
+        string,
+        {
+          mode?: 'solid' | 'gradient';
+          solid?: string;
+          gradientFrom?: string;
+          gradientTo?: string;
+          gradientDirection?:
+            | 'to-right'
+            | 'to-left'
+            | 'to-bottom'
+            | 'to-top'
+            | 'to-bottom-right'
+            | 'to-bottom-left'
+            | 'to-top-right'
+            | 'to-top-left';
+        }
+      >
+    >;
+  };
   /** Set when the merchant permanently deletes their account */
   isDeleted?: boolean;
   deletedAt?: string;
@@ -129,7 +193,7 @@ export interface PayoutRequest {
   createdAt: string;
 }
 
-export interface PromoCode { id: string; storeId: string; code: string; discountType?: 'percent' | 'amount' | 'FIXED' | 'PERCENTAGE'; discountValue: number; maxUses: number; maxUsesPerUser?: number; usedCount: number; status: 'active' | 'expired'; startDate?: string; expiresAt?: string | null; source?: 'merchant' | 'admin' | 'points'; ownerCustomerId?: string; createdAt?: string; targetStores?: string[] | 'ALL'; targetProvinces?: string[]; amount?: number; objectId?: string; sponsor?: 'ADMIN' | 'MERCHANT'; merchantId?: string | null; discountAmount?: number; expirationDate?: string | null; targetAudience?: 'ALL' | 'FOLLOWERS' | 'PAST_BUYERS' | 'FOLLOWERS_AND_PAST_BUYERS'; maxGlobalUses?: number; currentGlobalUses?: number; validityDays?: number; }
+export interface PromoCode { id: string; storeId: string; code: string; discountType?: 'percent' | 'amount' | 'FIXED' | 'PERCENTAGE'; discountValue: number; maxUses: number; maxUsesPerUser?: number; usedCount: number; status: 'active' | 'expired' | 'used'; startDate?: string; expiresAt?: string | null; source?: 'merchant' | 'admin' | 'points'; ownerCustomerId?: string; createdAt?: string; targetStores?: string[] | 'ALL'; targetProvinces?: string[]; amount?: number; objectId?: string; sponsor?: 'ADMIN' | 'MERCHANT'; merchantId?: string | null; discountAmount?: number; expirationDate?: string | null; targetAudience?: 'ALL' | 'FOLLOWERS' | 'PAST_BUYERS' | 'FOLLOWERS_AND_PAST_BUYERS'; maxGlobalUses?: number; currentGlobalUses?: number; validityDays?: number; }
 export interface RechargeCode { id: string; code: string; points: number; status: 'active' | 'used'; usedBy?: string; usedAt?: string; createdAt: string; objectId?: string; }
 export interface StoreReview {
   id: string;

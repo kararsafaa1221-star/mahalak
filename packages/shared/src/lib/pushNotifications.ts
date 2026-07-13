@@ -56,11 +56,23 @@ let activePushSetupKey: string | null = null;
 let initPromise: Promise<boolean> | null = null;
 let nativeOneSignalInitialized = false;
 let nativeListenersKey: string | null = null;
+let webListenersKey: string | null = null;
 let notificationChannelsCreated = false;
+
+type PushNotificationHandler = (
+  notification: { title?: string; body?: string; data?: unknown },
+) => void;
+type PushActionHandler = (action: unknown) => void;
+
+let onNotificationHandler: PushNotificationHandler | null = null;
+let onActionHandler: PushActionHandler | null = null;
 
 export function resetPushNotificationSetup() {
   activePushSetupKey = null;
   nativeListenersKey = null;
+  webListenersKey = null;
+  onNotificationHandler = null;
+  onActionHandler = null;
 }
 
 export async function logoutOneSignalSession(): Promise<void> {
@@ -303,6 +315,7 @@ export async function sendExternalPush(
   title: string,
   message: string,
   channelId: string,
+  targetRole?: 'customer' | 'merchant' | 'admin',
 ) {
   if (!auth.currentUser) return;
   const externalIds = Array.isArray(targetUserId) ? targetUserId : [targetUserId];
@@ -310,7 +323,7 @@ export async function sendExternalPush(
 
   try {
     const fn = httpsCallable(getFunctions(app), 'dispatchOneSignalPush');
-    await fn({ title, message, channelId, externalIds });
+    await fn({ title, message, channelId, externalIds, targetRole });
   } catch {
     // best-effort
   }
@@ -319,9 +332,12 @@ export async function sendExternalPush(
 export async function setupPushNotifications(
   userId: string,
   targetCollection: 'customers' | 'stores' | 'admins',
-  onNotification?: (notification: { title?: string; body?: string; data?: unknown }) => void,
-  onAction?: (action: unknown) => void,
+  onNotification?: PushNotificationHandler,
+  onAction?: PushActionHandler,
 ) {
+  if (onNotification) onNotificationHandler = onNotification;
+  if (onAction) onActionHandler = onAction;
+
   const setupKey = `${targetCollection}:${userId}`;
   if (activePushSetupKey === setupKey) return;
   activePushSetupKey = setupKey;
@@ -349,11 +365,11 @@ export async function setupPushNotifications(
           const e = event as ForegroundDisplayEvent;
           showForegroundNotificationInTray(e);
           const note = readForegroundNotification(e);
-          if (onNotification && note) onNotification(note);
+          if (onNotificationHandler && note) onNotificationHandler(note);
         });
 
         OneSignalNative.Notifications.addEventListener('click', (event: unknown) => {
-          if (onAction) onAction(event);
+          if (onActionHandler) onActionHandler(event);
         });
 
         OneSignalNative.User.pushSubscription.addEventListener('change', (event) => {
@@ -378,21 +394,32 @@ export async function setupPushNotifications(
       await OneSignal.logout();
       await OneSignal.login(userId);
 
-      OneSignal.Notifications.addEventListener('foregroundWillDisplay', (event: unknown) => {
-        const e = event as ForegroundDisplayEvent;
-        showForegroundNotificationInTray(e);
-        const note = readForegroundNotification(e);
-        if (onNotification && note) onNotification(note);
-      });
+      // Guard: register event listeners only once per (collection:userId) pair.
+      // Repeated calls (e.g. on re-render or session switch) must not stack
+      // duplicate foreground/click/change handlers — those accumulate indefinitely
+      // and cannot be removed because OneSignal's web SDK has no removeEventListener.
+      if (webListenersKey !== setupKey) {
+        webListenersKey = setupKey;
 
-      OneSignal.Notifications.addEventListener('click', (event: unknown) => {
-        if (onAction) onAction(event);
-      });
+        OneSignal.Notifications.addEventListener('foregroundWillDisplay', (event: unknown) => {
+          const e = event as ForegroundDisplayEvent;
+          showForegroundNotificationInTray(e);
+          const note = readForegroundNotification(e);
+          if (onNotificationHandler && note) onNotificationHandler(note);
+        });
+
+        OneSignal.Notifications.addEventListener('click', (event: unknown) => {
+          if (onActionHandler) onActionHandler(event);
+        });
+
+        if (OneSignal.User?.PushSubscription) {
+          OneSignal.User.PushSubscription.addEventListener('change', (event) => {
+            void persistOneSignalIds(targetCollection, userId, event.current?.id);
+          });
+        }
+      }
 
       if (OneSignal.User?.PushSubscription) {
-        OneSignal.User.PushSubscription.addEventListener('change', (event) => {
-          void persistOneSignalIds(targetCollection, userId, event.current?.id);
-        });
         const osId =
           OneSignal.User.PushSubscription.id ??
           (await OneSignal.User.PushSubscription.getIdAsync?.());

@@ -26,6 +26,10 @@ function merchantPublicAssetsPlugin(): Plugin {
         const types: Record<string, string> = {
           '.html': 'text/html; charset=utf-8',
           '.json': 'application/json; charset=utf-8',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.webp': 'image/webp',
         };
         res.setHeader('Content-Type', types[ext] ?? 'application/octet-stream');
         fs.createReadStream(filePath).pipe(res);
@@ -74,12 +78,17 @@ export default defineConfig({
     outDir: path.resolve(__dirname, 'dist'),
     emptyOutDir: true,
     sourcemap: false,
+    chunkSizeWarningLimit: 2000,
     rollupOptions: {
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
           firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/functions', 'firebase/storage'],
           motion: ['motion/react', 'framer-motion'],
+          charts: ['recharts'],
+          maps: ['leaflet', 'react-leaflet'],
+          qrcode: ['qrcode.react', 'react-qr-code', 'html5-qrcode'],
+          print: ['react-to-print'],
         },
       },
     },

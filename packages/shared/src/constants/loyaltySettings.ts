@@ -75,6 +75,8 @@ export interface LoyaltyTierUpgradeBonuses {
 
 export interface LoyaltySettings {
   pointsPer1000Iqd: number;
+  /** نقاط ثابتة تُمنح عند كل طلب يُستلم بنجاح */
+  orderDeliveryBonusPoints: number;
   signupBonusPoints: number;
   shareRewardPoints: number;
   shareDailyLimit: number;
@@ -198,6 +200,7 @@ const DEFAULT_TEXTS: LoyaltyWalletTexts = {
 
 export const DEFAULT_LOYALTY_SETTINGS: LoyaltySettings = {
   pointsPer1000Iqd: 1,
+  orderDeliveryBonusPoints: 0,
   signupBonusPoints: 50,
   shareRewardPoints: 5,
   shareDailyLimit: 10,
@@ -341,6 +344,7 @@ export function resolveLoyaltySettings(adminSettings?: Record<string, unknown> |
 
   return {
     pointsPer1000Iqd: Number(raw.pointsPer1000Iqd ?? DEFAULT_LOYALTY_SETTINGS.pointsPer1000Iqd),
+    orderDeliveryBonusPoints: Number(raw.orderDeliveryBonusPoints ?? DEFAULT_LOYALTY_SETTINGS.orderDeliveryBonusPoints),
     signupBonusPoints: Number(raw.signupBonusPoints ?? DEFAULT_LOYALTY_SETTINGS.signupBonusPoints),
     shareRewardPoints: Number(raw.shareRewardPoints ?? DEFAULT_LOYALTY_SETTINGS.shareRewardPoints),
     shareDailyLimit: Number(raw.shareDailyLimit ?? DEFAULT_LOYALTY_SETTINGS.shareDailyLimit),
@@ -480,6 +484,50 @@ export function calcRedemptionDiscount(points: number, settings: LoyaltySettings
 
 export function formatLoyaltyTemplate(template: string, vars: Record<string, string | number>): string {
   return template.replace(/\{(\w+)\}/g, (_, key) => String(vars[key] ?? ''));
+}
+
+export function getOrderDeliveryEarnRule(settings: LoyaltySettings): LoyaltyEarnRule | undefined {
+  return settings.earnRules.find((rule) => rule.type === 'order_completed');
+}
+
+export function isOrderDeliveryRewardEnabled(settings: LoyaltySettings): boolean {
+  const rule = getOrderDeliveryEarnRule(settings);
+  return rule ? rule.enabled : true;
+}
+
+export function getOrderDeliveryPointsPer1000(settings: LoyaltySettings): number {
+  const rule = getOrderDeliveryEarnRule(settings);
+  return rule?.pointsPer1000Iqd ?? settings.pointsPer1000Iqd ?? 0;
+}
+
+/** Product subtotal for loyalty points — delivery fees are excluded. */
+export function getOrderPointsEligibleAmount(order: {
+  subtotal?: number;
+  total?: number;
+}): number {
+  const subtotal = Number(order.subtotal);
+  if (Number.isFinite(subtotal) && subtotal >= 0) return subtotal;
+  const total = Number(order.total);
+  return Number.isFinite(total) && total >= 0 ? total : 0;
+}
+
+export function calcOrderDeliveryPoints(orderTotal: number, settings: LoyaltySettings): number {
+  if (!isOrderDeliveryRewardEnabled(settings)) return 0;
+  const per1000 = getOrderDeliveryPointsPer1000(settings);
+  const volumePoints = Math.floor((orderTotal || 0) / 1000) * (per1000 || 0);
+  const fixedBonus = Math.max(0, settings.orderDeliveryBonusPoints || 0);
+  return volumePoints + fixedBonus;
+}
+
+export function formatOrderDeliveryRewardDescription(settings: LoyaltySettings): string {
+  const rule = getOrderDeliveryEarnRule(settings);
+  if (rule?.descriptionAr?.trim()) return rule.descriptionAr;
+  const per1000 = getOrderDeliveryPointsPer1000(settings);
+  const fixedBonus = Math.max(0, settings.orderDeliveryBonusPoints || 0);
+  if (fixedBonus > 0) {
+    return `كل 1000 د.ع من قيمة المنتجات (بدون التوصيل) تمنحك ${per1000} نقطة، بالإضافة إلى ${fixedBonus} نقطة ثابتة عند استلام كل طلب.`;
+  }
+  return `كل 1000 د.ع من قيمة المنتجات (بدون التوصيل) تمنحك ${per1000} نقطة تلقائياً عند استلام الطلب.`;
 }
 
 export function storeReviewRewardHintText(settings?: LoyaltySettings | null): string {

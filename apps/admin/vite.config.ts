@@ -9,6 +9,8 @@ const monorepoRoot = path.resolve(__dirname, '../..');
 
 export default defineConfig({
   root: __dirname,
+  envDir: __dirname,
+  envPrefix: 'VITE_',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -27,7 +29,7 @@ export default defineConfig({
   define: {
     global: 'window',
   },
-  base: './',
+  base: '/',
   publicDir: path.resolve(__dirname, 'public'),
   server: {
     port: 5174,

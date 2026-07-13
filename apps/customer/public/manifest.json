@@ -1,0 +1,20 @@
+{
+  "name": "محلك",
+  "short_name": "محلك",
+  "description": "تطبيق محلك للزبائن — تصفح المتاجر المحلية واطلب منتجاتك",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0B1320",
+  "theme_color": "#0B1320",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "lang": "ar",
+  "dir": "rtl"
+}

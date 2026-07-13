@@ -7,14 +7,28 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import {
   collection, doc, setDoc, updateDoc,
   onSnapshot, getDoc, writeBatch, increment, serverTimestamp,
-  query, orderBy, limit,
+  query, orderBy, limit, where,
 } from 'firebase/firestore';
+
+// Caps for admin real-time listeners — large enough for daily operations but
+// prevents loading the entire database into memory on every admin login.
+const ADMIN_STORES_LIMIT     = 2000;
+const ADMIN_PRODUCTS_LIMIT   = 3000;
+const ADMIN_CUSTOMERS_LIMIT  = 2000;
+const ADMIN_ORDERS_LIMIT     = 500;
+const ADMIN_NOTIFS_LIMIT     = 300;
+const ADMIN_REVIEWS_LIMIT    = 300;
+const ADMIN_PAYOUTS_LIMIT    = 200;
+const ADMIN_FLASH_REQS_LIMIT = 200;
+const ADMIN_PROMO_LIMIT      = 500;
+const ADMIN_RECHARGE_LIMIT   = 500;
 import {
   onAuthStateChanged, signInWithEmailAndPassword, signOut,
 } from 'firebase/auth';
 import { handleFirestoreError, OperationType } from '@shared/lib/firestoreUtils';
 import { BLOCKED_PHONES, type BlockedPhoneRecord } from '@shared/lib/uniquenessRegistry';
-import { sendExternalPush } from '@shared/lib/pushNotifications';
+import { setupPushNotifications } from '../lib/pushNotifications';
+import { warnIfOneSignalNotConfigured } from '../lib/onesignalConfig';
 import { getAdminAuthErrorMessage, verifyDashboardAdmin, mapAdminDoc } from '../lib/adminAuth';
 import { syncAdminStorageClaims } from '@shared/lib/storeAuth';
 import type { DashboardAdminRole } from '../lib/adminAuth';
@@ -210,6 +224,8 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       nearbyStoreIds: [],
       ads: [],
       adInterval: 5,
+      merchantAdInterval: 5,
+      merchantAdsSectionOrder: ['delivery', 'media'],
       lastSyncTime: null,
       autoSubscriptionEnabled: true,
       autoSubscriptionDurationValue: 1,
@@ -427,6 +443,12 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   }, []);
 
   useEffect(() => {
+    warnIfOneSignalNotConfigured();
+    if (!currentAdmin || !adminUid) return;
+    void setupPushNotifications(adminUid, 'admins');
+  }, [currentAdmin, adminUid]);
+
+  useEffect(() => {
     if (!currentAdmin || !canAccessAdminManagement(currentAdminDoc)) {
       setAdminStaff([]);
       return;
@@ -513,61 +535,74 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     };
 
-    const unsubStores = onSnapshot(collection(db, 'stores'), snap => {
-      setStores(mapDocs<Store>(snap));
-    });
+    const unsubStores = onSnapshot(
+      query(collection(db, 'stores'), limit(ADMIN_STORES_LIMIT)),
+      snap => setStores(mapDocs<Store>(snap)),
+    );
 
-    const unsubProducts = onSnapshot(collection(db, 'products'), snap => {
-      setProducts(mapDocs<Product>(snap));
-    });
+    const unsubProducts = onSnapshot(
+      query(collection(db, 'products'), limit(ADMIN_PRODUCTS_LIMIT)),
+      snap => setProducts(mapDocs<Product>(snap)),
+    );
 
+    // Single source of truth: live listener with callable as error fallback.
+    // Do NOT call loadCustomersViaFunction() eagerly — the listener handles
+    // the initial load and avoids a duplicate full-collection fetch on login.
     const unsubCust = onSnapshot(
-      collection(db, 'customers'),
+      query(collection(db, 'customers'), limit(ADMIN_CUSTOMERS_LIMIT)),
       (snap) => setCustomers(mapDocs<Customer>(snap)),
       (err) => {
-        console.warn('[AdminContext] customers listener error:', err);
+        console.warn('[AdminContext] customers listener error, falling back to callable:', err);
         void loadCustomersViaFunction();
       },
     );
-    void loadCustomersViaFunction();
 
-    const unsubOrders = onSnapshot(collection(db, 'orders'), snap => {
-      setOrders(mapDocs<Order>(snap));
-    });
+    const unsubOrders = onSnapshot(
+      query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(ADMIN_ORDERS_LIMIT)),
+      snap => setOrders(mapDocs<Order>(snap)),
+    );
 
-    const unsubNotifs = onSnapshot(collection(db, 'notifications'), snap => {
-      setNotifications(mapDocs<AppNotification>(snap));
-    });
+    const unsubNotifs = onSnapshot(
+      query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(ADMIN_NOTIFS_LIMIT)),
+      snap => setNotifications(mapDocs<AppNotification>(snap)),
+    );
 
-    const unsubRecharge = onSnapshot(collection(db, 'recharge_codes'), snap => {
-      setRechargeCodes(mapDocs<RechargeCode>(snap));
-    });
+    const unsubRecharge = onSnapshot(
+      query(collection(db, 'recharge_codes'), limit(ADMIN_RECHARGE_LIMIT)),
+      snap => setRechargeCodes(mapDocs<RechargeCode>(snap)),
+    );
 
-    const unsubPromo = onSnapshot(collection(db, 'promo_codes'), snap => {
-      setPromoCodes(mapDocs<PromoCode>(snap));
-    });
+    const unsubPromo = onSnapshot(
+      query(collection(db, 'promo_codes'), limit(ADMIN_PROMO_LIMIT)),
+      snap => setPromoCodes(mapDocs<PromoCode>(snap)),
+    );
 
-    const unsubFlash = onSnapshot(collection(db, 'flash_sales'), snap => {
-      setFlashSales(mapDocs<FlashSale>(snap));
-    });
+    const unsubFlash = onSnapshot(
+      query(collection(db, 'flash_sales'), limit(100)),
+      snap => setFlashSales(mapDocs<FlashSale>(snap)),
+    );
 
-    const unsubFlashReqs = onSnapshot(collection(db, 'flash_sale_requests'), snap => {
-      setFlashSaleRequests(mapDocs<FlashSaleRequest>(snap));
-    });
+    const unsubFlashReqs = onSnapshot(
+      query(collection(db, 'flash_sale_requests'), orderBy('createdAt', 'desc'), limit(ADMIN_FLASH_REQS_LIMIT)),
+      snap => setFlashSaleRequests(mapDocs<FlashSaleRequest>(snap)),
+    );
 
-    const unsubReviews = onSnapshot(collection(db, 'store_reviews'), snap => {
-      setStoreReviews(mapDocs<StoreReview>(snap));
-    });
+    const unsubReviews = onSnapshot(
+      query(collection(db, 'store_reviews'), orderBy('createdAt', 'desc'), limit(ADMIN_REVIEWS_LIMIT)),
+      snap => setStoreReviews(mapDocs<StoreReview>(snap)),
+    );
 
-    const unsubPayouts = onSnapshot(collection(db, 'payoutRequests'), snap => {
-      setPayoutRequests(mapDocs<PayoutRequest>(snap));
-    });
+    const unsubPayouts = onSnapshot(
+      query(collection(db, 'payoutRequests'), orderBy('createdAt', 'desc'), limit(ADMIN_PAYOUTS_LIMIT)),
+      snap => setPayoutRequests(mapDocs<PayoutRequest>(snap)),
+    );
 
-    const unsubBlocked = onSnapshot(collection(db, BLOCKED_PHONES), snap => {
-      setBlockedAccounts(
+    const unsubBlocked = onSnapshot(
+      query(collection(db, BLOCKED_PHONES), limit(2000)),
+      snap => setBlockedAccounts(
         snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<BlockedPhoneRecord, 'id'>) })),
-      );
-    });
+      ),
+    );
 
     const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), snap => {
       if (snap.exists()) {
@@ -674,9 +709,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const addBulkNotifications = async (notifs: Record<string, unknown>[]) => {
     try {
-      const pushesByChannel: Record<string, { userIds: string[]; title: string; message: string; channelId: string }> = {};
       const batchSize = 400;
-
       for (let i = 0; i < notifs.length; i += batchSize) {
         const chunk = notifs.slice(i, i + batchSize);
         const batch = writeBatch(db);
@@ -684,31 +717,14 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const id = 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
           const n = { ...data, id, read: false, createdAt: data.createdAt || new Date().toISOString() };
           batch.set(doc(db, 'notifications', id), n);
-
-          const role = data.role as string;
-          let channelId = 'customer_promos_sound';
-          if (role === 'merchant') channelId = 'merchant_orders_sound';
-          else if (role === 'admin') channelId = 'admin_broadcasts_sound';
-          else if (data.type === 'order') channelId = (data.sound ? 'customer_order_updates_sound' : 'customer_order_updates_silent');
-          else if (data.type === 'product') channelId = 'customer_products_sound';
-
-          const pushTitle = (data.title as string) || 'محلك';
-          const key = `${channelId}_${pushTitle}_${data.message}`;
-          pushesByChannel[key] = pushesByChannel[key] || { userIds: [], title: pushTitle, message: data.message as string, channelId };
-          pushesByChannel[key].userIds.push(data.userId as string);
         }
         await batch.commit();
       }
-
-      for (const key in pushesByChannel) {
-        const info = pushesByChannel[key];
-        for (let i = 0; i < info.userIds.length; i += 2000) {
-          const chunk = info.userIds.slice(i, i + 2000);
-          await sendExternalPush(chunk, info.title, info.message, info.channelId);
-          await new Promise(r => setTimeout(r, 100));
-        }
-      }
-    } catch (e) {
+      // Push notifications are dispatched by the onNotificationCreated Cloud Function
+      // trigger, so no manual sendExternalPush call is needed here — doing so would
+      // cause every broadcast recipient to receive two identical pushes.
+    } catch {
+      // ignore — caller handles errors
     }
   };
 

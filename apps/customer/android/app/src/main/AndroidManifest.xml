@@ -25,6 +25,15 @@
 
         </activity>
 
+        <!-- OneSignal: use the custom white-silhouette icon for push notifications -->
+        <meta-data
+            android:name="com.onesignal.NotificationIcon"
+            android:resource="@drawable/ic_stat_onesignal_default" />
+        <!-- Accent color shown on the notification dot and icon background (brand purple) -->
+        <meta-data
+            android:name="com.onesignal.NotificationAccentColor"
+            android:value="FF7B3DFF" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
