@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { motion } from 'motion/react';
 
 const WELCOME_STARS = [
@@ -49,6 +49,8 @@ const WELCOME_PARTICLES = [
   { left: '22%', delay: 6.5, duration: 8, size: 3 },
 ] as const;
 
+const LITE_STARS = WELCOME_STARS.filter((_, i) => i % 3 === 0);
+
 const orbLoop = (duration: number, delay = 0) => ({
   duration,
   repeat: Infinity,
@@ -56,90 +58,123 @@ const orbLoop = (duration: number, delay = 0) => ({
   delay,
 });
 
-export const WelcomeScreenBackground: React.FC = () => (
-  <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
-    <div className="absolute inset-0 bg-mahalak-gradient" />
+type WelcomeScreenBackgroundProps = {
+  /** أخف: بدون أوراب motion وجسيمات — مناسب للمودالات */
+  lite?: boolean;
+};
 
-    <div className="welcome-aurora welcome-aurora--purple" />
-    <div className="welcome-aurora welcome-aurora--violet" />
+function WelcomeScreenBackgroundInner({ lite = false }: WelcomeScreenBackgroundProps) {
+  if (lite) {
+    return (
+      <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+        <div className="absolute inset-0 bg-mahalak-gradient" />
+        <div className="absolute top-[-18%] right-[-12%] h-[26rem] w-[26rem] rounded-full bg-vibrant-purple/30 blur-[100px]" />
+        <div className="absolute bottom-[-16%] left-[-12%] h-[24rem] w-[24rem] rounded-full bg-violet/25 blur-[100px]" />
+        {LITE_STARS.map((star, index) => (
+          <span
+            key={`lite-star-${index}`}
+            className="welcome-star"
+            style={{
+              top: star.top,
+              left: star.left,
+              width: star.size,
+              height: star.size,
+              opacity: 0.7,
+            }}
+          />
+        ))}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_55%_at_50%_42%,transparent_0%,rgba(11,19,32,0.65)_100%)]" />
+      </div>
+    );
+  }
 
-    <motion.div
-      className="absolute top-[-15%] right-[-15%] h-[32rem] w-[32rem] rounded-full bg-vibrant-purple/45 blur-[110px]"
-      animate={{
-        x: [0, 70, -40, 0],
-        y: [0, -55, 45, 0],
-        scale: [1, 1.25, 0.85, 1],
-      }}
-      transition={orbLoop(7)}
-    />
-    <motion.div
-      className="absolute bottom-[-15%] left-[-15%] h-[32rem] w-[32rem] rounded-full bg-violet/40 blur-[110px]"
-      animate={{
-        x: [0, -65, 50, 0],
-        y: [0, 55, -40, 0],
-        scale: [1, 0.82, 1.2, 1],
-      }}
-      transition={orbLoop(8, 0.8)}
-    />
-    <motion.div
-      className="absolute top-[20%] left-[-20%] h-80 w-80 rounded-full bg-vibrant-purple/30 blur-[90px]"
-      animate={{
-        x: [0, 90, 30, 0],
-        y: [0, 30, 80, 0],
-        scale: [1, 1.15, 0.9, 1],
-      }}
-      transition={orbLoop(9, 1.5)}
-    />
-    <motion.div
-      className="absolute top-1/2 left-1/2 h-[36rem] w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-vibrant-purple/20 blur-[130px]"
-      animate={{
-        scale: [1, 1.35, 0.95, 1],
-        opacity: [0.55, 0.9, 0.5, 0.55],
-      }}
-      transition={orbLoop(5, 0.3)}
-    />
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+      <div className="absolute inset-0 bg-mahalak-gradient" />
 
-    <motion.div
-      className="welcome-light-beam welcome-light-beam--left"
-      animate={{ opacity: [0.15, 0.45, 0.15], rotate: [0, 8, 0] }}
-      transition={orbLoop(6)}
-    />
-    <motion.div
-      className="welcome-light-beam welcome-light-beam--right"
-      animate={{ opacity: [0.1, 0.4, 0.1], rotate: [0, -10, 0] }}
-      transition={orbLoop(7, 1)}
-    />
+      <div className="welcome-aurora welcome-aurora--purple" />
+      <div className="welcome-aurora welcome-aurora--violet" />
 
-    {WELCOME_PARTICLES.map((particle, index) => (
-      <span
-        key={`particle-${index}`}
-        className="welcome-particle"
-        style={{
-          left: particle.left,
-          width: particle.size,
-          height: particle.size,
-          ['--rise-duration' as string]: `${particle.duration}s`,
-          ['--rise-delay' as string]: `${particle.delay}s`,
+      <motion.div
+        className="absolute top-[-15%] right-[-15%] h-[32rem] w-[32rem] rounded-full bg-vibrant-purple/45 blur-[110px]"
+        animate={{
+          x: [0, 70, -40, 0],
+          y: [0, -55, 45, 0],
+          scale: [1, 1.25, 0.85, 1],
         }}
+        transition={orbLoop(7)}
       />
-    ))}
-
-    {WELCOME_STARS.map((star, index) => (
-      <span
-        key={`star-${index}`}
-        className="welcome-star welcome-star--bright"
-        style={{
-          top: star.top,
-          left: star.left,
-          width: star.size,
-          height: star.size,
-          ['--twinkle-duration' as string]: `${star.duration}s`,
-          ['--twinkle-delay' as string]: `${star.delay}s`,
+      <motion.div
+        className="absolute bottom-[-15%] left-[-15%] h-[32rem] w-[32rem] rounded-full bg-violet/40 blur-[110px]"
+        animate={{
+          x: [0, -65, 50, 0],
+          y: [0, 55, -40, 0],
+          scale: [1, 0.82, 1.2, 1],
         }}
+        transition={orbLoop(8, 0.8)}
       />
-    ))}
+      <motion.div
+        className="absolute top-[20%] left-[-20%] h-80 w-80 rounded-full bg-vibrant-purple/30 blur-[90px]"
+        animate={{
+          x: [0, 90, 30, 0],
+          y: [0, 30, 80, 0],
+          scale: [1, 1.15, 0.9, 1],
+        }}
+        transition={orbLoop(9, 1.5)}
+      />
+      <motion.div
+        className="absolute top-1/2 left-1/2 h-[36rem] w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-vibrant-purple/20 blur-[130px]"
+        animate={{
+          scale: [1, 1.35, 0.95, 1],
+          opacity: [0.55, 0.9, 0.5, 0.55],
+        }}
+        transition={orbLoop(5, 0.3)}
+      />
 
-    <div className="welcome-grid-overlay" />
-    <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_55%_at_50%_42%,transparent_0%,rgba(11,19,32,0.65)_100%)]" />
-  </div>
-);
+      <motion.div
+        className="welcome-light-beam welcome-light-beam--left"
+        animate={{ opacity: [0.15, 0.45, 0.15], rotate: [0, 8, 0] }}
+        transition={orbLoop(6)}
+      />
+      <motion.div
+        className="welcome-light-beam welcome-light-beam--right"
+        animate={{ opacity: [0.1, 0.4, 0.1], rotate: [0, -10, 0] }}
+        transition={orbLoop(7, 1)}
+      />
+
+      {WELCOME_PARTICLES.map((particle, index) => (
+        <span
+          key={`particle-${index}`}
+          className="welcome-particle"
+          style={{
+            left: particle.left,
+            width: particle.size,
+            height: particle.size,
+            ['--rise-duration' as string]: `${particle.duration}s`,
+            ['--rise-delay' as string]: `${particle.delay}s`,
+          }}
+        />
+      ))}
+
+      {WELCOME_STARS.map((star, index) => (
+        <span
+          key={`star-${index}`}
+          className="welcome-star welcome-star--bright"
+          style={{
+            top: star.top,
+            left: star.left,
+            width: star.size,
+            height: star.size,
+            ['--twinkle-duration' as string]: `${star.duration}s`,
+            ['--twinkle-delay' as string]: `${star.delay}s`,
+          }}
+        />
+      ))}
+
+      <div className="welcome-grid-overlay" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_55%_at_50%_42%,transparent_0%,rgba(11,19,32,0.65)_100%)]" />
+    </div>
+  );
+}
+
+export const WelcomeScreenBackground = memo(WelcomeScreenBackgroundInner);

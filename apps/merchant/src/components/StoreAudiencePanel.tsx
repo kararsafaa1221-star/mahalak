@@ -91,6 +91,7 @@ type StoreAudiencePanelProps = {
   getCustomerSeqId: (id: string) => string;
   onSelectCustomer: (customerId: string) => void;
   onSendGift: (customerId: string, customerName: string) => void;
+  onNotifyFollowers?: () => void;
 };
 
 export const StoreAudiencePanel = memo(function StoreAudiencePanel({
@@ -102,7 +103,8 @@ export const StoreAudiencePanel = memo(function StoreAudiencePanel({
   getCustomerSeqId,
   onSelectCustomer,
   onSendGift,
-}) {
+  onNotifyFollowers,
+}: StoreAudiencePanelProps) {
   const stats = useMemo(
     () => getStoreAudienceStats(storeId, customers, orders),
     [storeId, customers, orders],
@@ -132,6 +134,17 @@ export const StoreAudiencePanel = memo(function StoreAudiencePanel({
           </div>
         ))}
       </div>
+
+      {onNotifyFollowers && (
+        <button
+          type="button"
+          onClick={onNotifyFollowers}
+          className="w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black text-sm flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition"
+        >
+          <BellRing size={18} />
+          إرسال إشعار للمتابعين
+        </button>
+      )}
 
       <div className="merchant-inner-card rounded-2xl overflow-hidden shadow-sm">
         <div className="p-4 border-b border-white/10 merchant-panel-inset">

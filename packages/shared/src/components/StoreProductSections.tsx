@@ -89,9 +89,13 @@ function StoreProductCard({
   return (
     <article
       onClick={() => onProductClick(product)}
-      className={`${layout === 'scroll' ? 'w-[148px] sm:w-[168px] shrink-0 snap-start' : 'w-full'} bg-white rounded-2xl border border-white shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer group overflow-hidden flex flex-col`}
+      className={`${layout === 'scroll' ? 'w-[148px] sm:w-[168px] shrink-0 snap-start' : 'w-full'} rounded-2xl border transition-all duration-300 cursor-pointer group overflow-hidden flex flex-col ${
+        theme.enabled
+          ? 'bg-white border-white shadow-sm hover:shadow-md'
+          : 'welcome-card-glow welcome-card-border-glow bg-white/5 border-white/30 backdrop-blur-md shadow-lg shadow-black/20 hover:shadow-xl hover:shadow-vibrant-purple/25 hover:-translate-y-0.5'
+      }`}
     >
-      <div className="relative aspect-square bg-slate-50 p-2">
+      <div className={`relative aspect-square p-2 ${theme.enabled ? 'bg-slate-50' : 'bg-white/10'}`}>
         <ProductImage
           src={product.image}
           alt={product.name}
@@ -102,12 +106,16 @@ function StoreProductCard({
           imageClassName="group-hover:scale-105 transition-transform duration-500"
         />
         {product.specialOffer && (
-          <span className="absolute top-2 right-2 bg-amber-100 text-amber-800 text-[8px] font-black px-2 py-0.5 rounded-md border border-amber-200/80">
+          <span className={`absolute top-2 right-2 text-[8px] font-black px-2 py-0.5 rounded-md border ${
+            theme.enabled
+              ? 'bg-amber-100 text-amber-800 border-amber-200/80'
+              : 'bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white border-white'
+          }`}>
             {product.specialOffer}
           </span>
         )}
         {product.discountType !== 'none' && (
-          <span className="absolute bottom-2 left-2 bg-rose-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-md">
+          <span className="absolute bottom-2 left-2 bg-rose-500/90 text-white text-[8px] font-black px-1.5 py-0.5 rounded-md border border-white/20">
             {product.discountType === 'percent' ? `-${product.discountValue}%` : 'خصم'}
           </span>
         )}
@@ -139,8 +147,12 @@ function StoreProductCard({
           <span
             className={`inline-flex self-start max-w-full px-2 py-0.5 rounded-lg border text-[8px] font-bold truncate mb-1 ${
               isProductOutOfStock(product.inventory)
-                ? 'border-rose-200 text-rose-600 bg-rose-50'
-                : 'border-emerald-200 text-emerald-700 bg-emerald-50'
+                ? theme.enabled
+                  ? 'border-rose-200 text-rose-600 bg-rose-50'
+                  : 'border-rose-400/30 text-rose-200 bg-rose-500/15'
+                : theme.enabled
+                  ? 'border-emerald-200 text-emerald-700 bg-emerald-50'
+                  : 'border-emerald-400/30 text-emerald-200 bg-emerald-500/15'
             }`}
           >
             {isBulkQuantityProduct(product.inventory)
@@ -167,7 +179,7 @@ function StoreProductCard({
             </span>
           )
         )}
-        <div className="mt-2 pt-2 border-t border-slate-100 flex items-end justify-between gap-1">
+        <div className={`mt-2 pt-2 flex items-end justify-between gap-1 ${theme.enabled ? 'border-t border-slate-100' : 'border-t border-white/15'}`}>
           <div className="min-w-0">
             {product.discountType !== 'none' && (
               <span className="block text-[9px] text-slate-400 line-through font-bold">
@@ -316,7 +328,7 @@ export const StoreProductSections: React.FC<StoreProductSectionsProps> = ({
         className={`py-20 text-center rounded-[2.5rem] shadow-sm px-8 ${
           theme.enabled
             ? `border border-white/10 brand-gradient-border ${emptyPanel.className}`
-            : 'welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md'
+            : 'welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md'
         }`}
         style={theme.enabled ? emptyPanel.style : undefined}
       >

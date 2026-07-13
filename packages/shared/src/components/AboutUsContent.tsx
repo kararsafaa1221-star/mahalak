@@ -1,6 +1,7 @@
 import React from 'react';
 import { Target, Heart, Sparkles, Shield, ShoppingBag, Store } from 'lucide-react';
 import { MahalakLogoIcon } from './MahalakLogo';
+import { LegalGlowCard } from './LegalGlowCard';
 
 export const aboutSections = [
   {
@@ -45,43 +46,55 @@ export const AboutUsContent: React.FC<AboutUsContentProps> = ({
   showHeader = true,
 }) => {
   return (
-    <div className={compact ? 'space-y-3' : 'space-y-4'}>
+    <div
+      className={`animate-fade-in font-tajawal text-right ${compact ? 'space-y-4' : 'space-y-5'}`}
+      dir="rtl"
+    >
       {showHeader && (
-        <header className="text-center mb-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-vibrant-purple/20 border border-vibrant-purple/30 mb-3">
-            <MahalakLogoIcon size={32} />
+        <header className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-5 sm:p-6 text-white shadow-2xl relative overflow-hidden text-center">
+          <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
+          <div className="relative z-10">
+            <div className="welcome-icon-pulse mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-white bg-brand-horizontal border border-white shadow-brand-glow-lg">
+              <MahalakLogoIcon size={compact ? 28 : 32} inverted />
+            </div>
+            <h1 className={`font-black text-[#fff700] mb-1.5 ${compact ? 'text-lg' : 'text-2xl'}`}>
+              من نحن — منصة «محلك»
+            </h1>
+            <p className="text-[10px] sm:text-xs font-bold text-purple-100">
+              سوقك الأقرب، وتجارتك الأسهل
+            </p>
           </div>
-          <h1 className={`font-black text-white mb-1 ${compact ? 'text-lg' : 'text-2xl'}`}>
-            من نحن — منصة «محلك»
-          </h1>
-          <p className="text-xs font-bold text-violet">سوقك الأقرب، وتجارتك الأسهل</p>
         </header>
       )}
 
       {aboutSections.map(({ icon: Icon, title, body }) => (
-        <section
-          key={title}
-          className="bg-white/5 border border-white/10 backdrop-blur-sm rounded-2xl p-4"
-        >
-          <div className="flex items-start gap-3 mb-2">
-            <div className="p-2 rounded-xl bg-vibrant-purple/20 text-violet shrink-0">
+        <LegalGlowCard key={title}>
+          <div className="flex items-start gap-3 mb-2.5">
+            <div className="p-2.5 rounded-xl bg-white/15 border border-white/20 text-[#fff700] shrink-0 shadow-sm">
               <Icon size={16} />
             </div>
-            <h2 className="font-black text-white text-sm leading-relaxed">{title}</h2>
+            <h2 className="font-black text-[#fff700] text-sm sm:text-base leading-relaxed pt-0.5">{title}</h2>
           </div>
-          <p className="text-xs font-bold text-slate-300 leading-relaxed whitespace-pre-line">{body}</p>
-        </section>
+          <p className="text-[11px] sm:text-xs font-bold text-purple-100/90 leading-relaxed whitespace-pre-line">
+            {body}
+          </p>
+        </LegalGlowCard>
       ))}
 
-      <section className="bg-vibrant-purple/10 border border-vibrant-purple/25 rounded-2xl p-4 text-center">
-        <div className="flex items-center justify-center gap-2 mb-2">
-          <ShoppingBag size={16} className="text-violet" />
-          <Shield size={16} className="text-violet" />
+      <LegalGlowCard className="text-center !bg-transparent border-white/20 shadow-brand-glow">
+        <div className="flex items-center justify-center gap-2 mb-2.5">
+          <div className="p-2 rounded-xl bg-white/15 border border-white/20 text-[#fff700]">
+            <ShoppingBag size={16} />
+          </div>
+          <div className="p-2 rounded-xl bg-white/15 border border-white/20 text-[#fff700]">
+            <Shield size={16} />
+          </div>
         </div>
-        <p className="text-xs font-black text-white leading-relaxed">
+        <p className="text-xs sm:text-sm font-black text-white leading-relaxed">
           في «محلك»، نحن نبني جسوراً رقمية لنجعل كل متجر قريباً منك.. وكأنك تتسوق في محلك!
         </p>
-      </section>
+      </LegalGlowCard>
     </div>
   );
 };

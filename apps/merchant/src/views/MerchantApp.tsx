@@ -19,6 +19,7 @@ import {
 import { showLocalNotification, requestNotificationPermission, setupPushNotifications } from "@shared/lib/pushNotifications";
 import { formatSafeDate, formatSafeTimeString, formatSafeDateTimeString, getTimestampMillis } from "@shared/utils/date";
 import { orderMatchesCustomerSearch } from "@shared/utils/customerId";
+import { isOrderVisibleToMerchant, isOrderShownInMerchantInbox, isMerchantInboxClearableStatus } from "@shared/utils/orderMerchantVisibility";
 import {
   buildMerchantProductSharePayload,
   buildMerchantStoreSharePayload,
@@ -48,9 +49,10 @@ import { useMerchantAndroidBack } from "@/hooks/useMerchantAndroidBack";
 import { DeleteAccountSection } from "@shared/components/DeleteAccountSection";
 import { PrivacyPolicyModal } from "@shared/components/PrivacyPolicyModal";
 import { AboutUsModal } from "@shared/components/AboutUsModal";
+import { ChangePasswordModal } from "@shared/components/ChangePasswordModal";
 import { MahalakLogo, MahalakLogoIcon } from "@shared/components/MahalakLogo";
 import { SponsoredAdSlider, type SponsoredAdItem } from "@shared/components/SponsoredAdSlider";
-import { getPublishedSponsoredAds, DEFAULT_SPONSORED_AD_BADGE, getMerchantAdsSectionOrder } from "@shared/utils/sponsoredAds";
+import { getPublishedSponsoredAds, getMerchantAdsSectionOrder } from "@shared/utils/sponsoredAds";
 
 /** WhatsApp دعم الاشتراك — 07735187868 */
 const SUPPORT_WHATSAPP_NUMBER = "9647735187868";
@@ -120,6 +122,7 @@ import { Wallet as MerchantWallet } from "@/components/merchant/Wallet";
 import { ImageUploader } from "@shared/components/ImageUploader";
 const BackgroundRemover = lazy(() => import("@/components/BackgroundRemover").then(m => ({ default: m.BackgroundRemover })));
 const PromoBannerBuilderLazy = lazy(() => import("@/components/PromoBannerBuilder").then(m => ({ default: m.PromoBannerBuilder })));
+const StoreThemeEditorLazy = lazy(() => import("@/components/StoreThemeEditor").then(m => ({ default: m.StoreThemeEditor })));
 import type { PromoBannerFormData } from "@/components/PromoBannerBuilder";
 import { MerchantPromoCodesManager } from "@/components/MerchantPromoCodesManager";
 import { CopyButton } from "@shared/components/CopyButton";
@@ -216,6 +219,8 @@ export const MerchantApp: React.FC = () => {
     notifications,
     markNotificationAsRead,
     markAllNotificationsAsRead,
+    deleteNotification,
+    deleteAllNotifications,
     flashSales,
     flashSaleRequests,
     requestJoinFlashSale,
@@ -228,6 +233,10 @@ export const MerchantApp: React.FC = () => {
     requestPayout,
     refreshStoreAudience,
     sendCustomerGift,
+    sendMerchantFollowerNotifications,
+    replaceOrderItems,
+    resetStorePasswordSecure,
+    setStoreCustomerBlock,
     authLoading,
     authInitialized,
   } = useApp();
@@ -251,8 +260,13 @@ export const MerchantApp: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const handleManualSync = async () => {
     setIsSyncing(true);
-    // Locally data is already in state, but we can imagine a "Refresh" logic here if needed
-    setTimeout(() => setIsSyncing(false), 1000);
+    try {
+      await refreshStoreAudience();
+    } catch {
+      /* ignored — listeners keep core data fresh */
+    } finally {
+      setTimeout(() => setIsSyncing(false), 600);
+    }
   };
 
   const [showNotificationModal, setShowNotificationModal] = useState(false);
@@ -262,47 +276,34 @@ export const MerchantApp: React.FC = () => {
 
   const handleSendNotificationToFollowers = async () => {
     if(!notificationTitle.trim() || !notificationBody.trim()) {
-        showToast("يرجى إدخال عنوان ومحتوى الإشعار", "error");
+        showToast("error", "حقول ناقصة", "يرجى إدخال عنوان ومحتوى الإشعار");
         return;
     }
     
     // Check if subscription active
-    const msDiff = (new Date(currentMerchant?.subscriptionExpiry || Date.now()).getTime()) - Date.now();
-    const diffDays = Math.ceil(msDiff / (1000 * 3600 * 24));
-    
-    if (currentMerchant?.status !== "active" || diffDays <= 0) {
-        showToast("عذراً، يجب أن يكون اشتراكك فعالاً لإرسال إشعارات جماعية للزبائن.", "error");
+    if (currentMerchant?.status !== "active" || !isStoreSubscriptionActive(currentMerchant)) {
+        showToast("error", "الاشتراك غير فعال", "عذراً، يجب أن يكون اشتراكك فعالاً لإرسال إشعارات جماعية للزبائن.");
         return;
     }
 
     setIsSendingNotification(true);
     try {
-        const followerIds = customers
-          .filter((c) => c.followedStores?.includes(currentMerchant!.id) || c.storeNotifications?.includes(currentMerchant!.id))
-          .map((c) => c.id);
-
-        if (followerIds.length === 0) {
-           showToast("لا يوجد لديك متابعين متاحين لإرسال الإشعار", "info");
-           setIsSendingNotification(false);
+        const sent = await sendMerchantFollowerNotifications(
+          currentMerchant!.id,
+          notificationTitle.trim(),
+          notificationBody.trim(),
+          "promo",
+        );
+        if (sent <= 0) {
+           showToast("info", "لا يوجد متابعون", "لا يوجد لديك متابعين متاحين لإرسال الإشعار");
            return;
         }
-
-        // Send notifications
-        for (const fId of followerIds) {
-            await addNotification({
-                userId: fId,
-                role: "customer",
-                title: `${currentMerchant!.shopName}: ${notificationTitle}`,
-                message: notificationBody,
-                type: "promo"
-            });
-        }
-        showToast(`تم إرسال الإشعار لـ ${followerIds.length} متابع بنجاح!`, "success");
+        showToast("success", "تم الإرسال", `تم إرسال الإشعار لـ ${sent} متابع بنجاح!`);
         setShowNotificationModal(false);
         setNotificationTitle("");
         setNotificationBody("");
     } catch (e: any) {
-        showToast("فشل إرسال الإشعارات: " + e.message, "error");
+        showToast("error", "فشل الإرسال", e.message || "تعذر إرسال الإشعارات");
     } finally {
         setIsSendingNotification(false);
     }
@@ -706,10 +707,13 @@ export const MerchantApp: React.FC = () => {
   const [bulkStoreDiscountApplying, setBulkStoreDiscountApplying] = useState(false);
 
   useEffect(() => {
-    if (activeTab !== "marketing" || !currentMerchant?.id) return;
+    const onMarketing =
+      activeTab === "marketing" ||
+      (activeTab === "mystore" && myStoreSubPage === "marketing");
+    if (!onMarketing || !currentMerchant?.id) return;
     setMarketingShareStats(EMPTY_MARKETING_SHARE_STATS(currentMerchant.id));
     return subscribeMarketingShareStats(currentMerchant.id, setMarketingShareStats);
-  }, [activeTab, currentMerchant?.id]);
+  }, [activeTab, myStoreSubPage, currentMerchant?.id]);
 
   // تحميل مسبق لصور منتجات التاجر لتظهر فوراً عند فتح صفحة المنتجات
   useEffect(() => {
@@ -824,6 +828,8 @@ export const MerchantApp: React.FC = () => {
   const [isProfileDirty, setIsProfileDirty] = useState(false);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingTab, setPendingTab] = useState<any>(null);
+  /** يعيد رسم الطلبات المخفية خلال نافذة إلغاء الزبون (30ث) */
+  const [orderGraceTick, setOrderGraceTick] = useState(0);
 
   const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
@@ -934,6 +940,19 @@ export const MerchantApp: React.FC = () => {
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, [activeMenuProductId]);
 
+  // أظهر الطلب فور انتهاء نافذة إلغاء الزبون حتى لو تأخر إشعار Cloud Function
+  useEffect(() => {
+    const hasHeldPending = orders.some(
+      (o) =>
+        o.storeId === currentMerchant?.id &&
+        o.status === "pending" &&
+        o.merchantNotified === false,
+    );
+    if (!hasHeldPending) return;
+    const id = window.setInterval(() => setOrderGraceTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [orders, currentMerchant?.id]);
+
   const toggleSelectProduct = (id: string) => {
     setSelectedProductIds((prev) =>
       prev.includes(id) ? prev.filter((pid) => pid !== id) : [...prev, id],
@@ -1043,6 +1062,7 @@ export const MerchantApp: React.FC = () => {
   const [orderFilter, setOrderFilter] = useState<
     "pending" | "accepted" | "shipped" | "delivered" | "returned" | "rejected"
   >("pending");
+  const [isClearingInbox, setIsClearingInbox] = useState(false);
   // تتبع الطلب المحدد من الإشعارات للتاجر
   const [targetOrderId, setTargetOrderId] = useState<string | null>(null);
   const [promoModal, setPromoModal] = useState(false);
@@ -1190,33 +1210,24 @@ export const MerchantApp: React.FC = () => {
   const handleConfirmReplacement = async () => {
     if (!replacementProduct || !replacementModal.orderId) return;
 
-    const newItems = [
-      {
-        productId: replacementProduct.id,
-        productName: `${replacementProduct.name} (استبدال)`,
-        quantity: replacementQuantity,
-        price: replacementProduct.finalPrice,
-      },
-    ];
-
-    // Calculate new total
-    const subtotal = replacementProduct.finalPrice * replacementQuantity;
-    const order = orders.find(o => o.id === replacementModal.orderId);
-    const deliveryPrice = order?.deliveryPrice || 0;
-    const total = subtotal + deliveryPrice;
-
-    await updateOrder(replacementModal.orderId, {
-      items: newItems,
-      subtotal,
-      total,
-      status: "accepted", // يعود للتجهيز
-      returnReason: "استبدال بمنتج جديد",
-    });
-
-    setReplacementModal({ show: false, orderId: "", originalItems: [] });
-    setReplacementProduct(null);
-    setReplacementSearch("");
-    alert("تم تحديث الطلب وإعادته للتجهيز كعملية استبدال ✅");
+    try {
+      const result = await replaceOrderItems(
+        replacementModal.orderId,
+        replacementProduct.id,
+        replacementQuantity,
+      );
+      if (!result.success) {
+        showToast("error", "فشل الاستبدال", "تعذر تحديث الطلب. حاول مرة أخرى.");
+        return;
+      }
+      setReplacementModal({ show: false, orderId: "", originalItems: [] });
+      setReplacementProduct(null);
+      setReplacementSearch("");
+      showToast("success", "تم الاستبدال", "تم تحديث الطلب كعملية استبدال ✅");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "تعذر تحديث الطلب";
+      showToast("error", "فشل الاستبدال", msg.includes("{") ? "تعذر تحديث الطلب. تحقق من صلاحياتك." : msg);
+    }
   };
 
   const [joinFlashSaleData, setJoinFlashSaleData] = useState<{
@@ -1253,12 +1264,6 @@ export const MerchantApp: React.FC = () => {
     setGiftModal({ show: true, customerId, customerName });
   };
 
-  // ==========================================
-  // التحديث اللحظي للطلبات (Placeholder)
-  // ==========================================
-  useEffect(() => {
-  }, [currentMerchant, view]);
-
   const handleMerchantSponsoredAdClick = useCallback((ad: SponsoredAdItem) => {
     if (!ad.link) return;
     const url = ad.link.startsWith("http") ? ad.link : `tel:${ad.link}`;
@@ -1280,14 +1285,12 @@ export const MerchantApp: React.FC = () => {
       delivery: {
         key: 'delivery' as const,
         ads: merchantDeliveryAds,
-        emptyIcon: <Truck size={16} />,
         defaultTitle: 'عرض توصيل مميز',
         defaultDesc: 'تواصل مع شركات التوصيل الشريكة',
       },
       media: {
         key: 'media' as const,
         ads: merchantMediaAds,
-        emptyIcon: <Camera size={16} />,
         defaultTitle: 'خدمة تصوير احترافية',
         defaultDesc: 'صوّر منتجاتك بأعلى جودة',
       },
@@ -1615,9 +1618,42 @@ export const MerchantApp: React.FC = () => {
       return;
     }
 
+    if (otpMode === "forgot") {
+      if (forgotNewPassword.length < 8) {
+        showToast("warning", "كلمة المرور قصيرة", "كلمة المرور يجب أن لا تقل عن 8 رموز");
+        return;
+      }
+      setIsAuthBusy(true);
+      try {
+        const result = await resetStorePasswordSecure(forgotPhone, otpCode, forgotNewPassword);
+        if (!result.success) {
+          showModal("error", "فشل إعادة التعيين", result.error || "تأكد من الرمز المرسل إلى رقم هاتفك.");
+          return;
+        }
+        const login = await verifyMerchantLogin({
+          phone: normalizeIraqiPhone(forgotPhone),
+          password: forgotNewPassword,
+        });
+        if (login?.success && login.store) {
+          setCurrentMerchant(login.store as any);
+          setView("dashboard");
+          setShowPushPrompt(true);
+          setTimeout(() => showToast("success", "تم تغيير كلمة المرور وتسجيل الدخول بنجاح!"), 400);
+        } else {
+          showToast("success", "تم تغيير كلمة المرور بنجاح! سجّل الدخول الآن.");
+          setView("login");
+        }
+      } catch (error: any) {
+        showModal("error", "خطأ في إعادة التعيين", error.message || "حاول مرة أخرى.");
+      } finally {
+        setIsAuthBusy(false);
+      }
+      return;
+    }
+
     setIsAuthBusy(true);
     try {
-      const phoneToVerify = otpMode === "signup" ? (pendingData?.phone || phone) : forgotPhone;
+      const phoneToVerify = pendingData?.phone || phone;
       const normalizedPhone = normalizeIraqiPhone(phoneToVerify);
       
       const isValid = await authService.verifyOTP(normalizedPhone, otpCode);
@@ -1637,18 +1673,6 @@ export const MerchantApp: React.FC = () => {
         } else {
           showModal("error", "خطأ", res?.message || 'تعذر إنشاء المتجر');
           setView("signup");
-        }
-      } else if (otpMode === "forgot") {
-        const normalized = normalizeIraqiPhone(forgotPhone);
-        const found = stores.find(
-          (s) => normalizeIraqiPhone(s.phone) === normalized,
-        );
-        if (found) {
-          updateStoreProfile({ ...found, password: forgotNewPassword });
-          setCurrentMerchant({ ...found, password: forgotNewPassword } as any);
-          setView("dashboard");
-          setShowPushPrompt(true);
-          setTimeout(() => showToast("success", "تم تغيير كلمة المرور بنجاح!"), 400);
         }
       }
     } catch (error: any) {
@@ -1713,23 +1737,16 @@ export const MerchantApp: React.FC = () => {
         showToast("warning", "رمز ناقص", "يرجى إدخال الرمز كاملاً");
         return;
       }
-      try {
-        if (!currentMerchant) return;
-        const isValid = await authService.verifyOTP(currentMerchant.phone, otpPwCode);
-        if (!isValid) {
-          showModal("error", "رمز OTP غير صحيح!");
-          return;
-        }
-      } catch (error: any) {
-        showModal("error", "خطأ في التحقق", error.message || "الرمز غير صحيح!");
-        return;
-      }
       if (newPassword.length < 8) {
         alert("كلمة المرور الجديدة يجب أن لا تقل عن 8 رموز");
         return;
       }
-      await updateStoreProfile({ password: newPassword });
-      setCurrentMerchant({ ...(currentMerchant as any), password: newPassword });
+      if (!currentMerchant) return;
+      const result = await resetStorePasswordSecure(currentMerchant.phone, otpPwCode, newPassword);
+      if (!result.success) {
+        showModal("error", "تعذر تغيير كلمة المرور", result.error || "تحقق من رمز OTP وحاول مجدداً");
+        return;
+      }
       setShowPasswordChange(false);
       setPwStep(1);
       setOtpPwCode("");
@@ -1912,23 +1929,37 @@ export const MerchantApp: React.FC = () => {
     }
   }, [showScanner, products, currentMerchant, scannerMode]);
 
-  const handleSaveProduct = (e: React.FormEvent) => {
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!prodName.trim()) {
+      showToast("warning", "الاسم مطلوب", "يرجى إدخال اسم المنتج.");
+      return;
+    }
+    if (!Number.isFinite(prodPrice) || prodPrice <= 0) {
+      showToast("warning", "السعر غير صالح", "يرجى إدخال سعر للزبون أكبر من صفر.");
+      return;
+    }
+
     const data: any = {
       storeId: currentMerchant!.id,
-      name: prodName,
+      name: prodName.trim(),
       description: prodDesc,
-      price: prodPrice,
+      price: Number(prodPrice),
       image:
         prodImage ||
         "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400",
       discountType: prodDiscountType,
-      discountValue: prodDiscountValue,
+      discountValue: prodDiscountType === "none" ? 0 : Number(prodDiscountValue) || 0,
       isFreeDelivery: prodIsFreeDelivery,
       status: prodStatus,
       specialOffer: prodSpecialOffer,
       tags: prodTags,
       barcode: prodBarcode,
+      finalPrice: computeProductFinalPrice(
+        Number(prodPrice),
+        prodDiscountType,
+        prodDiscountType === "none" ? 0 : Number(prodDiscountValue) || 0,
+      ),
     };
 
     if (prodCostPrice !== undefined && prodCostPrice !== null) {
@@ -1963,43 +1994,53 @@ export const MerchantApp: React.FC = () => {
       if (!prodBrand || prodBrand.trim() === "") data.brand = null;
     }
 
-    if (prodModal.mode === "edit" && prodModal.product) {
-      updateProduct(prodModal.product.id, data);
-    } else {
-      addProduct(data);
+    try {
+      if (prodModal.mode === "edit" && prodModal.product) {
+        await updateProduct(prodModal.product.id, data);
+        showToast("success", "تم الحفظ", "تم تحديث بيانات المنتج بنجاح.");
+      } else {
+        await addProduct(data);
+        showToast("success", "تمت الإضافة", "تم إضافة المنتج بنجاح.");
+      }
+      setProdModal({ show: false, mode: "add" });
+      setProdName("");
+      setProdDesc("");
+      setProdPrice(0);
+      setProdCostPrice(0);
+      setProdDiscountType("none");
+      setProdDiscountValue(0);
+      setProdImage("");
+      setProdIsFreeDelivery(false);
+      setProdStatus("published");
+      setProdSpecialOffer("");
+      setProdBarcode("");
+      setProdInventory("");
+      setProdColor("");
+      setProdSize("");
+      setProdLength("");
+      setProdWidth("");
+      setProdWeight("");
+      setProdCondition("");
+      setProdWarranty("");
+      setProdBrand("");
+      setShowExtraInfo(false);
+    } catch {
+      showToast("error", "فشل الحفظ", "تعذّر حفظ المنتج. حاول مرة أخرى.");
     }
-    setProdModal({ show: false, mode: "add" });
-    setProdName("");
-    setProdDesc("");
-    setProdPrice(0);
-    setProdCostPrice(0);
-    setProdDiscountType("none");
-    setProdDiscountValue(0);
-    setProdImage("");
-    setProdIsFreeDelivery(false);
-    setProdStatus("published");
-    setProdSpecialOffer("");
-    setProdBarcode("");
-    setProdInventory("");
-    setProdColor("");
-    setProdSize("");
-    setProdLength("");
-    setProdWidth("");
-    setProdWeight("");
-    setProdCondition("");
-    setProdWarranty("");
-    setProdBrand("");
-    setShowExtraInfo(false);
   };
 
   const handleDeleteProduct = (id: string, name: string) => {
     setDeleteConfirm({ show: true, id, name });
   };
 
-  const executeDeleteProduct = () => {
-    if (deleteConfirm.id) {
-      deleteProduct(deleteConfirm.id, "permanent");
+  const executeDeleteProduct = async () => {
+    if (!deleteConfirm.id) return;
+    try {
+      await deleteProduct(deleteConfirm.id, "permanent");
       setDeleteConfirm({ show: false, id: "", name: "" });
+      showToast("success", "تم الحذف", "تم حذف المنتج نهائياً.");
+    } catch {
+      showToast("error", "فشل الحذف", "تعذر حذف المنتج. حاول مرة أخرى.");
     }
   };
 
@@ -2186,8 +2227,9 @@ export const MerchantApp: React.FC = () => {
       (p) => p.storeId === currentMerchant.id,
     );
     const merchantOrders = orders.filter(
-      (o) => o.storeId === currentMerchant.id,
+      (o) => o.storeId === currentMerchant.id && isOrderVisibleToMerchant(o),
     );
+    void orderGraceTick; // يعتمد التكت لإعادة الفلترة كل ثانية خلال نافذة الإلغاء
     const lowStockProducts = merchantProducts.filter(
       (p) => p.status === 'published' && hasTrackedInventory(p.inventory) && (p.inventory as number) < 3 && (p.inventory as number) > 0
     );
@@ -2205,8 +2247,10 @@ export const MerchantApp: React.FC = () => {
     const productSalesMap: Record<string, {name: string, sold: number}> = {};
     
     merchantOrders.forEach(o => {
-      if (o.status !== 'rejected' && o.status !== 'returned') {
-        const orderDate = new Date(o.createdAt);
+      if (o.status !== 'rejected' && o.status !== 'returned' && o.status !== 'cancelled') {
+        const ms = getTimestampMillis(o.createdAt);
+        if (!ms) return;
+        const orderDate = new Date(ms);
         if (orderDate.getMonth() === thisMonth && orderDate.getFullYear() === thisYear) {
           o.items.forEach(item => {
             const pId = item.product?.id || item.id;
@@ -2427,9 +2471,22 @@ export const MerchantApp: React.FC = () => {
                             }
                             setShowNotifications(false);
                           }}>
-                            <div className="flex items-start justify-between">
+                            <div className="flex items-start justify-between gap-2">
                               <p className={`text-base font-black mb-1 leading-snug ${!notif.read ? 'text-slate-900' : 'text-slate-700'}`}>{notif.title}</p>
-                              {!notif.read && <span className="w-1.5 h-1.5 rounded-full bg-vibrant-purple mt-1.5 shrink-0"></span>}
+                              <div className="flex flex-col items-center gap-1.5 shrink-0">
+                                {!notif.read && <span className="w-1.5 h-1.5 rounded-full bg-vibrant-purple mt-1.5"></span>}
+                                <button
+                                  type="button"
+                                  title="حذف التنبيه"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void deleteNotification(notif.id);
+                                  }}
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-colors"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
                             </div>
                             <p className="text-sm text-slate-500 font-normal leading-relaxed">{notif.message}</p>
                             {notif.actionLink && notif.actionText && (
@@ -2451,6 +2508,29 @@ export const MerchantApp: React.FC = () => {
                       </div>
                     )}
                   </div>
+                  {merchantNotifications.length > 0 && (
+                    <div className="p-2.5 bg-slate-50/80 text-center">
+                      <button
+                        type="button"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!currentMerchant) return;
+                          const confirmed = await showConfirm(
+                            'حذف كل التنبيهات؟',
+                            'سيتم حذف جميع التنبيهات نهائياً ولا يمكن استرجاعها.',
+                            'حذف الكل',
+                            'إلغاء'
+                          );
+                          if (!confirmed.isConfirmed) return;
+                          const deleted = await deleteAllNotifications(currentMerchant.id, 'merchant');
+                          if (deleted > 0) showToast('success', `تم حذف ${deleted} تنبيه`);
+                        }}
+                        className="text-[10px] font-black text-rose-500 hover:text-rose-600 transition-colors"
+                      >
+                        حذف الكل نهائياً
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2461,29 +2541,21 @@ export const MerchantApp: React.FC = () => {
             <div className="space-y-6">
               {/* قسم الإعلانات الممولة — في بداية الرئيسية */}
               <div className="space-y-4">
-                {merchantAdSections.map((section) => (
-                <section key={section.key}>
-                  {section.ads.length > 0 ? (
+                {merchantAdSections
+                  .filter((section) => section.ads.length > 0)
+                  .map((section) => (
+                  <section key={section.key}>
                     <SponsoredAdSlider
                       ads={section.ads}
                       adInterval={adminSettings.merchantAdInterval ?? adminSettings.adInterval ?? 5}
-                      badgeLabel={adminSettings.adBadgeText ?? DEFAULT_SPONSORED_AD_BADGE}
+                      badgeLabel={adminSettings.adBadgeText}
                       size="full"
-                      className="w-full rounded-none border-x-0"
+                      className="w-full rounded-none"
                       onAdClick={handleMerchantSponsoredAdClick}
                       defaultTitle={section.defaultTitle}
                       defaultDesc={section.defaultDesc}
                     />
-                  ) : (
-                    <div className="mx-4 md:mx-6 lg:mx-8 flex flex-col items-center justify-center py-10 rounded-[2rem] border border-dashed border-white/20">
-                      <div className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center text-[#fff700] mb-2">
-                        {section.emptyIcon}
-                      </div>
-                      <span className="text-[10px] font-bold text-[#fff700]">لا توجد إعلانات نشطة حالياً</span>
-                      <span className="text-[8px] text-white/60 mt-1">تواصل مع الإدارة لإضافة عرضك المميز</span>
-                    </div>
-                  )}
-                </section>
+                  </section>
                 ))}
               </div>
 
@@ -2495,10 +2567,26 @@ export const MerchantApp: React.FC = () => {
                 const yesterday = new Date();
                 yesterday.setDate(yesterday.getDate() - 1);
                 
-                const todaySales = merchantOrders.filter(o => o.status === 'delivered' && new Date(o.createdAt).toDateString() === new Date().toDateString()).reduce((sum, o) => sum + ((o.subtotal || 0) - (o.discountSponsor === 'MERCHANT' ? (o.discountAmount || 0) : 0)), 0);
+                const todaySales = merchantOrders.filter(o => {
+                  if (o.status !== 'delivered') return false;
+                  const ms = getTimestampMillis(o.createdAt);
+                  if (!ms) return false;
+                  return new Date(ms).toDateString() === new Date().toDateString();
+                }).reduce((sum, o) => sum + ((o.subtotal || 0) - (o.discountSponsor === 'MERCHANT' ? (o.discountAmount || 0) : 0)), 0);
+                const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+                const weekSales = merchantOrders.filter(o => {
+                  if (o.status !== 'delivered') return false;
+                  const ms = getTimestampMillis(o.createdAt);
+                  return ms >= weekAgo;
+                }).reduce((sum, o) => sum + ((o.subtotal || 0) - (o.discountSponsor === 'MERCHANT' ? (o.discountAmount || 0) : 0)), 0);
+                const avgDailyWeek = Math.round(weekSales / 7);
                 const pulsePerformanceMsg = unreadOrdersCountVal > 0 
                   ? "يوجد طلبات جديدة بانتظار معالجتك، أداء المتجر نشط." 
-                  : (todaySales > 0 ? "أداء مبيعاتك اليوم أعلى بـ 15% من المعدل المعتاد!" : "استمر في إضافة منتجات جديدة لزيادة مبيعاتك وجذب الزبائن.");
+                  : (todaySales > 0
+                    ? (avgDailyWeek > 0 && todaySales >= avgDailyWeek
+                        ? `مبيعاتك اليوم (${todaySales.toLocaleString()} د.ع) أعلى من متوسطك اليومي للأسبوع (${avgDailyWeek.toLocaleString()} د.ع).`
+                        : `مبيعاتك اليوم ${todaySales.toLocaleString()} د.ع — استمر بالمعالجة السريعة للطلبات.`)
+                    : "استمر في إضافة منتجات جديدة لزيادة مبيعاتك وجذب الزبائن.");
 
                 return (
                   <div
@@ -2921,7 +3009,7 @@ export const MerchantApp: React.FC = () => {
                     {/* كرت التقارير */}
                     <button
                       onClick={() => setMyStoreSubPage("reports")}
-                      className="merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
+                      className="tour-step-desktop-reports tour-step-mobile-reports merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
                     >
                       <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none flex items-center justify-center">
                         <TrendingUp size={120} className="text-[#fff700]" />
@@ -2944,7 +3032,7 @@ export const MerchantApp: React.FC = () => {
                     {/* كرت التسويق */}
                     <button
                       onClick={() => setMyStoreSubPage("marketing")}
-                      className="merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
+                      className="tour-step-desktop-marketing tour-step-mobile-marketing merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
                     >
                       <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none flex items-center justify-center">
                         <Megaphone size={120} className="text-[#fff700]" />
@@ -2990,7 +3078,7 @@ export const MerchantApp: React.FC = () => {
                     {/* كرت التوصيل */}
                     <button
                       onClick={() => setMyStoreSubPage("delivery")}
-                      className="merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
+                      className="tour-step-desktop-delivery tour-step-mobile-delivery merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
                     >
                       <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none flex items-center justify-center">
                         <Truck size={120} className="text-[#fff700]" />
@@ -3458,6 +3546,18 @@ export const MerchantApp: React.FC = () => {
               return `${dayName} (${month}/${day})`;
             };
 
+            const orderDate = (createdAt: unknown): Date | null => {
+              const ms = getTimestampMillis(createdAt);
+              if (!ms) return null;
+              const d = new Date(ms);
+              return Number.isNaN(d.getTime()) ? null : d;
+            };
+
+            const orderInRange = (createdAt: unknown, start: Date, end: Date) => {
+              const d = orderDate(createdAt);
+              return !!d && d >= start && d <= end;
+            };
+
             let reportStartDate = new Date();
             reportStartDate.setHours(0, 0, 0, 0);
             let reportEndDate = new Date();
@@ -3493,8 +3593,8 @@ export const MerchantApp: React.FC = () => {
               const dayLabel = getDayLabel(d);
 
               const ordersOnDay = merchantOrders.filter(o => {
-                const oDate = new Date(o.createdAt);
-                return oDate.toDateString() === dateStr && oDate >= reportStartDate && oDate <= reportEndDate;
+                const oDate = orderDate(o.createdAt);
+                return !!oDate && oDate.toDateString() === dateStr && oDate >= reportStartDate && oDate <= reportEndDate;
               });
 
               // Daily Sales sum of total for delivered orders on this day
@@ -3512,24 +3612,29 @@ export const MerchantApp: React.FC = () => {
             });
 
             // Calculate KPIs for the selected range
-            const periodOrders = merchantOrders.filter(o => {
-              const oDate = new Date(o.createdAt);
-              return oDate >= reportStartDate && oDate <= reportEndDate;
-            });
+            const periodOrders = merchantOrders.filter(o => orderInRange(o.createdAt, reportStartDate, reportEndDate));
             const periodTotalSales = periodOrders
               .filter(o => o.status === 'delivered')
               .reduce((sum, o) => sum + ((o.subtotal || 0) - (o.discountSponsor === 'MERCHANT' ? (o.discountAmount || 0) : 0)), 0);
 
             const periodTotalOrdersCount = periodOrders.length;
             const deliveredOrdersCount = periodOrders.filter(o => o.status === 'delivered').length;
+            const acceptedLikeCount = periodOrders.filter(o =>
+              o.status === 'accepted' || o.status === 'shipped' || o.status === 'delivered'
+            ).length;
+            const rejectedCount = periodOrders.filter(o =>
+              o.status === 'rejected' || o.status === 'cancelled' || o.status === 'returned'
+            ).length;
+            const deliveryRate = periodTotalOrdersCount > 0
+              ? Math.round((deliveredOrdersCount / periodTotalOrdersCount) * 100)
+              : 0;
             const avgOrderValue = deliveredOrdersCount > 0 ? Math.round(periodTotalSales / deliveredOrdersCount) : 0;
 
             // Compute top products in the dynamic date range
             const productQuantities: Record<string, { id: string; name: string; quantity: number; image?: string; sales: number }> = {};
 
             merchantOrders.forEach(o => {
-              const oDate = new Date(o.createdAt);
-              if (oDate >= reportStartDate && oDate <= reportEndDate && o.status !== 'rejected' && o.status !== 'returned') {
+              if (orderInRange(o.createdAt, reportStartDate, reportEndDate) && o.status !== 'rejected' && o.status !== 'returned' && o.status !== 'cancelled') {
                 o.items.forEach(item => {
                   const pId = item.product?.id || item.id;
                   const pName = item.product?.name || item.name || 'منتج غير معروف';
@@ -3563,8 +3668,7 @@ export const MerchantApp: React.FC = () => {
             const categorySales: Record<string, { category: string; sales: number; quantity: number }> = {};
             
             merchantOrders.forEach(o => {
-              const oDate = new Date(o.createdAt);
-              if (oDate >= reportStartDate && oDate <= reportEndDate && o.status !== 'rejected' && o.status !== 'returned') {
+              if (orderInRange(o.createdAt, reportStartDate, reportEndDate) && o.status !== 'rejected' && o.status !== 'returned' && o.status !== 'cancelled') {
                 o.items.forEach(item => {
                   const qty = item.quantity || 1;
                   const price = item.product?.price || item.price || 0;
@@ -3583,9 +3687,9 @@ export const MerchantApp: React.FC = () => {
               .sort((a, b) => b.sales - a.sales)
               .slice(0, 10);
 
-            // --- Inventory Turnover Calculation ---
+            // --- Inventory Turnover Calculation (store products only) ---
             const reportDaysDiff = Math.max(1, Math.ceil((reportEndDate.getTime() - reportStartDate.getTime()) / (1000 * 60 * 60 * 24)));
-            const inventoryTurnoverData = products
+            const inventoryTurnoverData = merchantProducts
               .filter(p => p.status === 'published' && typeof p.inventory === 'number' && p.inventory > 0)
               .map(p => {
                 const soldInPeriod = productQuantities[p.id]?.quantity || 0;
@@ -3609,7 +3713,7 @@ export const MerchantApp: React.FC = () => {
             let forecastInsight = null;
             if (topProductsData.length > 0) {
               const bestProduct = topProductsData[0];
-              const actualProduct = products.find(p => p.id === bestProduct.id);
+              const actualProduct = merchantProducts.find(p => p.id === bestProduct.id);
               if (actualProduct) {
                 const stock = (typeof actualProduct.inventory === 'number') ? actualProduct.inventory : "غير محدود";
                 forecastInsight = {
@@ -3625,21 +3729,20 @@ export const MerchantApp: React.FC = () => {
             }
 
             let behaviorInsight = null;
-            const unsoldProducts = products.filter(p => !productQuantities[p.id] && p.status === 'published' && p.price > 0);
+            const unsoldProducts = merchantProducts.filter(p => !productQuantities[p.id] && p.status === 'published' && (p.price || 0) > 0);
             if (unsoldProducts.length > 0) {
               const p = unsoldProducts[0];
               behaviorInsight = {
                 type: 'behavior',
-                title: 'تحليل سلة المهملات 🛒',
+                title: 'منتجات بلا مبيعات 📦',
                 icon: <Activity className="text-[#FFF700]" size={20} />,
                 bgColor: 'merchant-brand-card text-[#fff700]',
                 iconBg: 'bg-white/10',
                 borderClass: 'border border-white/20',
-                message: `يتم إضافة (${p.name}) للسلة ويتم حذفه قبل الشراء بشكل متكرر. قد يوحي ذلك بمشكلة في التسعير أو الوصف.`
+                message: `يوجد ${unsoldProducts.length} منتج منشور بدون مبيعات في الفترة المحددة (مثل: ${p.name}). راجع السعر أو الوصف أو فعّل خصماً مؤقتاً.`
               };
             }
 
-            const storeRank = Math.min(5, Math.max(1, Math.floor(10 - (periodTotalSales / 150000) % 5)));
             const shopCategoryLabel = currentMerchant?.category || "التسوق";
 
             let timingInsight = null;
@@ -3649,7 +3752,8 @@ export const MerchantApp: React.FC = () => {
               };
               
               periodOrders.filter(o => o.status === 'delivered').forEach(o => {
-                const d = new Date(o.createdAt);
+                const d = orderDate(o.createdAt);
+                if (!d) return;
                 const days = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
                 const dayName = days[d.getDay()];
                 const saleAmount = ((o.subtotal || 0) - (o.discountSponsor === 'MERCHANT' ? (o.discountAmount || 0) : 0));
@@ -3725,8 +3829,8 @@ export const MerchantApp: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
                     <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/20 flex items-center gap-2 shrink-0">
                       <span className="w-2 h-2 rounded-full bg-[#fff700] animate-pulse"></span>
-                      <span className="hidden sm:inline">تحديث حي ومباشر</span>
-                      <span className="sm:hidden">تحديث حي</span>
+                      <span className="hidden sm:inline">مبيعات الموصل فقط ضمن النطاق</span>
+                      <span className="sm:hidden">موصل فقط</span>
                     </div>
 
                     <div className="relative flex-1 sm:flex-none">
@@ -3862,14 +3966,13 @@ export const MerchantApp: React.FC = () => {
                   </div>
                 </motion.div>
 
-                {/* Local Competition Comparison Card */}
+                {/* Order funnel summary (real metrics) */}
                 <motion.div
                   initial={{ opacity: 0, scale: 0.98 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ duration: 0.5, delay: 0.2 }}
                   className="merchant-brand-card rounded-[2.5rem] p-6 sm:p-8 text-white shadow-xl overflow-hidden relative border"
                 >
-                  {/* Background decoration elements */}
                   <div className="absolute -top-24 -right-24 w-64 h-64 bg-vibrant-purple/20 rounded-full blur-3xl pointer-events-none"></div>
                   <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-deep-navy/40 rounded-full blur-3xl pointer-events-none"></div>
                   
@@ -3877,17 +3980,23 @@ export const MerchantApp: React.FC = () => {
                     <div className="flex-1 space-y-4 text-center md:text-right">
                       <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/20 text-[#fff700] text-xs font-bold font-mono">
                         <Award size={14} className="text-[#fff700]" />
-                        <span>تقييم التنافسية المحلية</span>
+                        <span>ملخص أداء الطلبات</span>
                       </div>
                       <h3 className="text-2xl sm:text-3xl font-black leading-tight text-[#fff700]">
-                        أنت ضمن أفضل <span className="text-brand-white text-4xl">{storeRank}</span> متاجر
+                        نسبة التوصيل <span className="text-brand-white text-4xl">{deliveryRate}%</span>
                       </h3>
                       <p className="text-white text-sm max-w-md mx-auto md:mx-0 leading-relaxed">
-                        في فئة <span className="font-bold text-white bg-white/10 px-2 py-0.5 rounded-md">"{shopCategoryLabel}"</span> ضمن منطقتك مقارنة بأداء المتاجر المماثلة خلال الفترة المحددة.
+                        من أصل {periodTotalOrdersCount} طلب في الفترة
+                        {shopCategoryLabel ? <> ضمن فئة <span className="font-bold text-white bg-white/10 px-2 py-0.5 rounded-md">"{shopCategoryLabel}"</span></> : null}.
+                        المقبولة/قيد التنفيذ: {acceptedLikeCount} — المرفوضة/ملغاة: {rejectedCount}.
                       </p>
                       <div className="pt-2">
                         <span className="text-xs bg-white/10 text-white/80 px-3 py-1.5 rounded-lg border border-white/20">
-                          {storeRank === 1 ? 'أداء استثنائي! حافظ على هذا المستوى الرائع.' : 'أداء ممتاز! يمكنك الوصول للمركز الأول بزيادة النشاط والتسويق.'}
+                          {deliveryRate >= 70
+                            ? 'نسبة توصيل قوية — حافظ على سرعة المعالجة.'
+                            : periodTotalOrdersCount === 0
+                              ? 'لا توجد طلبات في هذه الفترة بعد.'
+                              : 'ركّز على قبول الطلبات وتسريع التوصيل لرفع النسبة.'}
                         </span>
                       </div>
                     </div>
@@ -3896,13 +4005,13 @@ export const MerchantApp: React.FC = () => {
                       <div className="bg-white/10 backdrop-blur-md p-6 rounded-3xl border border-white/20 flex flex-col items-center gap-3 min-w-[200px]">
                         <div className="text-[#fff700] relative">
                           <Award size={64} className="drop-shadow-lg" />
-                          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-white font-black text-xl pt-2">
-                            {storeRank}
+                          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-white font-black text-lg pt-2">
+                            {deliveryRate}%
                           </div>
                         </div>
                         <div className="text-center">
-                          <p className="text-xs text-white/60 uppercase tracking-widest mb-1 font-mono">المرتبة</p>
-                          <p className="text-lg font-black tracking-wide text-brand-white">#0{storeRank}</p>
+                          <p className="text-xs text-white/60 uppercase tracking-widest mb-1 font-mono">موصّل</p>
+                          <p className="text-lg font-black tracking-wide text-brand-white">{deliveredOrdersCount}/{periodTotalOrdersCount}</p>
                         </div>
                       </div>
                     </div>
@@ -4722,14 +4831,67 @@ export const MerchantApp: React.FC = () => {
 
           {/* الطلبات */}
           {activeTab === "orders" && (() => {
+            const clearedOrderIds = currentMerchant.inboxClearedOrderIds || [];
+            const matchesFilter = (o: Order) =>
+              o.status === orderFilter ||
+              (orderFilter === "returned" && o.status === "replaced") ||
+              (orderFilter === "rejected" && o.status === "cancelled");
+
             const baseOrdersList = targetOrderId
               ? merchantOrders.filter((o) => o.id === targetOrderId)
               : merchantOrders.filter(
-                  (o) =>
-                    o.status === orderFilter ||
-                    (orderFilter === "returned" && o.status === "replaced") ||
-                    (orderFilter === "rejected" && o.status === "cancelled"),
+                  (o) => matchesFilter(o) && isOrderShownInMerchantInbox(o, clearedOrderIds),
                 );
+
+            const clearableInboxOrders = !targetOrderId
+              ? merchantOrders.filter(
+                  (o) =>
+                    matchesFilter(o) &&
+                    isMerchantInboxClearableStatus(o.status) &&
+                    isOrderShownInMerchantInbox(o, clearedOrderIds),
+                )
+              : [];
+
+            const canClearInbox =
+              !targetOrderId &&
+              (orderFilter === "delivered" ||
+                orderFilter === "returned" ||
+                orderFilter === "rejected") &&
+              clearableInboxOrders.length > 0;
+
+            const handleClearInbox = async () => {
+              if (!canClearInbox || isClearingInbox) return;
+              const confirm = await showConfirm(
+                "تصفير القائمة",
+                `سيتم إخفاء ${clearableInboxOrders.length} طلب من هذه القائمة وصفر رقم التبويب.\nالتقارير والمحفظة وحسابات الزبائن تبقى كما هي.`,
+                "تصفير القائمة",
+                "إلغاء",
+              );
+              if (!confirm.isConfirmed) return;
+              setIsClearingInbox(true);
+              try {
+                const nextIds = [
+                  ...new Set([
+                    ...clearedOrderIds,
+                    ...clearableInboxOrders.map((o) => o.id),
+                  ]),
+                ].slice(-2000);
+                await updateStoreProfile({ inboxClearedOrderIds: nextIds });
+                showToast(
+                  "success",
+                  "تم التصفير",
+                  "أُخفيت الطلبات من القائمة. التقارير والإحصاءات كما هي.",
+                );
+              } catch (e: any) {
+                showToast(
+                  "error",
+                  "فشل التصفير",
+                  typeof e?.message === "string" ? e.message : "حاول مجدداً",
+                );
+              } finally {
+                setIsClearingInbox(false);
+              }
+            };
 
             const displayOrdersList = (orderSearchQuery.trim()
               ? baseOrdersList.filter((o) => {
@@ -4836,21 +4998,28 @@ export const MerchantApp: React.FC = () => {
                     id: "delivered",
                     label: "تم الاستلام",
                     count: merchantOrders.filter(
-                      (o) => o.status === "delivered",
+                      (o) =>
+                        o.status === "delivered" &&
+                        isOrderShownInMerchantInbox(o, clearedOrderIds),
                     ).length,
                   },
                   {
                     id: "returned",
                     label: "مرتجع",
                     count: merchantOrders.filter(
-                      (o) => o.status === "returned" || o.status === "replaced",
+                      (o) =>
+                        (o.status === "returned" || o.status === "replaced") &&
+                        isOrderShownInMerchantInbox(o, clearedOrderIds),
                     ).length,
                   },
                   {
                     id: "rejected",
                     label: "مرفوض / ملغي",
-                    count: merchantOrders.filter((o) => o.status === "rejected" || o.status === "cancelled")
-                      .length,
+                    count: merchantOrders.filter(
+                      (o) =>
+                        (o.status === "rejected" || o.status === "cancelled") &&
+                        isOrderShownInMerchantInbox(o, clearedOrderIds),
+                    ).length,
                   },
                 ].map((f) => (
                   <button
@@ -4870,6 +5039,35 @@ export const MerchantApp: React.FC = () => {
                 ))}
               </div>
 
+              {canClearInbox && (
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 merchant-panel-inset border border-white/15 rounded-2xl p-4">
+                  <div className="text-right min-w-0">
+                    <p className="text-xs font-black text-[#fff700]">تصفير قائمة هذا القسم</p>
+                    <p className="text-[10px] text-white/65 font-bold mt-1 leading-relaxed">
+                      يخفي الطلبات الظاهرة هنا ويصفر رقم التبويب ({clearableInboxOrders.length}). التقارير والمحفظة لا تتأثر.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleClearInbox}
+                    disabled={isClearingInbox}
+                    className="shrink-0 px-5 py-3 rounded-xl bg-white/10 hover:bg-rose-500/20 border border-rose-400/30 text-rose-200 font-black text-xs flex items-center justify-center gap-2 transition disabled:opacity-60"
+                  >
+                    {isClearingInbox ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        جاري التصفير...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 size={16} />
+                        تصفير القائمة
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
               {displayOrdersList.length === 0 ? (
                 <div
                   className="py-20 text-center rounded-[3rem] border border-dashed border-white/20 merchant-brand-card"
@@ -4878,7 +5076,16 @@ export const MerchantApp: React.FC = () => {
                     size={48}
                     className="mx-auto mb-4 opacity-60 text-[#fff700]"
                   />
-                  <p className="font-bold text-brand-white">لا توجد طلبات في هذا القسم حالياً</p>
+                  <p className="font-bold text-brand-white">
+                    {(orderFilter === "delivered" || orderFilter === "returned" || orderFilter === "rejected") &&
+                    merchantOrders.some(
+                      (o) =>
+                        matchesFilter(o) &&
+                        !isOrderShownInMerchantInbox(o, clearedOrderIds),
+                    )
+                      ? "تم تصفير هذه القائمة — الطلبات ما زالت محسوبة في التقارير"
+                      : "لا توجد طلبات في هذا القسم حالياً"}
+                  </p>
                 </div>
               ) : (
                 <motion.div 
@@ -5038,7 +5245,7 @@ export const MerchantApp: React.FC = () => {
 
                             {(o.rejectionReason || o.returnReason || o.status === "cancelled") && (
                               <div className="mt-3 p-2 bg-rose-500/15 rounded-lg border border-rose-400/30 text-[9px] font-bold text-rose-300 truncate">
-                                {o.status === "cancelled" ? "تم إلغاء الطلب تلقائياً من قبل الزبون خلال 30 ثانية ⚠️" : o.rejectionReason ? `رفض: ${o.rejectionReason}` : `إرجاع/استبدال: ${o.returnReason}`}
+                                {o.status === "cancelled" ? "ألغاه الزبون خلال مهلة الإلغاء ⚠️" : o.rejectionReason ? `رفض: ${o.rejectionReason}` : `إرجاع/استبدال: ${o.returnReason}`}
                               </div>
                             )}
                           </div>
@@ -5129,93 +5336,6 @@ export const MerchantApp: React.FC = () => {
           })()}
 
 
-
-          {/* تغيير كلمة المرور - مودال */}
-          {showPasswordChange && (
-            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto">
-              <motion.div 
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-2xl relative"
-              >
-                <button 
-                  onClick={() => setShowPasswordChange(false)}
-                  className="absolute top-6 left-6 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X size={20} />
-                </button>
-
-                <div className="text-center mb-8">
-                  <div className="w-16 h-16 bg-slate-50 text-violet rounded-2xl flex items-center justify-center mx-auto mb-4">
-                    <Shield size={32} />
-                  </div>
-                  <h3 className="text-xl font-black text-violet">تغيير كلمة المرور</h3>
-                  <p className="text-xs text-slate-400 mt-2">
-                    {pwStep === 1 
-                      ? "سنقوم بإرسال رمز تحقق إلى رقم هاتفك المسجل لضمان أمان حسابك" 
-                      : "أدخل رمز التحقق الذي استلمته وكلمة المرور الجديدة"}
-                  </p>
-                </div>
-
-                <form onSubmit={handleChangePassword} className="space-y-6">
-                  {pwStep === 1 ? (
-                    <div className="space-y-4">
-                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center gap-3">
-                        <Phone size={20} className="text-slate-400" />
-                        <div>
-                          <span className="text-[10px] text-slate-400 font-bold block mb-0.5">رقم الهاتف المسجل</span>
-                          <span className="text-sm font-black text-slate-700 font-mono tracking-wider">{currentMerchant.phone}</span>
-                        </div>
-                      </div>
-                      <button 
-                        type="submit"
-                        className="w-full py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl text-sm font-black shadow-lg shadow-slate-100 transition-all active:scale-[0.98]"
-                      >
-                        إرسال الرمز (OTP)
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-[10px] font-black text-violet uppercase tracking-widest px-1 mb-2">رمز التحقق (OTP)</label>
-                        <input 
-                          type="text" 
-                          maxLength={6}
-                          placeholder="0 0 0 0 0 0"
-                          value={otpPwCode}
-                          onChange={(e) => setOtpPwCode(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-100 px-4 py-4 rounded-2xl text-center text-xl font-black tracking-[0.5em] focus:ring-4 focus:ring-slate-500/5 focus:border-slate-500 transition-all outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-violet uppercase tracking-widest px-1 mb-2">كلمة المرور الجديدة</label>
-                        <input 
-                          type="password" 
-                          placeholder="كلمة مرور قوية (8+ رموز)"
-                          value={newPassword}
-                          onChange={(e) => setNewPassword(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-100 px-4 py-4 rounded-2xl text-sm font-black focus:ring-4 focus:ring-slate-500/5 focus:border-slate-500 transition-all outline-none"
-                        />
-                      </div>
-                      <button 
-                        type="submit"
-                        className="w-full py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl text-sm font-black shadow-lg shadow-slate-100 transition-all active:scale-[0.98]"
-                      >
-                        تحديث كلمة المرور
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => setPwStep(1)}
-                        className="w-full py-3 text-slate-400 text-xs font-black hover:text-vibrant-purple transition-colors"
-                      >
-                        لم يصلك الرمز؟ أعد الإرسال
-                      </button>
-                    </div>
-                  )}
-                </form>
-              </motion.div>
-            </div>
-          )}
 
           {/* أكواد الخصم — صفحة مستقلة */}
           {activeTab === "mystore" && myStoreSubPage === "promo" && (
@@ -5452,15 +5572,29 @@ export const MerchantApp: React.FC = () => {
                       isActive: currentMerchant.promoBanner?.isActive || false,
                     }}
                     onSave={handlePromoBannerSave}
-                    onToggleActive={(active) =>
-                      addNotification({
-                        title: active ? "تم التفعيل" : "تم الإيقاف",
-                        message: active
-                          ? "تم تفعيل عرض البانر في متجرك"
-                          : "تم إيقاف عرض البانر مؤقتاً",
-                        type: active ? "success" : "info",
-                      })
-                    }
+                    onToggleActive={async (active) => {
+                      const next = {
+                        title: currentMerchant.promoBanner?.title || "عرض خاص!",
+                        subtitle:
+                          currentMerchant.promoBanner?.subtitle ||
+                          "خصم 20% على جميع المنتجات لفترة محدودة",
+                        backgroundColor: currentMerchant.promoBanner?.backgroundColor || "#7B3DFF",
+                        textColor: currentMerchant.promoBanner?.textColor || "#ffffff",
+                        isActive: active,
+                      };
+                      await updateStoreProfile({ promoBanner: next });
+                      if (currentMerchant?.id) {
+                        await addNotification({
+                          userId: currentMerchant.id,
+                          role: "merchant",
+                          title: active ? "تم تفعيل البانر" : "تم إيقاف البانر",
+                          message: active
+                            ? "تم تفعيل عرض البانر في متجرك"
+                            : "تم إيقاف عرض البانر مؤقتاً",
+                          type: "system",
+                        });
+                      }
+                    }}
                   />
                 </Suspense>
 
@@ -5537,6 +5671,15 @@ export const MerchantApp: React.FC = () => {
                 </div>
 
               </div>
+
+                <Suspense fallback={<div className="rounded-[2rem] p-6 h-48 bg-white/5 animate-pulse" />}>
+                  <StoreThemeEditorLazy
+                    currentMerchant={currentMerchant}
+                    onSave={async (theme) => {
+                      await updateStoreProfile({ storeTheme: theme });
+                    }}
+                  />
+                </Suspense>
 
               {/* تتبع الزيارات من روابط المشاركة */}
               <div className="merchant-brand-card rounded-[2rem] p-6 border shadow-sm space-y-5 relative overflow-hidden group">
@@ -5718,6 +5861,7 @@ export const MerchantApp: React.FC = () => {
                 getCustomerSeqId={getCustomerSeqId}
                 onSelectCustomer={setSelectedAudienceId}
                 onSendGift={openAudienceGift}
+                onNotifyFollowers={() => setShowNotificationModal(true)}
               />
             </div>
           )}
@@ -6012,6 +6156,7 @@ export const MerchantApp: React.FC = () => {
                       getCustomerSeqId={getCustomerSeqId}
                       onSelectCustomer={setSelectedAudienceId}
                       onSendGift={openAudienceGift}
+                      onNotifyFollowers={() => setShowNotificationModal(true)}
                     />
                   </div>
                 )}
@@ -6091,9 +6236,9 @@ export const MerchantApp: React.FC = () => {
               </div>
 
               <DeleteAccountSection
+                variant="merchant"
                 accountLabel={`حساب التاجر: ${currentMerchant?.name || ""}`}
                 onConfirmDelete={() => deleteUserAccountSecure("merchant")}
-                className="rounded-2xl"
               />
 
               <button
@@ -6123,7 +6268,7 @@ export const MerchantApp: React.FC = () => {
               </div>
 
               <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
                   const matchedProduct = merchantProducts.find(
                     (p) => p.id === joinProductId,
@@ -6136,18 +6281,21 @@ export const MerchantApp: React.FC = () => {
                     return;
                   }
 
-                  requestJoinFlashSale({
-                    flashSaleId: joinFlashSaleData.flashSaleId,
-                    storeId: currentMerchant.id,
-                    productId: matchedProduct.id,
-                    promotionalPrice: promPrice,
-                    status: "pending",
-                  }).then(() => {
+                  try {
+                    await requestJoinFlashSale({
+                      flashSaleId: joinFlashSaleData.flashSaleId,
+                      storeId: currentMerchant.id,
+                      productId: matchedProduct.id,
+                      promotionalPrice: promPrice,
+                      status: "pending",
+                    });
                     alert("تم إرسال طلب المشاركة بنجاح! ننتظر موافقة الإدارة.");
                     setJoinFlashSaleData(null);
                     setJoinProductId("");
                     setJoinPromotionalPrice("");
-                  });
+                  } catch {
+                    showToast("error", "فشل الطلب", "تعذر إرسال طلب المشاركة. حاول مرة أخرى.");
+                  }
                 }}
                 className="space-y-4"
               >
@@ -6306,8 +6454,16 @@ export const MerchantApp: React.FC = () => {
                       type="button"
                       onClick={async () => {
                         try {
-                          await updateCustomerProfile({ id: blockConfirm.customerId, isBlocked: !blockConfirm.isBlocked });
-                          alert(blockConfirm.isBlocked ? "تم إلغاء حظر الزبون بنجاح! ✅" : "تم حظر الزبون بنجاح! 🚫");
+                          const ok = await setStoreCustomerBlock(
+                            currentMerchant!.id,
+                            blockConfirm.customerId,
+                            !blockConfirm.isBlocked,
+                          );
+                          if (!ok) {
+                            alert("تعذر تحديث حالة الحظر. حاول مجدداً.");
+                            return;
+                          }
+                          alert(blockConfirm.isBlocked ? "تم إلغاء حظر الزبون بنجاح! ✅" : "تم حظر الزبون من متجرك بنجاح! 🚫");
                         } catch (err) {
                           alert("❌ حدث خطأ أثناء تعديل حالة الحظر");
                         } finally {
@@ -7598,96 +7754,6 @@ export const MerchantApp: React.FC = () => {
           )}
         </AnimatePresence>
 
-        {showPasswordChange && (
-          <div className="fixed inset-0 bg-deep-navy/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-fade-in text-right">
-              <div className="flex justify-between items-center mb-6 pb-2 border-b">
-                <h3 className="font-black text-violet">تغيير كلمة المرور</h3>
-                <button onClick={() => setShowPasswordChange(false)}>
-                  <X size={18} className="text-slate-400" />
-                </button>
-              </div>
-              <div className="space-y-4">
-                {pwStep === 1 ? (
-                  <>
-                    <p className="text-xs text-slate-500 font-bold">
-                      سيتم إرسال رمز التحقق إلى واتساب.
-                    </p>
-                    <button
-                      onClick={async () => {
-                        try {
-                          const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
-                          if (ok) {
-                            setPwStep(2);
-                            showToast("success", "تم إرسال رمز التحقق إلى واتساب!");
-                          } else {
-                            showModal("error", "فشل الإرسال", "يرجى المحاولة لاحقاً");
-                          }
-                        } catch (err: any) {
-                          showModal("error", "خطأ في الاتصال", err.message || "فشل الإرسال.");
-                        }
-                      }}
-                      className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-md"
-                    >
-                      إرسال OTP
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <input
-                      type="text"
-                      value={otpPwCode}
-                      onChange={(e) =>
-                        setOtpPwCode(
-                          normalizeOtpCode(e.target.value).slice(0, 6),
-                        )
-                      }
-                      placeholder="الرمز"
-                      className="w-full border p-3 rounded-2xl text-center text-xl font-mono tracking-widest"
-                    />
-                    <input
-                      type="password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="كلمة المرور الجديدة (8+ حروف)"
-                      className="w-full border p-3 rounded-2xl text-sm"
-                    />
-                    <button
-                      onClick={async () => {
-                        if (!otpPwCode || otpPwCode.length < 6) {
-                          showToast("warning", "يرجى إكمال الرمز");
-                          return;
-                        }
-                        if (newPassword.length < 8) {
-                          showModal("error", "كلمة المرور يجب أن تكون 8 رموز على الأقل");
-                          return;
-                        }
-                        
-                        try {
-                          const isValid = await authService.verifyOTP(currentMerchant.phone, otpPwCode);
-                          if (!isValid) {
-                            showModal("error", "الرمز غير صحيح!");
-                            return;
-                          }
-                          
-                          await updateStoreProfile({ password: newPassword });
-                          setCurrentMerchant({ ...(currentMerchant as any), password: newPassword });
-                          setShowPasswordChange(false);
-                          setTimeout(() => showToast("success", "تم التغيير ✅"), 400);
-                        } catch (error: any) {
-                          showModal("error", "خطأ في التحقق", error.message || "الرمز غير صحيح!");
-                        }
-                      }}
-                      className="w-full py-3 bg-green-600 text-white font-bold rounded-2xl shadow-md"
-                    >
-                      تأكيد التغيير
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
         {/* Modal: إرسال هدية */}
         {giftModal.show && (
           <div className="fixed inset-0 bg-deep-navy/50 backdrop-blur-sm z-[115] flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
@@ -8024,7 +8090,7 @@ export const MerchantApp: React.FC = () => {
                   </div>
 
                   <div className="bg-slate-50 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-4 shadow-inner border border-slate-100">
-                    <div className="bg-white p-4 rounded-2xl shadow-md border">
+                    <div id="merchant-store-qr-print" className="bg-white p-4 rounded-2xl shadow-md border">
                       <QRCode
                         value={`https://e-mahalak.com/store/${currentMerchant.username}`}
                         size={180}
@@ -8047,9 +8113,49 @@ export const MerchantApp: React.FC = () => {
                     يمكنك طباعة هذا الرمز ولصقه على باب المحل أو الأكياس!
                   </p>
                   <button
-                    onClick={() =>
-                      alert("ميزة حفظ الصورة أو طباعتها قيد التطوير")
-                    }
+                    onClick={() => {
+                      const svg = document.querySelector("#merchant-store-qr-print svg") as SVGElement | null;
+                      if (!svg) {
+                        showToast("error", "رمز QR", "تعذر تجهيز رمز QR");
+                        return;
+                      }
+                      const serializer = new XMLSerializer();
+                      const svgString = serializer.serializeToString(svg);
+                      const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+                      const url = URL.createObjectURL(blob);
+                      const img = new Image();
+                      img.onload = () => {
+                        const canvas = document.createElement("canvas");
+                        const pad = 40;
+                        canvas.width = img.width + pad * 2;
+                        canvas.height = img.height + pad * 2 + 48;
+                        const ctx = canvas.getContext("2d");
+                        if (!ctx) return;
+                        ctx.fillStyle = "#ffffff";
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(img, pad, pad);
+                        ctx.fillStyle = "#4F46E5";
+                        ctx.font = "bold 16px Tajawal, Arial, sans-serif";
+                        ctx.textAlign = "center";
+                        ctx.fillText(currentMerchant.shopName || "محلك", canvas.width / 2, canvas.height - 18);
+                        canvas.toBlob((pngBlob) => {
+                          URL.revokeObjectURL(url);
+                          if (!pngBlob) return;
+                          const downloadUrl = URL.createObjectURL(pngBlob);
+                          const a = document.createElement("a");
+                          a.href = downloadUrl;
+                          a.download = `qr-${currentMerchant.username || "store"}.png`;
+                          a.click();
+                          URL.revokeObjectURL(downloadUrl);
+                          window.print();
+                        }, "image/png");
+                      };
+                      img.onerror = () => {
+                        URL.revokeObjectURL(url);
+                        showToast("error", "رمز QR", "تعذر حفظ الصورة");
+                      };
+                      img.src = url;
+                    }}
                     className="w-full py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl shadow-lg transition-transform active:scale-95 flex justify-center items-center gap-2"
                   >
                     حفظ وإرسال للطباعة
@@ -8367,6 +8473,36 @@ export const MerchantApp: React.FC = () => {
 
         <PrivacyPolicyModal open={showPrivacyPolicy} onClose={() => setShowPrivacyPolicy(false)} />
         <AboutUsModal open={showAboutUs} onClose={() => setShowAboutUs(false)} />
+        <ChangePasswordModal
+          open={showPasswordChange}
+          onClose={() => {
+            setShowPasswordChange(false);
+            setPwStep(1);
+            setOtpPwCode("");
+            setNewPassword("");
+          }}
+          phone={currentMerchant?.phone ?? ""}
+          pwStep={pwStep as 1 | 2}
+          otpPwCode={otpPwCode}
+          newPassword={newPassword}
+          onOtpChange={setOtpPwCode}
+          onNewPasswordChange={setNewPassword}
+          onSubmit={handleChangePassword}
+          onResendOtp={async () => {
+            if (!currentMerchant) return;
+            try {
+              const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
+              if (ok) {
+                setPwStep(2);
+                showToast("success", "تم إرسال رمز OTP", "تم الإرسال لتغيير كلمة المرور إلى واتساب!");
+              } else {
+                showToast("error", "فشل إرسال الرمز", "حاول مرة أخرى.");
+              }
+            } catch (err: any) {
+              showToast("error", "خطأ", err.message || "حاول مرة أخرى.");
+            }
+          }}
+        />
       </div>
     );
   }

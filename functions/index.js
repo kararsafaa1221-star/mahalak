@@ -4,7 +4,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
-const { getFirestore, FieldValue, FieldPath } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, FieldPath, Timestamp } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const axios = require("axios");
 const {
@@ -570,6 +570,8 @@ const STORE_PUBLIC_STRIP_KEYS = new Set([
   "contractAgreedAt",
   "terms_accepted",
   "signed_at",
+  "blockedCustomerIds",
+  "inboxClearedOrderIds",
 ]);
 
 /** Build a catalog-safe store document for stores_public (C1). */
@@ -2474,6 +2476,56 @@ exports.resetCustomerPasswordSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, as
   };
 });
 
+/** Reset store password after OTP verification (server-side). */
+exports.resetStorePasswordSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  const { phone, otpCode, newPassword } = request.data || {};
+  if (!phone || !otpCode || !newPassword || String(newPassword).length < 8) {
+    throw new HttpsError("invalid-argument", "phone, otpCode and newPassword (8+) are required");
+  }
+
+  const key = otpPhoneKey(phone);
+  let tokenSnap = await db.collection(OTP_COLLECTION).doc(key).get();
+  if (!tokenSnap.exists) {
+    const fallbackSnap = await findOtpEntry(phone);
+    if (fallbackSnap?.exists) {
+      tokenSnap = fallbackSnap;
+    }
+  }
+  if (!tokenSnap.exists) {
+    throw new HttpsError("not-found", "OTP expired or not requested");
+  }
+  const tokenRef = tokenSnap.ref;
+  const tokenData = tokenSnap.data() || {};
+  if (tokenData.type !== "forgot" || String(tokenData.code) !== String(otpCode)) {
+    throw new HttpsError("permission-denied", "Invalid OTP");
+  }
+  if (Date.now() > Number(tokenData.expiresAt || 0)) {
+    throw new HttpsError("deadline-exceeded", "OTP expired");
+  }
+
+  const docSnap = await findStoreDocByPhone(phone);
+  if (!docSnap) {
+    throw new HttpsError("not-found", "Store not found");
+  }
+
+  const passwordHash = hashPassword(String(newPassword));
+  await db.collection(AUTH_SECRETS_COLLECTION).doc(`store_${docSnap.id}`).set({
+    type: "store",
+    passwordHash,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  await docSnap.ref.update({
+    password: FieldValue.delete(),
+    authUid: request.auth.uid,
+  });
+  await tokenRef.delete();
+
+  return { success: true, storeId: docSnap.id };
+});
+
 function sanitizePromoForClient(data, id) {
   return {
     id: id || data.id,
@@ -3013,6 +3065,21 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
     throw new HttpsError("failed-precondition", "Store unavailable");
   }
 
+  const customerSnap = await db.collection("customers").doc(customerId).get();
+  if (!customerSnap.exists) {
+    throw new HttpsError("not-found", "Customer not found");
+  }
+  const customerData = customerSnap.data() || {};
+  if (customerData.isBlocked) {
+    throw new HttpsError("permission-denied", "Customer account is blocked");
+  }
+  const storeBlockedList = Array.isArray(storeSnap.data()?.blockedCustomerIds)
+    ? storeSnap.data().blockedCustomerIds
+    : [];
+  if (storeBlockedList.includes(customerId)) {
+    throw new HttpsError("permission-denied", "You are blocked from this store");
+  }
+
   // Batch-fetch all products in a single round-trip instead of N sequential reads.
   const productIds = items.map(item => item.productId || item.id).filter(Boolean);
   if (productIds.length === 0) {
@@ -3067,9 +3134,54 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
   });
   const total = Math.max(0, subtotal + delivery - discount);
   const orderId = `ord_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const orderCounterRef = db.collection("counters").doc("orders");
+
+  // One-time (or migration from per-store): seed a GLOBAL order counter and
+  // backfill orderNumber across ALL stores so numbers stay platform-wide.
+  const counterSnap = await orderCounterRef.get();
+  const counterData = counterSnap.exists ? counterSnap.data() || {} : {};
+  if (counterData.version !== "global-v1") {
+    const existingOrders = await db.collection("orders").get();
+    const orderMillis = (d) => {
+      const t = d.data()?.createdAt;
+      if (t && typeof t.toMillis === "function") return t.toMillis();
+      if (t && typeof t.seconds === "number") return t.seconds * 1000;
+      if (t) return new Date(t).getTime() || 0;
+      return 0;
+    };
+    const sorted = [...existingOrders.docs].sort((a, b) => {
+      const diff = orderMillis(a) - orderMillis(b);
+      return diff !== 0 ? diff : a.id.localeCompare(b.id);
+    });
+    const CHUNK = 400;
+    for (let i = 0; i < sorted.length; i += CHUNK) {
+      const batch = db.batch();
+      const slice = sorted.slice(i, i + CHUNK);
+      slice.forEach((d, localIdx) => {
+        batch.update(d.ref, { orderNumber: i + localIdx + 1 });
+      });
+      await batch.commit();
+    }
+    await orderCounterRef.set(
+      {
+        lastNumber: sorted.length,
+        version: "global-v1",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
 
   await db.runTransaction(async (tx) => {
     // ── Phase 1: ALL reads first (Firestore Admin SDK requires reads before writes) ──
+
+    const storeRef = db.collection("stores").doc(storeId);
+    const storeTxnSnap = await tx.get(storeRef);
+    if (!storeTxnSnap.exists) {
+      throw new HttpsError("failed-precondition", "Store unavailable");
+    }
+
+    const orderCounterTxnSnap = await tx.get(orderCounterRef);
 
     // Re-read the promo to prevent race conditions on usage limits.
     let promoData = null;
@@ -3110,6 +3222,12 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       }
     }
 
+    const storeTxnData = storeTxnSnap.data() || {};
+    const nextOrderNumber = Math.max(
+      1,
+      (Number(orderCounterTxnSnap.exists ? orderCounterTxnSnap.data()?.lastNumber : 0) || 0) + 1,
+    );
+
     // ── Phase 3: ALL writes (no more reads after this point) ──
 
     if (promoRef && promoData) {
@@ -3131,10 +3249,20 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       ? (promoData.sponsor === "MERCHANT" ? "MERCHANT" : "ADMIN")
       : null;
 
+    tx.set(
+      orderCounterRef,
+      {
+        lastNumber: nextOrderNumber,
+        version: "global-v1",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
     tx.set(db.collection("orders").doc(orderId), {
       id: orderId,
       storeId,
-      storeName: storeName || storeSnap.data()?.shopName || "",
+      storeName: storeName || storeTxnData.shopName || "",
       customerId,
       customerName: customerName || "",
       customerPhone: customerPhone || "",
@@ -3150,23 +3278,72 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       total,
       promoCode: promoCode || null,
       status: "pending",
+      orderNumber: nextOrderNumber,
       createdAt: FieldValue.serverTimestamp(),
+      // Hold from merchant for 30s so the customer can cancel before the store is notified.
+      customerGraceUntil: Timestamp.fromMillis(Date.now() + 30000),
+      merchantNotified: false,
     });
   });
 
-  await db.collection("notifications").add({
-    userId: storeId,
-    role: "merchant",
-    type: "order",
-    title: "طلب جديد",
-    message: `لديك طلب جديد برقم ${orderId} من ${customerName || "زبون"}`,
-    targetId: orderId,
-    read: false,
-    createdAt: FieldValue.serverTimestamp(),
-  });
+  // Merchant notification is deferred to onOrderCreatedNotifyMerchantAfterGrace.
 
   return { orderId, total, subtotal };
 });
+
+/**
+ * After the customer 30s cancel window, reveal the order to the merchant and send notification.
+ * If the customer cancelled during the window, do nothing.
+ */
+exports.onOrderCreatedNotifyMerchantAfterGrace = onDocumentCreated(
+  { document: "orders/{orderId}", database: "default", timeoutSeconds: 70 },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+
+    const data = snap.data() || {};
+    // Only grace-period orders; legacy orders without the flag are ignored here
+    // (they already used immediate notify in older placeOrderSecure).
+    if (data.merchantNotified !== false) return;
+
+    let waitMs = 30000;
+    const graceUntil = data.customerGraceUntil;
+    if (graceUntil && typeof graceUntil.toMillis === "function") {
+      waitMs = Math.max(0, graceUntil.toMillis() - Date.now());
+    }
+    waitMs = Math.min(waitMs, 60000);
+
+    if (waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+
+    const orderRef = snap.ref;
+    const fresh = await orderRef.get();
+    if (!fresh.exists) return;
+
+    const latest = fresh.data() || {};
+    if (latest.status !== "pending") return;
+    if (latest.merchantNotified === true) return;
+
+    await orderRef.update({
+      merchantNotified: true,
+      merchantNotifiedAt: FieldValue.serverTimestamp(),
+    });
+
+    const orderLabel =
+      latest.orderNumber != null ? `#${latest.orderNumber}` : fresh.id;
+    await db.collection("notifications").add({
+      userId: latest.storeId,
+      role: "merchant",
+      type: "order",
+      title: "طلب جديد",
+      message: `لديك طلب جديد برقم ${orderLabel} من ${latest.customerName || "زبون"}`,
+      targetId: fresh.id,
+      read: false,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  },
+);
 
 function serializeAudienceTimestamp(value) {
   if (!value) return "";
@@ -3181,11 +3358,12 @@ function serializeAudienceTimestamp(value) {
   return String(value);
 }
 
-function sanitizeStoreAudienceCustomer(docSnap) {
+function sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds = []) {
   const data = docSnap.data() || {};
   const { password: _password, authUid: _authUid, ...safe } = data;
+  const id = docSnap.id;
   return {
-    id: docSnap.id,
+    id,
     name: safe.name || "",
     phone: safe.phone || "",
     province: safe.province || "",
@@ -3193,7 +3371,9 @@ function sanitizeStoreAudienceCustomer(docSnap) {
     followedStores: Array.isArray(safe.followedStores) ? safe.followedStores : [],
     storeNotifications: Array.isArray(safe.storeNotifications) ? safe.storeNotifications : [],
     points: Number(safe.points) || 0,
-    isBlocked: Boolean(safe.isBlocked),
+    /** Store-scoped block (merchant audience UI) */
+    isBlocked: storeBlockedIds.includes(id),
+    platformBlocked: Boolean(safe.isBlocked),
     joinedAt: serializeAudienceTimestamp(safe.joinedAt || safe.createdAt),
   };
 }
@@ -3201,8 +3381,9 @@ function sanitizeStoreAudienceCustomer(docSnap) {
 async function syncStoreAudienceMember(storeId, customerId, customerData) {
   const followed = (customerData.followedStores || []).includes(storeId);
   const notifications = (customerData.storeNotifications || []).includes(storeId);
+  const blocked = Boolean(customerData.isBlocked) || Boolean(customerData.blocked);
   const ref = db.collection("store_audience").doc(storeId).collection("members").doc(customerId);
-  if (followed || notifications) {
+  if (followed || notifications || blocked) {
     await ref.set(
       {
         customerId,
@@ -3212,6 +3393,7 @@ async function syncStoreAudienceMember(storeId, customerId, customerData) {
         tier: customerData.tier || "Silver",
         followed,
         notifications,
+        blocked,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
@@ -3306,6 +3488,11 @@ exports.getStoreAudience = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       throw new HttpsError("permission-denied", "Not your store");
     }
 
+    const storeSnap = await db.collection("stores").doc(storeId).get();
+    const storeBlockedIds = Array.isArray(storeSnap.data()?.blockedCustomerIds)
+      ? storeSnap.data().blockedCustomerIds.map(String)
+      : [];
+
     const [followersSnap, notifSnap, orderedSnap] = await Promise.all([
       db.collection("customers").where("followedStores", "array-contains", storeId).limit(500).get(),
       db.collection("customers").where("storeNotifications", "array-contains", storeId).limit(500).get(),
@@ -3313,10 +3500,10 @@ exports.getStoreAudience = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
     ]);
 
     const byId = new Map();
-    followersSnap.docs.forEach((docSnap) => byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap)));
+    followersSnap.docs.forEach((docSnap) => byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds)));
     notifSnap.docs.forEach((docSnap) => {
       if (!byId.has(docSnap.id)) {
-        byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap));
+        byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds));
       }
     });
 
@@ -3334,7 +3521,20 @@ exports.getStoreAudience = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       const snaps = await db.getAll(...refs);
       snaps.forEach((docSnap) => {
         if (docSnap.exists) {
-          byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap));
+          byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds));
+        }
+      });
+    }
+
+    // Include customers blocked by the store even if they have no follow/order history
+    for (let i = 0; i < storeBlockedIds.length; i += 30) {
+      const chunk = storeBlockedIds.slice(i, i + 30).filter((id) => !byId.has(id));
+      if (chunk.length === 0) continue;
+      const refs = chunk.map((id) => db.collection("customers").doc(id));
+      const snaps = await db.getAll(...refs);
+      snaps.forEach((docSnap) => {
+        if (docSnap.exists) {
+          byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds));
         }
       });
     }
@@ -3350,6 +3550,196 @@ exports.getStoreAudience = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
     console.error("[getStoreAudience]", err);
     throw new HttpsError("internal", "Failed to load store audience");
   }
+});
+
+/** Merchant: block / unblock a customer from this store only (not platform-wide). */
+exports.setStoreCustomerBlock = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  const storeId = String(request.data?.storeId || "").trim();
+  const customerId = String(request.data?.customerId || "").trim();
+  const blocked = Boolean(request.data?.blocked);
+  if (!storeId || !customerId) {
+    throw new HttpsError("invalid-argument", "storeId and customerId are required");
+  }
+  if (!(await callerOwnsStore(request.auth.uid, storeId))) {
+    throw new HttpsError("permission-denied", "Not your store");
+  }
+
+  const storeRef = db.collection("stores").doc(storeId);
+  const customerRef = db.collection("customers").doc(customerId);
+  const memberRef = db.collection("store_audience").doc(storeId).collection("members").doc(customerId);
+
+  const [storeSnap, customerSnap] = await Promise.all([storeRef.get(), customerRef.get()]);
+  if (!storeSnap.exists) throw new HttpsError("not-found", "Store not found");
+  if (!customerSnap.exists) throw new HttpsError("not-found", "Customer not found");
+
+  const batch = db.batch();
+  if (blocked) {
+    batch.update(storeRef, { blockedCustomerIds: FieldValue.arrayUnion(customerId) });
+    batch.update(customerRef, { blockedStoreIds: FieldValue.arrayUnion(storeId) });
+  } else {
+    batch.update(storeRef, { blockedCustomerIds: FieldValue.arrayRemove(customerId) });
+    batch.update(customerRef, { blockedStoreIds: FieldValue.arrayRemove(storeId) });
+  }
+
+  const cData = customerSnap.data() || {};
+  batch.set(
+    memberRef,
+    {
+      customerId,
+      name: cData.name || "",
+      phone: cData.phone || "",
+      province: cData.province || "",
+      tier: cData.tier || "Silver",
+      followed: Array.isArray(cData.followedStores) && cData.followedStores.includes(storeId),
+      notifications: Array.isArray(cData.storeNotifications) && cData.storeNotifications.includes(storeId),
+      blocked,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  await batch.commit();
+  return { success: true, storeId, customerId, blocked };
+});
+
+/** Admin/staff: platform-wide customer block toggle (CF-only field). */
+exports.setCustomerPlatformBlock = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  await assertDashboardPermission(request.auth.uid, request.auth.token, "customers");
+  const customerId = String(request.data?.customerId || "").trim();
+  const blocked = Boolean(request.data?.blocked);
+  if (!customerId) {
+    throw new HttpsError("invalid-argument", "customerId is required");
+  }
+  const customerRef = db.collection("customers").doc(customerId);
+  const snap = await customerRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Customer not found");
+  await customerRef.update({ isBlocked: blocked, updatedAt: FieldValue.serverTimestamp() });
+  return { success: true, customerId, blocked };
+});
+
+/** Merchant: hide closed orders from inbox UI only (no status/finance changes). */
+exports.clearMerchantOrderInbox = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  const storeId = String(request.data?.storeId || "").trim();
+  const orderIds = Array.isArray(request.data?.orderIds)
+    ? [...new Set(request.data.orderIds.map((id) => String(id || "").trim()).filter(Boolean))]
+    : [];
+  if (!storeId || orderIds.length === 0) {
+    throw new HttpsError("invalid-argument", "storeId and orderIds are required");
+  }
+  if (orderIds.length > 200) {
+    throw new HttpsError("invalid-argument", "Too many orders (max 200)");
+  }
+  if (!(await callerOwnsStore(request.auth.uid, storeId))) {
+    throw new HttpsError("permission-denied", "Not your store");
+  }
+
+  const CLEARABLE = new Set(["delivered", "returned", "replaced", "rejected", "cancelled"]);
+  const clearedAt = new Date().toISOString();
+  let cleared = 0;
+
+  for (let i = 0; i < orderIds.length; i += 40) {
+    const chunk = orderIds.slice(i, i + 40);
+    const refs = chunk.map((id) => db.collection("orders").doc(id));
+    const snaps = await db.getAll(...refs);
+    const batch = db.batch();
+    let ops = 0;
+    for (const snap of snaps) {
+      if (!snap.exists) continue;
+      const data = snap.data() || {};
+      if (String(data.storeId || "") !== storeId) continue;
+      if (!CLEARABLE.has(String(data.status || ""))) continue;
+      if (data.merchantInboxCleared === true) continue;
+      batch.update(snap.ref, {
+        merchantInboxCleared: true,
+        merchantInboxClearedAt: clearedAt,
+      });
+      ops += 1;
+      cleared += 1;
+    }
+    if (ops > 0) await batch.commit();
+  }
+
+  return { success: true, cleared };
+});
+
+/**
+ * Merchant order replacement: swap line items + mark status "replaced".
+ * Client cannot write items/totals (rules allow only status fields).
+ */
+exports.replaceOrderItems = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  const orderId = String(request.data?.orderId || "").trim();
+  const productId = String(request.data?.productId || "").trim();
+  const quantity = Math.floor(Number(request.data?.quantity || 0));
+  if (!orderId || !productId || !Number.isFinite(quantity) || quantity < 1 || quantity > 999) {
+    throw new HttpsError("invalid-argument", "orderId, productId and valid quantity are required");
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+  const orderSnap = await orderRef.get();
+  if (!orderSnap.exists) throw new HttpsError("not-found", "Order not found");
+  const order = orderSnap.data() || {};
+  const storeId = String(order.storeId || "");
+  if (!(await callerOwnsStore(request.auth.uid, storeId))) {
+    throw new HttpsError("permission-denied", "Not your store");
+  }
+
+  const fromStatus = String(order.status || "");
+  if (fromStatus !== "shipped" && fromStatus !== "delivered") {
+    throw new HttpsError("failed-precondition", "Order cannot be replaced in current status");
+  }
+
+  const productSnap = await db.collection("products").doc(productId).get();
+  if (!productSnap.exists) throw new HttpsError("not-found", "Product not found");
+  const product = productSnap.data() || {};
+  if (String(product.storeId || "") !== storeId) {
+    throw new HttpsError("permission-denied", "Product does not belong to this store");
+  }
+
+  let price = Number(product.finalPrice);
+  if (!Number.isFinite(price) || price < 0) {
+    const base = Number(product.price) || 0;
+    const dtype = String(product.discountType || "none");
+    const dval = Number(product.discountValue) || 0;
+    if (dtype === "percentage" && dval > 0) price = Math.max(0, base - (base * dval) / 100);
+    else if (dtype === "fixed" && dval > 0) price = Math.max(0, base - dval);
+    else price = base;
+  }
+  price = Math.round(price);
+
+  const productName = String(product.name || "منتج");
+  const subtotal = price * quantity;
+  const deliveryPrice = Number(order.deliveryPrice) || 0;
+  const total = Math.max(0, subtotal + deliveryPrice);
+
+  await orderRef.update({
+    items: [{
+      productId,
+      productName: `${productName} (استبدال)`,
+      quantity,
+      price,
+      image: product.image || null,
+    }],
+    subtotal,
+    discountAmount: 0,
+    total,
+    status: "replaced",
+    returnReason: "استبدال بمنتج جديد",
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  return { success: true, orderId, total, subtotal };
 });
 
 /** Merchant sends notifications to followers (server-side validation). */

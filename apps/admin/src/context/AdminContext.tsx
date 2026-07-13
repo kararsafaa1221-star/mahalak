@@ -128,7 +128,7 @@ export interface AdminContextType {
   addBulkNotifications: (notifs: Record<string, unknown>[]) => Promise<void>;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: (userId: string, role: 'customer' | 'merchant' | 'admin') => void;
-  sendAdminNotification: (t: string, m: string, target: string) => void;
+  sendAdminNotification: (t: string, m: string, target: string) => Promise<void>;
 
   // Orders
   updateOrder: (id: string, data: Partial<Order>) => Promise<void>;
@@ -683,6 +683,10 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const getOrderSeqId = useCallback((id: string | undefined | null): string => {
     if (!id) return '';
+    const order = orders.find(o => o.id === id);
+    if (order?.orderNumber != null && Number.isFinite(Number(order.orderNumber))) {
+      return String(order.orderNumber);
+    }
     const sorted = [...orders].sort((a, b) => {
       const getVal = (o: Order) => {
         if (o.createdAt) return new Date(o.createdAt).getTime();
@@ -708,24 +712,20 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const addBulkNotifications = async (notifs: Record<string, unknown>[]) => {
-    try {
-      const batchSize = 400;
-      for (let i = 0; i < notifs.length; i += batchSize) {
-        const chunk = notifs.slice(i, i + batchSize);
-        const batch = writeBatch(db);
-        for (const data of chunk) {
-          const id = 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-          const n = { ...data, id, read: false, createdAt: data.createdAt || new Date().toISOString() };
-          batch.set(doc(db, 'notifications', id), n);
-        }
-        await batch.commit();
+    const batchSize = 400;
+    for (let i = 0; i < notifs.length; i += batchSize) {
+      const chunk = notifs.slice(i, i + batchSize);
+      const batch = writeBatch(db);
+      for (const data of chunk) {
+        const id = 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        const n = { ...data, id, read: false, createdAt: data.createdAt || new Date().toISOString() };
+        batch.set(doc(db, 'notifications', id), n);
       }
-      // Push notifications are dispatched by the onNotificationCreated Cloud Function
-      // trigger, so no manual sendExternalPush call is needed here — doing so would
-      // cause every broadcast recipient to receive two identical pushes.
-    } catch {
-      // ignore — caller handles errors
+      await batch.commit();
     }
+    // Push notifications are dispatched by the onNotificationCreated Cloud Function
+    // trigger, so no manual sendExternalPush call is needed here — doing so would
+    // cause every broadcast recipient to receive two identical pushes.
   };
 
   const markNotificationAsRead = async (id: string) => {
@@ -770,8 +770,8 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setAdminSettings,
   });
 
-  const sendAdminNotification = (t: string, m: string, target: string) => {
-    void adminService.sendBroadcast(t, m, target, buildSvcCtx()).catch(() => {});
+  const sendAdminNotification = async (t: string, m: string, target: string) => {
+    await adminService.sendBroadcast(t, m, target, buildSvcCtx());
   };
 
   // ==========================================

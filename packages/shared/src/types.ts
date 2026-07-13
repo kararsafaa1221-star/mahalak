@@ -129,6 +129,10 @@ export interface Store {
       >
     >;
   };
+  /** Customer IDs blocked from ordering / viewing this store (store-scoped) */
+  blockedCustomerIds?: string[];
+  /** Order IDs hidden from merchant inbox UI only (does not affect reports/wallet). */
+  inboxClearedOrderIds?: string[];
   /** Set when the merchant permanently deletes their account */
   isDeleted?: boolean;
   deletedAt?: string;
@@ -153,7 +157,9 @@ export interface Customer {
   tier: 'Silver' | 'Gold' | 'Platinum' | 'Diamond'; 
   followedStores: string[]; 
   storeNotifications: string[]; 
-  isBlocked: boolean; 
+  isBlocked: boolean;
+  /** Store IDs this customer is blocked from (merchant store-scope) */
+  blockedStoreIds?: string[];
   objectId?: string; 
   lat?: number; 
   lng?: number;
@@ -181,7 +187,7 @@ export interface CustomerSavedLocation {
   address?: string;
   isDefault?: boolean;
 }
-export interface Order { id: string; storeId: string; storeName: string; customerId: string; customerName: string; customerPhone: string; customerAddress: string; customerProvince: string; customerLat?: number; customerLng?: number; items: any[]; subtotal: number; deliveryPrice: number; discountAmount: number; total: number; status: 'pending' | 'accepted' | 'shipped' | 'delivered' | 'returned' | 'replaced' | 'rejected'; rejectionReason?: string; returnReason?: string; createdAt: string; promoCode?: string; objectId?: string; discountSponsor?: 'ADMIN' | 'MERCHANT'; }
+export interface Order { id: string; storeId: string; storeName: string; customerId: string; customerName: string; customerPhone: string; customerAddress: string; customerProvince: string; customerLat?: number; customerLng?: number; items: any[]; subtotal: number; deliveryPrice: number; discountAmount: number; total: number; status: 'pending' | 'accepted' | 'shipped' | 'delivered' | 'returned' | 'replaced' | 'rejected' | 'cancelled'; rejectionReason?: string; returnReason?: string; createdAt: string; promoCode?: string; objectId?: string; discountSponsor?: 'ADMIN' | 'MERCHANT'; /** رقم الطلب الموحّد على مستوى المنصة (لكل المتاجر) */ orderNumber?: number; /** false حتى انتهاء نافذة إلغاء الزبون (30ث) */ merchantNotified?: boolean; customerGraceUntil?: string | { seconds?: number; toMillis?: () => number }; /** إخفاء من قائمة التاجر فقط — لا يؤثر على التقارير أو الحسابات */ merchantInboxCleared?: boolean; merchantInboxClearedAt?: string; }
 
 export interface PayoutRequest {
   id: string;

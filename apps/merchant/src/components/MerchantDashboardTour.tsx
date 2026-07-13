@@ -148,65 +148,59 @@ export const MerchantDashboardTour: React.FC<{
   const prefix = isMobile ? '.tour-step-mobile-' : '.tour-step-desktop-';
   const sidePlacement = isMobile ? 'top' : 'right';
 
-  const steps: Step[] = [
-    {
-      target: `${prefix}home`,
-      title: 'مرحباً بك في محلك!',
-      content:
-        'لوحة التحكم الرئيسية — راقب مبيعاتك، الطلبات، التقييمات، والتنبيهات المهمة من نظرة واحدة.',
-      placement: 'bottom',
-      disableBeacon: true,
-    },
-    {
-      target: `${prefix}products`,
-      title: 'المنتجات',
-      content:
-        'أضف منتجاتك بصور واضحة، حدّد الأسعار والخصومات، وتابع المخزون والحالة من هذا القسم.',
-      placement: sidePlacement,
-    },
-    {
-      target: `${prefix}marketing`,
-      title: 'التسويق',
-      content:
-        'صمّم عروضاً مرئية لمتجرك، شارك روابط المنتجات على وسائل التواصل، واجذب زبائن جدد.',
-      placement: sidePlacement,
-    },
-    {
-      target: `${prefix}orders`,
-      title: 'الطلبات',
-      content:
-        'استقبل الطلبات الجديدة، حدّث حالاتها (تحضير، توصيل، تسليم)، وتواصل مع الزبائن حتى إتمام الطلب.',
-      placement: sidePlacement,
-    },
-    {
-      target: `${prefix}reports`,
-      title: 'التقارير',
-      content:
-        'تابع أداء مبيعاتك، أكثر المنتجات مبيعاً، والأرباح عبر تقارير وإحصائيات تفصيلية.',
-      placement: sidePlacement,
-    },
-    {
-      target: `${prefix}delivery`,
-      title: 'التوصيل',
-      content:
-        'حدّد أسعار التوصيل لمحافظتك وباقي العراق، أو فعّل التوصيل المجاني لزبائنك.',
-      placement: sidePlacement,
-    },
-    {
-      target: `${prefix}profile`,
-      title: 'حسابي',
-      content:
-        'أكمل بيانات متجرك، المحفظة المالية، طرق استلام الأرباح، وإعدادات الحساب والاشتراك.',
-      placement: sidePlacement,
-    },
-    {
-      target: '.tour-step-customers-card',
-      title: 'قائمة زبائني',
-      content:
-        'تعرّف على متابعيك وزبائنك السابقين، ابحث عنهم، أرسل هدايا وخصومات مخصصة، وتواصل معهم مباشرة.',
-      placement: isMobile ? 'top' : 'bottom',
-    },
-  ];
+  const steps: Step[] = useMemo(() => {
+    const base: Step[] = [
+      {
+        target: `${prefix}home`,
+        title: 'مرحباً بك في محلك!',
+        content:
+          'لوحة التحكم الرئيسية — راقب مبيعاتك، الطلبات، التقييمات، والتنبيهات المهمة من نظرة واحدة.',
+        placement: 'bottom',
+        disableBeacon: true,
+      },
+      {
+        target: `${prefix}products`,
+        title: 'المنتجات',
+        content:
+          'أضف منتجاتك بصور واضحة، حدّد الأسعار والخصومات، وتابع المخزون والحالة من هذا القسم.',
+        placement: sidePlacement,
+      },
+      {
+        target: `${prefix}orders`,
+        title: 'الطلبات',
+        content:
+          'استقبل الطلبات الجديدة، حدّث حالاتها (تحضير، توصيل، تسليم)، وتواصل مع الزبائن حتى إتمام الطلب.',
+        placement: sidePlacement,
+      },
+      {
+        target: `${prefix}mystore`,
+        title: 'متجري',
+        content:
+          'من هنا تفتح التقارير، التسويق، أكواد الخصم، وإعدادات التوصيل — كل أدوات تطوير المتجر في مكان واحد.',
+        placement: sidePlacement,
+      },
+      {
+        target: `${prefix}profile`,
+        title: 'حسابي',
+        content:
+          'أكمل بيانات متجرك، المحفظة المالية، طرق استلام الأرباح، وإعدادات الحساب والاشتراك.',
+        placement: sidePlacement,
+      },
+    ];
+
+    // Skip customers card when not mounted (e.g. expired subscription forces non-home tab).
+    if (typeof document !== 'undefined' && document.querySelector('.tour-step-customers-card')) {
+      base.push({
+        target: '.tour-step-customers-card',
+        title: 'قائمة زبائني',
+        content:
+          'تعرّف على متابعيك وزبائنك السابقين، ابحث عنهم، أرسل هدايا وخصومات مخصصة، وتواصل معهم مباشرة.',
+        placement: isMobile ? 'top' : 'bottom',
+      });
+    }
+
+    return base;
+  }, [prefix, sidePlacement, isMobile, run]);
 
   const handleJoyrideCallback = (data: CallBackProps) => {
     const { status, type } = data;

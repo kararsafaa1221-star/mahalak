@@ -222,6 +222,24 @@ body {
   box-shadow: 0 -10px 40px -15px rgba(123, 61, 255, 0.15);
 }
 
+/* رأس الصفحة الزجاجي — يطابق تأثيرات WelcomeScreen */
+.customer-welcome-header {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+/* شريط التنقل السفلي الزجاجي — يطابق تأثيرات WelcomeScreen */
+.customer-welcome-nav {
+  background: rgba(11, 19, 32, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(123, 61, 255, 0.3);
+  box-shadow: 0 -10px 40px -15px rgba(123, 61, 255, 0.35);
+}
+
 .merchant-dropdown {
   background-color: #131C2E;
   border: 1px solid rgba(123, 61, 255, 0.2);
@@ -679,7 +697,10 @@ body {
 }
 
 .welcome-card-glow {
-  animation: welcome-glow-pulse 2.8s ease-in-out infinite;
+  /* ظل ثابت — بدون نبض مستمر (يؤثر على التمرير عند كثرة البطاقات) */
+  box-shadow:
+    0 0 24px -8px rgba(123, 61, 255, 0.35),
+    0 8px 24px -12px rgba(11, 19, 32, 0.45);
 }
 
 .welcome-card-shimmer {
@@ -694,46 +715,56 @@ body {
   background: linear-gradient(
     105deg,
     transparent 30%,
-    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.08) 50%,
     transparent 70%
   );
-  animation: welcome-shimmer-sweep 3.5s ease-in-out infinite;
+  /* تشغيل لمرة واحدة فقط بدل التكرار اللانهائي */
+  animation: welcome-shimmer-sweep 3.5s ease-in-out 1;
   pointer-events: none;
 }
 
 .welcome-card-border-glow {
   position: relative;
-  isolation: isolate;
 }
 
+/* الحدود المتحركة/المقنّعة مكلفة جداً على الموبايل — نعتمد على border العادي في className */
 .welcome-card-border-glow::before {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: inherit;
-  padding: 2px;
-  background: linear-gradient(90deg, #7b3dff, #b18cff, #ffffff, #b18cff, #7b3dff);
-  background-size: 300% 100%;
-  animation: welcome-border-flow 2.5s linear infinite;
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  mask-composite: exclude;
-  pointer-events: none;
-  z-index: -1;
-  opacity: 0.85;
+  content: none;
+  display: none;
 }
 
 .welcome-icon-pulse {
-  animation: welcome-icon-pulse 2s ease-in-out infinite;
+  /* نبض خفيف جداً لعنصر واحد فقط */
+  box-shadow:
+    0 0 18px rgba(123, 61, 255, 0.4),
+    0 0 32px rgba(123, 61, 255, 0.18);
 }
 
 .welcome-btn-pulse {
-  animation: welcome-btn-glow 2s ease-in-out infinite;
+  /* ظل ثابت بدل أنيميشن box-shadow اللانهائي */
+  box-shadow: 0 8px 28px 0 rgba(177, 140, 255, 0.28);
+}
+
+/* بطاقات القوائم — لا ترسم خارج الشاشة لتحسين التمرير */
+.perf-list-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 280px;
+}
+
+/* حدود التوهج مكلفة على القوائم الكثيفة — عطّلها داخل القوائم */
+.perf-list-card.welcome-card-border-glow::before,
+.perf-list-card .welcome-card-border-glow::before {
+  content: none !important;
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-star,
+  .welcome-particle,
+  .welcome-aurora,
+  .welcome-card-shimmer::after {
+    animation: none !important;
+  }
 }
 
 /* شريط التمرير المخصص (Custom Scrollbar) - مخفي تماماً لتسهيل التنقل باللمس والإيماءات */
@@ -752,6 +783,11 @@ body {
 button, a, [role="button"] {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Toasts / alerts above LegalSheetModal (z-index 10050) */
+.swal2-container.swal2-mahalak-toast {
+  z-index: 11000 !important;
 }
 
 /* إخفاء السهم في حقول الأرقام */

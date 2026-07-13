@@ -24,7 +24,7 @@ import { db } from '../../lib/firebase';
 import { MapContainer, TileLayer, Marker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { showConfirm, showToast } from '../../utils/alerts';
-import { isStoreSubscriptionActive, buildExpiredSubscriptionPatch } from '@shared/utils/store';
+import { isStoreSubscriptionActive, buildExpiredSubscriptionPatch, buildActiveSubscriptionPatch } from '@shared/utils/store';
 import { DEFAULT_SPONSORED_AD_BADGE, getMerchantAdsSectionOrder, reorderSponsoredAds } from '@shared/utils/sponsoredAds';
 import L from 'leaflet';
 
@@ -103,17 +103,21 @@ const BroadcastForm: React.FC = () => {
 
   const buildTarget = () => `${audience}:${scope}`;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !message.trim() || totalCount === 0) return;
 
-    sendAdminNotification(title.trim(), message.trim(), buildTarget());
-    setSent(true);
-    setTitle('');
-    setMessage('');
-    setAudience('customers');
-    setScope('all');
-    setTimeout(() => setSent(false), 3000);
+    try {
+      await sendAdminNotification(title.trim(), message.trim(), buildTarget());
+      setSent(true);
+      setTitle('');
+      setMessage('');
+      setAudience('customers');
+      setScope('all');
+      setTimeout(() => setSent(false), 3000);
+    } catch {
+      showToast('error', 'فشل الإرسال', 'تعذر إرسال الإشعار. حاول مرة أخرى.');
+    }
   };
 
   const audienceSummary =
@@ -280,7 +284,7 @@ const DatabasePanel: React.FC = () => {
         try {
             if (generateVirtualData) {
                 const res = await generateVirtualData(numStores, numProducts);
-                setAlertState({ message: res.message, type: 'success' });
+                setAlertState({ message: res.message, type: res.success ? 'success' : 'error' });
             }
         } catch (e: any) {
             setAlertState({ message: '❌ فشل التوليد: ' + (e.message || e), type: 'error' });
@@ -298,7 +302,7 @@ const DatabasePanel: React.FC = () => {
                 try {
                     if (deleteAllVirtualData) {
                         const res = await deleteAllVirtualData();
-                        setAlertState({ message: res.message, type: 'success' });
+                        setAlertState({ message: res.message, type: res.success ? 'success' : 'error' });
                     }
                 } catch (e: any) {
                     setAlertState({ message: '❌ فشل الحذف: ' + (e.message || e), type: 'error' });
@@ -942,6 +946,7 @@ const provinceCoordinates: Record<string, [number, number]> = {
 
 type AdsSettingsDraft = {
   adInterval: number;
+  adBadgeText: string;
   ads: any[];
   merchantAdInterval: number;
   merchantAdsSectionOrder: ReturnType<typeof getMerchantAdsSectionOrder>;
@@ -949,13 +954,18 @@ type AdsSettingsDraft = {
   merchantMediaAds: any[];
 };
 
+/** Deep-clone ads so draft edits never mutate live adminSettings by reference. */
+const cloneSponsoredAdsList = (ads: unknown): any[] =>
+  Array.isArray(ads) ? ads.map((ad) => ({ ...(ad as Record<string, unknown>) })) : [];
+
 const createAdsSettingsDraft = (settings: Record<string, any>): AdsSettingsDraft => ({
   adInterval: settings.adInterval ?? 5,
-  ads: [...(settings.ads || [])],
+  adBadgeText: typeof settings.adBadgeText === 'string' ? settings.adBadgeText : DEFAULT_SPONSORED_AD_BADGE,
+  ads: cloneSponsoredAdsList(settings.ads),
   merchantAdInterval: settings.merchantAdInterval ?? settings.adInterval ?? 5,
   merchantAdsSectionOrder: getMerchantAdsSectionOrder(settings.merchantAdsSectionOrder),
-  merchantDeliveryAds: [...(settings.merchantDeliveryAds || [])],
-  merchantMediaAds: [...(settings.merchantMediaAds || [])],
+  merchantDeliveryAds: cloneSponsoredAdsList(settings.merchantDeliveryAds ?? settings.merchantAds),
+  merchantMediaAds: cloneSponsoredAdsList(settings.merchantMediaAds),
 });
 
 const SponsoredAdOrderControls: React.FC<{
@@ -1005,7 +1015,8 @@ export const AdminPanel: React.FC = () => {
     rechargeCodes, generateRechargeCodes, deleteRechargeCode, seedDatabase,
     generateVirtualData, deleteAllVirtualData,
     getCustomerSeqId, getOrderSeqId,
-    payoutRequests, completePayout
+    payoutRequests, completePayout,
+    updateOrderStatus,
   } = useApp();
 
   // ==========================================
@@ -1114,9 +1125,14 @@ export const AdminPanel: React.FC = () => {
 
   const handleGenerateCodes = async () => {
     setIsGenerating(true);
-    await generateRechargeCodes(rechargeCount, rechargePoints);
-    setIsGenerating(false);
-    alert(`تم توليد ${rechargeCount} كود بنجاح!`);
+    try {
+      await generateRechargeCodes(rechargeCount, rechargePoints);
+      alert(`تم توليد ${rechargeCount} كود بنجاح!`);
+    } catch (err: unknown) {
+      alert('فشل توليد الأكواد: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsGenerating(false);
+    }
   };
   const heatmapPoints = useMemo(() => {
     if (activeTab !== 'heatmap') return [] as [number, number, number][];
@@ -1209,20 +1225,44 @@ export const AdminPanel: React.FC = () => {
     name: string;
     description: string;
     price: number;
+    costPrice: number;
+    inventory: number | '';
     discountType: 'none' | 'percent' | 'amount';
     discountValue: number;
     finalPrice: number;
     image: string;
     status: 'published' | 'draft' | 'archived';
+    isFreeDelivery: boolean;
+    specialOffer: string;
+    barcode: string;
+    brand: string;
+    color: string;
+    size: string;
+    weight: string;
+    condition: string;
+    warranty: string;
+    tags: string;
   }>({
     name: '',
     description: '',
     price: 0,
+    costPrice: 0,
+    inventory: '',
     discountType: 'none',
     discountValue: 0,
     finalPrice: 0,
     image: '',
-    status: 'published'
+    status: 'published',
+    isFreeDelivery: false,
+    specialOffer: '',
+    barcode: '',
+    brand: '',
+    color: '',
+    size: '',
+    weight: '',
+    condition: '',
+    warranty: '',
+    tags: '',
   });
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -1236,12 +1276,13 @@ export const AdminPanel: React.FC = () => {
 
   const handlePrint = useReactToPrint({
     contentRef: invoiceRef,
-    documentTitle: `Invoice-${selectedOrder?.id || 'Order'}`,
+    documentTitle: `Invoice-${selectedOrder ? (getOrderSeqId(selectedOrder.id) || selectedOrder.id) : 'Order'}`,
   });
 
   const handleShareWhatsAppInvoice = (order: Order) => {
+    const orderNo = getOrderSeqId(order.id) || order.id;
     let msg = `*فاتورة طلب - منصة محلك*\n`;
-    msg += `الطلب: ${order.id}\n`;
+    msg += `الطلب: #${orderNo}\n`;
     msg += `الزبون: ${order.customerName}\n`;
     msg += `الهاتف: ${order.customerPhone}\n\n`;
     msg += `*المنتجات:*\n`;
@@ -1289,11 +1330,23 @@ export const AdminPanel: React.FC = () => {
           name: product.name || '',
           description: product.description || '',
           price: product.price || 0,
+          costPrice: product.costPrice || 0,
+          inventory: typeof product.inventory === 'number' ? product.inventory : '',
           discountType: product.discountType || 'none',
           discountValue: product.discountValue || 0,
           finalPrice: product.finalPrice || 0,
           image: product.image || '',
-          status: product.status || 'published'
+          status: product.status || 'published',
+          isFreeDelivery: !!product.isFreeDelivery,
+          specialOffer: product.specialOffer || '',
+          barcode: product.barcode || '',
+          brand: product.brand || '',
+          color: product.color || '',
+          size: product.size || '',
+          weight: product.weight || '',
+          condition: product.condition || '',
+          warranty: product.warranty || '',
+          tags: Array.isArray(product.tags) ? product.tags.join(', ') : '',
         });
       }, 0);
       return () => clearTimeout(timer);
@@ -1715,12 +1768,18 @@ export const AdminPanel: React.FC = () => {
       const matchSearch = searchQuery === '' || 
         o.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
         getOrderSeqId(o.id).includes(searchQuery.replace(/^#/, '')) ||
+        String(o.orderNumber || '').includes(searchQuery.replace(/^#/, '')) ||
         o.storeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         orderMatchesCustomerSearch(o, searchQuery, {
           customer: customerById.get(o.customerId),
           displaySeqId: getCustomerSeqId(o.customerId),
         });
       return matchStatus && matchSearch;
+    }).sort((a, b) => {
+      const numA = Number(a.orderNumber) || parseInt(getOrderSeqId(a.id), 10) || 0;
+      const numB = Number(b.orderNumber) || parseInt(getOrderSeqId(b.id), 10) || 0;
+      if (numA !== numB) return numB - numA;
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
     });
   }, [activeTab, orders, stores, customers, customerById, orderFilter, searchQuery, getCustomerSeqId, getOrderSeqId]);
 
@@ -2114,29 +2173,8 @@ export const AdminPanel: React.FC = () => {
               onOpenModal={() => setShowAutoSubSettingsModal(true)}
             />
 
-            {/* الإحصائيات الإضافية (ريلز وتقييمات ومنتجات) */}
+            {/* الإحصائيات الإضافية */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {/*
-              <div 
-                onClick={() => handleTabSelect('reels')}
-                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
-              >
-                <div className="flex items-center space-x-3 space-x-reverse">
-                  <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
-                    <Film size={20} />
-                  </div>
-                  <div>
-                    <span className="text-lg font-black text-slate-800 block">{stats.totalReels}</span>
-                    <span className="text-[10px] text-slate-400 font-bold">ريلز منشورة</span>
-                  </div>
-                </div>
-                <div className="mt-3 pt-3 border-t border-slate-50 flex justify-between text-[10px] font-semibold">
-                  <span className="text-blue-500">مشاهدات: {(stats.totalReelViews || 0).toLocaleString()}</span>
-                  <span className="text-pink-500">إعجابات: {(stats.totalReelLikes || 0).toLocaleString()}</span>
-                </div>
-              </div>
-              */}
-
               <div 
                 onClick={() => handleTabSelect('reviews')}
                 className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition"
@@ -3190,10 +3228,14 @@ export const AdminPanel: React.FC = () => {
                                         const mt = String(newDate.getMonth() + 1).padStart(2, '0');
                                         const dy = String(newDate.getDate()).padStart(2, '0');
                                         const finalExpiry = yr + '-' + mt + '-' + dy;
+                                        const validUntilDate = new Date(newDate);
+                                        validUntilDate.setHours(23, 59, 59, 999);
 
-                                        await adminUpdateStore(activeStore.id, {
-                                          subscriptionExpiry: finalExpiry
-                                        });
+                                        await adminUpdateStore(activeStore.id, buildActiveSubscriptionPatch(
+                                          finalExpiry,
+                                          activeStore.subscriptionId || 'sub_manual',
+                                          validUntilDate.toISOString(),
+                                        ));
                                         alert('📉 تم تقليل مدة الاشتراك بنجاح! التاريخ الجديد: ' + finalExpiry);
                                       } catch (err: any) {
                                         alert('خطأ أثناء تقليل الاشتراك: ' + err.message);
@@ -3351,6 +3393,59 @@ export const AdminPanel: React.FC = () => {
                                 <span className="text-sm font-black text-[#9952FF] font-mono">{(productEditForm.finalPrice || 0).toLocaleString()} د.ع</span>
                               </div>
 
+                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-white p-3 rounded-xl border">
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">سعر التكلفة</label>
+                                  <input type="number" value={productEditForm.costPrice} onChange={(e) => setProductEditForm({ ...productEditForm, costPrice: Number(e.target.value) || 0 })} className="w-full text-xs text-center border p-1 rounded font-mono" />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">المخزون</label>
+                                  <input type="number" value={productEditForm.inventory} onChange={(e) => setProductEditForm({ ...productEditForm, inventory: e.target.value === '' ? '' : Number(e.target.value) })} className="w-full text-xs text-center border p-1 rounded font-mono" placeholder="غير محدود" />
+                                </div>
+                                <div className="flex items-end">
+                                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 mb-1">
+                                    <input type="checkbox" checked={productEditForm.isFreeDelivery} onChange={(e) => setProductEditForm({ ...productEditForm, isFreeDelivery: e.target.checked })} />
+                                    توصيل مجاني
+                                  </label>
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">الباركود</label>
+                                  <input value={productEditForm.barcode} onChange={(e) => setProductEditForm({ ...productEditForm, barcode: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">العلامة</label>
+                                  <input value={productEditForm.brand} onChange={(e) => setProductEditForm({ ...productEditForm, brand: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">اللون</label>
+                                  <input value={productEditForm.color} onChange={(e) => setProductEditForm({ ...productEditForm, color: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">المقاس</label>
+                                  <input value={productEditForm.size} onChange={(e) => setProductEditForm({ ...productEditForm, size: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">الوزن</label>
+                                  <input value={productEditForm.weight} onChange={(e) => setProductEditForm({ ...productEditForm, weight: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">الحالة</label>
+                                  <input value={productEditForm.condition} onChange={(e) => setProductEditForm({ ...productEditForm, condition: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">الضمان</label>
+                                  <input value={productEditForm.warranty} onChange={(e) => setProductEditForm({ ...productEditForm, warranty: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div className="sm:col-span-2">
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">عرض خاص</label>
+                                  <input value={productEditForm.specialOffer} onChange={(e) => setProductEditForm({ ...productEditForm, specialOffer: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                                <div className="sm:col-span-3">
+                                  <label className="block text-[9px] text-slate-400 font-bold mb-1">الوسوم (مفصولة بفاصلة)</label>
+                                  <input value={productEditForm.tags} onChange={(e) => setProductEditForm({ ...productEditForm, tags: e.target.value })} className="w-full text-xs border p-1 rounded" />
+                                </div>
+                              </div>
+
                               <div className="grid grid-cols-2 gap-4 items-center">
                                 <ImageUploader 
                                   value={productEditForm.image}
@@ -3379,12 +3474,25 @@ export const AdminPanel: React.FC = () => {
                                             name: productEditForm.name,
                                             description: productEditForm.description,
                                             price: Number(productEditForm.price),
+                                            costPrice: Number(productEditForm.costPrice) || 0,
+                                            inventory: productEditForm.inventory === '' ? undefined : Number(productEditForm.inventory),
                                             discountType: productEditForm.discountType,
                                             discountValue: Number(productEditForm.discountValue),
                                             finalPrice: Number(productEditForm.finalPrice),
                                             image: productEditForm.image || 'https://images.unsplash.com/photo-1542291026-7eec264c27ff',
                                             status: productEditForm.status,
-                                            isFreeDelivery: false,
+                                            isFreeDelivery: !!productEditForm.isFreeDelivery,
+                                            specialOffer: productEditForm.specialOffer || undefined,
+                                            barcode: productEditForm.barcode || undefined,
+                                            brand: productEditForm.brand || undefined,
+                                            color: productEditForm.color || undefined,
+                                            size: productEditForm.size || undefined,
+                                            weight: productEditForm.weight || undefined,
+                                            condition: productEditForm.condition || undefined,
+                                            warranty: productEditForm.warranty || undefined,
+                                            tags: productEditForm.tags
+                                              ? productEditForm.tags.split(',').map((t) => t.trim()).filter(Boolean)
+                                              : [],
                                             createdAt: new Date().toISOString()
                                           });
                                           alert('🎉 تم إنشاء المنتج وإضافته بنجاح!');
@@ -3393,11 +3501,25 @@ export const AdminPanel: React.FC = () => {
                                             name: productEditForm.name,
                                             description: productEditForm.description,
                                             price: Number(productEditForm.price),
+                                            costPrice: Number(productEditForm.costPrice) || 0,
+                                            inventory: productEditForm.inventory === '' ? undefined : Number(productEditForm.inventory),
                                             discountType: productEditForm.discountType,
                                             discountValue: Number(productEditForm.discountValue),
                                             finalPrice: Number(productEditForm.finalPrice),
                                             image: productEditForm.image,
-                                            status: productEditForm.status
+                                            status: productEditForm.status,
+                                            isFreeDelivery: !!productEditForm.isFreeDelivery,
+                                            specialOffer: productEditForm.specialOffer || '',
+                                            barcode: productEditForm.barcode || '',
+                                            brand: productEditForm.brand || '',
+                                            color: productEditForm.color || '',
+                                            size: productEditForm.size || '',
+                                            weight: productEditForm.weight || '',
+                                            condition: productEditForm.condition || '',
+                                            warranty: productEditForm.warranty || '',
+                                            tags: productEditForm.tags
+                                              ? productEditForm.tags.split(',').map((t) => t.trim()).filter(Boolean)
+                                              : [],
                                           });
                                           alert('🎉 تم تحديث بيانات وحقول المنتج بنجاح!');
                                         }
@@ -3477,14 +3599,29 @@ export const AdminPanel: React.FC = () => {
                     <div className="p-6 border-t border-slate-100 flex gap-2 justify-end bg-slate-50 flex-wrap shrink-0">
                       {activeStore.status !== 'active' && (
                         <button 
-                          onClick={() => { updateStoreStatus(activeStore.id, 'active'); setSelectedStore(null); }}
+                          onClick={async () => {
+                            try {
+                              await updateStoreStatus(activeStore.id, 'active');
+                              setSelectedStore(null);
+                              showToast('success', 'تم التفعيل', 'تم تفعيل المتجر بنجاح.');
+                            } catch (err: unknown) {
+                              showToast('error', 'فشل التفعيل', err instanceof Error ? err.message : 'تعذر تفعيل المتجر');
+                            }
+                          }}
                           className="px-4 py-2.5 bg-green-500 hover:bg-green-600 text-white font-bold text-xs rounded-xl transition"
                         >
                           تفعيل المتجر
                         </button>
                       )}
                       <button 
-                        onClick={() => { toggleStoreBan(activeStore.id); setSelectedStore(null); }}
+                        onClick={async () => {
+                          try {
+                            await toggleStoreBan(activeStore.id);
+                            setSelectedStore(null);
+                          } catch (err: unknown) {
+                            showToast('error', 'فشلت العملية', err instanceof Error ? err.message : 'تعذر تحديث حالة الحظر');
+                          }
+                        }}
                         className={'px-4 py-2.5 font-bold text-xs rounded-xl transition ' + (activeStore.isBanned ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-700')}
                       >
                         {activeStore.isBanned ? 'فك الحظر عن المتجر' : 'حظر المتجر نهائياً'}
@@ -3939,16 +4076,25 @@ export const AdminPanel: React.FC = () => {
                       <div className="flex-1">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center space-x-2 space-x-reverse">
-                            <span className="text-xs font-black bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg">{order.id}</span>
+                            <span className="text-xs font-black bg-[#4D2980]/10 text-[#4D2980] px-2.5 py-1 rounded-lg inline-flex items-center gap-1">
+                              #{getOrderSeqId(order.id) || '—'}
+                              <CopyButton text={getOrderSeqId(order.id)} size={9} />
+                            </span>
                             <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
                               order.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                               order.status === 'accepted' ? 'bg-green-100 text-green-800' :
+                              order.status === 'shipped' ? 'bg-violet-100 text-violet-800' :
+                              order.status === 'delivered' ? 'bg-emerald-100 text-emerald-800' :
                               order.status === 'cancelled' ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-red-100 text-red-800'
                             }`}>
                               {order.status === 'pending' && 'قيد الانتظار'}
                               {order.status === 'accepted' && 'مقبول ✅'}
+                              {order.status === 'shipped' && 'في الطريق'}
+                              {order.status === 'delivered' && 'تم التوصيل'}
+                              {order.status === 'returned' && 'مرتجع'}
+                              {order.status === 'replaced' && 'مستبدل'}
                               {order.status === 'rejected' && 'مرفوض ❌'}
-                              {order.status === 'cancelled' && 'ملغي ⚠️'}
+                              {order.status === 'cancelled' && 'ملغى ⚠️'}
                             </span>
                           </div>
                           <span className="text-[10px] text-slate-400">
@@ -3975,9 +4121,16 @@ export const AdminPanel: React.FC = () => {
                           </div>
                         </div>
 
-                        {(order.status === 'rejected' || order.status === 'cancelled') && order.rejectionReason && (
+                        {(order.status === 'rejected' || order.status === 'cancelled' || order.status === 'returned' || order.status === 'replaced') && (
                           <div className="mt-2 bg-rose-50 text-rose-600 text-[10px] px-3 py-2 rounded-lg border border-rose-100">
-                            <strong>{order.status === 'cancelled' ? 'سبب الإلغاء:' : 'سبب الرفض:'}</strong> {order.rejectionReason}
+                            <strong>
+                              {order.status === 'cancelled' ? 'سبب الإلغاء:' :
+                               order.status === 'rejected' ? 'سبب الرفض:' :
+                               order.status === 'returned' ? 'سبب الإرجاع:' : 'سبب الاستبدال:'}
+                            </strong>{' '}
+                            {order.status === 'cancelled'
+                              ? (order.rejectionReason || 'ألغاه الزبون خلال مهلة الإلغاء')
+                              : (order.rejectionReason || order.returnReason || '—')}
                           </div>
                         )}
                       </div>
@@ -4030,11 +4183,18 @@ export const AdminPanel: React.FC = () => {
                       <h3 className="text-lg font-black text-slate-800">تفاصيل الطلب {selectedOrder.id}</h3>
                       <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
                         selectedOrder.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                        selectedOrder.status === 'accepted' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        selectedOrder.status === 'accepted' || selectedOrder.status === 'shipped' || selectedOrder.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                        'bg-red-100 text-red-800'
                       }`}>
                         {selectedOrder.status === 'pending' && 'قيد الانتظار'}
                         {selectedOrder.status === 'accepted' && 'مقبول'}
+                        {selectedOrder.status === 'shipped' && 'قيد التوصيل'}
+                        {selectedOrder.status === 'delivered' && 'تم التوصيل'}
                         {selectedOrder.status === 'rejected' && 'مرفوض'}
+                        {selectedOrder.status === 'cancelled' && 'ملغي'}
+                        {selectedOrder.status === 'returned' && 'مرتجع'}
+                        {selectedOrder.status === 'replaced' && 'استبدال'}
+                        {!['pending','accepted','shipped','delivered','rejected','cancelled','returned','replaced'].includes(selectedOrder.status) && selectedOrder.status}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -4052,6 +4212,42 @@ export const AdminPanel: React.FC = () => {
                   </div>
                   
                   <div className="p-6 space-y-4">
+                    <div className="bg-slate-50 p-4 rounded-xl space-y-3">
+                      <h4 className="text-xs font-bold text-slate-600">تغيير حالة الطلب</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { id: 'pending', label: 'قيد الانتظار' },
+                          { id: 'accepted', label: 'مقبول' },
+                          { id: 'shipped', label: 'قيد التوصيل' },
+                          { id: 'delivered', label: 'تم التوصيل' },
+                          { id: 'rejected', label: 'مرفوض' },
+                          { id: 'cancelled', label: 'ملغي' },
+                          { id: 'returned', label: 'مرتجع' },
+                        ].map((st) => (
+                          <button
+                            key={st.id}
+                            type="button"
+                            disabled={selectedOrder.status === st.id}
+                            onClick={async () => {
+                              let reason: string | undefined;
+                              if (st.id === 'rejected' || st.id === 'cancelled' || st.id === 'returned') {
+                                reason = window.prompt('سبب التغيير (اختياري):') || undefined;
+                              }
+                              await updateOrderStatus(selectedOrder.id, st.id, reason);
+                              setSelectedOrder({ ...selectedOrder, status: st.id as typeof selectedOrder.status });
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-black border transition ${
+                              selectedOrder.status === st.id
+                                ? 'bg-[#9952FF] text-white border-[#9952FF]'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-[#9952FF] hover:text-[#9952FF]'
+                            }`}
+                          >
+                            {st.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <div className="bg-slate-50 p-4 rounded-xl space-y-2">
                       <h4 className="text-xs font-bold text-slate-600 mb-2">المنتجات المطلوبة:</h4>
                       {selectedOrder.items.map((item, idx) => (
@@ -5431,6 +5627,20 @@ export const AdminPanel: React.FC = () => {
                   </div>
                 </div>
 
+                <div className="p-4 bg-slate-50 rounded-xl space-y-2">
+                  <div>
+                    <span className="text-xs font-bold text-slate-700 block">نص شارة الإعلانات الافتراضي</span>
+                    <span className="text-[10px] text-slate-400">يظهر على الإعلانات التي لم يُحدد لها نص شارة خاص. اتركه فارغاً لإخفاء الشارة الافتراضية.</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={adsDraft.adBadgeText}
+                    onChange={(e) => patchAdsDraft({ adBadgeText: e.target.value })}
+                    placeholder={DEFAULT_SPONSORED_AD_BADGE}
+                    className="w-full border p-2 rounded-lg text-sm"
+                  />
+                </div>
+
                 <p className="text-[10px] text-slate-400 font-bold px-1">استخدم أسهم الترتيب على كل إعلان لتحديد ترتيب ظهوره في التطبيق.</p>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -5660,14 +5870,14 @@ export const AdminPanel: React.FC = () => {
                     onClick={() => patchAdsDraft({ merchantAdsSectionOrder: ['delivery', 'media'] })}
                     className={`flex-1 px-3 py-2 rounded-lg text-[10px] font-bold border transition ${adsDraft.merchantAdsSectionOrder[0] === 'delivery' ? 'bg-[#9952FF] text-white border-[#9952FF]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                   >
-                    المجموعة الأولى ثم الثانية
+                    توصيل ثم وسائط
                   </button>
                   <button
                     type="button"
                     onClick={() => patchAdsDraft({ merchantAdsSectionOrder: ['media', 'delivery'] })}
                     className={`flex-1 px-3 py-2 rounded-lg text-[10px] font-bold border transition ${adsDraft.merchantAdsSectionOrder[0] === 'media' ? 'bg-[#9952FF] text-white border-[#9952FF]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                   >
-                    المجموعة الثانية ثم الأولى
+                    وسائط ثم توصيل
                   </button>
                 </div>
               </div>
@@ -5675,15 +5885,15 @@ export const AdminPanel: React.FC = () => {
               <p className="text-[10px] text-slate-400 font-bold px-1">استخدم أسهم الترتيب على كل إعلان لتحديد ترتيب ظهوره داخل مجموعته.</p>
 
               <div>
-                <h4 className="text-xs font-bold text-slate-600 mb-3">المجموعة الأولى</h4>
+                <h4 className="text-xs font-bold text-slate-600 mb-3">إعلانات التوصيل</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {(adsDraft.merchantDeliveryAds || []).map((ad: any, index: number) => (
                   <div key={ad.id} className="p-4 border border-slate-100 rounded-2xl bg-white space-y-3 relative shadow-sm hover:shadow-md transition">
                     <SponsoredAdOrderControls
                       index={index}
                       total={(adsDraft.merchantDeliveryAds || []).length}
-                      onMoveUp={() => patchAdsDraft({ merchantDeliveryAds: reorderSponsoredAds(adminSettings.merchantDeliveryAds || [], index, 'up') })}
-                      onMoveDown={() => patchAdsDraft({ merchantDeliveryAds: reorderSponsoredAds(adminSettings.merchantDeliveryAds || [], index, 'down') })}
+                      onMoveUp={() => patchAdsDraft({ merchantDeliveryAds: reorderSponsoredAds(adsDraft.merchantDeliveryAds || [], index, 'up') })}
+                      onMoveDown={() => patchAdsDraft({ merchantDeliveryAds: reorderSponsoredAds(adsDraft.merchantDeliveryAds || [], index, 'down') })}
                     />
                     <button 
                       onClick={() => {
@@ -5791,15 +6001,15 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               <div className="border-t border-slate-100 pt-6">
-                <h4 className="text-xs font-bold text-slate-600 mb-3">المجموعة الثانية</h4>
+                <h4 className="text-xs font-bold text-slate-600 mb-3">إعلانات الوسائط</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {(adsDraft.merchantMediaAds || []).map((ad: any, index: number) => (
                   <div key={ad.id} className="p-4 border border-slate-100 rounded-2xl bg-white space-y-3 relative shadow-sm hover:shadow-md transition">
                     <SponsoredAdOrderControls
                       index={index}
                       total={(adsDraft.merchantMediaAds || []).length}
-                      onMoveUp={() => patchAdsDraft({ merchantMediaAds: reorderSponsoredAds(adminSettings.merchantMediaAds || [], index, 'up') })}
-                      onMoveDown={() => patchAdsDraft({ merchantMediaAds: reorderSponsoredAds(adminSettings.merchantMediaAds || [], index, 'down') })}
+                      onMoveUp={() => patchAdsDraft({ merchantMediaAds: reorderSponsoredAds(adsDraft.merchantMediaAds || [], index, 'up') })}
+                      onMoveDown={() => patchAdsDraft({ merchantMediaAds: reorderSponsoredAds(adsDraft.merchantMediaAds || [], index, 'down') })}
                     />
                     <button 
                       onClick={() => {
@@ -6412,15 +6622,20 @@ export const AdminPanel: React.FC = () => {
 
             <div className="flex gap-3">
               <button
-                onClick={() => {
-                  if (deleteConfirmModal.type === 'store') {
-                    deleteStore(deleteConfirmModal.id);
-                  } else if (deleteConfirmModal.type === 'customer') {
-                    deleteCustomer(deleteConfirmModal.id);
-                  } else if (deleteConfirmModal.type === 'flashSale') {
-                    deleteFlashSale(deleteConfirmModal.id);
+                onClick={async () => {
+                  try {
+                    if (deleteConfirmModal.type === 'store') {
+                      await deleteStore(deleteConfirmModal.id);
+                    } else if (deleteConfirmModal.type === 'customer') {
+                      await deleteCustomer(deleteConfirmModal.id);
+                    } else if (deleteConfirmModal.type === 'flashSale') {
+                      await deleteFlashSale(deleteConfirmModal.id);
+                    }
+                    setDeleteConfirmModal(null);
+                    showToast('success', 'تم الحذف', 'تم تنفيذ عملية الحذف بنجاح.');
+                  } catch (err: unknown) {
+                    showToast('error', 'فشل الحذف', err instanceof Error ? err.message : 'تعذر الحذف');
                   }
-                  setDeleteConfirmModal(null);
                 }}
                 className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transition"
               >
@@ -6476,12 +6691,16 @@ export const AdminPanel: React.FC = () => {
 
               <div className="flex gap-3 mt-6">
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     const start = editFlashSaleDatesModal.start;
                     const end = editFlashSaleDatesModal.end;
-                    if(start && end) {
-                      updateFlashSaleDates(editFlashSaleDatesModal.id, new Date(start).toISOString(), new Date(end).toISOString());
+                    if (!start || !end) return;
+                    try {
+                      await updateFlashSaleDates(editFlashSaleDatesModal.id, new Date(start).toISOString(), new Date(end).toISOString());
                       setEditFlashSaleDatesModal(null);
+                      showToast('success', 'تم الحفظ', 'تم تحديث مواعيد الفعالية.');
+                    } catch (err: unknown) {
+                      showToast('error', 'فشل الحفظ', err instanceof Error ? err.message : 'تعذر تحديث المواعيد');
                     }
                   }}
                   className="flex-1 py-3 bg-[#9952FF] text-white font-bold rounded-xl shadow-lg hover:bg-[#4D2980] transition"
@@ -6554,9 +6773,14 @@ export const AdminPanel: React.FC = () => {
 
               <div className="pt-6">
                 <button 
-                  onClick={() => {
-                    updateStoreBadges(badgeModal.storeId, badgeModal.selectedBadges);
-                    setBadgeModal({ show: false, storeId: '', selectedBadges: [] });
+                  onClick={async () => {
+                    try {
+                      await updateStoreBadges(badgeModal.storeId, badgeModal.selectedBadges);
+                      setBadgeModal({ show: false, storeId: '', selectedBadges: [] });
+                      showToast('success', 'تم الحفظ', 'تم تحديث أوسمة المتجر.');
+                    } catch (err: unknown) {
+                      showToast('error', 'فشل الحفظ', err instanceof Error ? err.message : 'تعذر حفظ الأوسمة');
+                    }
                   }}
                   className="w-full py-3 bg-[#9952FF] text-white font-bold rounded-xl shadow-lg hover:bg-[#4D2980] transition"
                 >

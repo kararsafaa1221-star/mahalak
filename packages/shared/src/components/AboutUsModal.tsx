@@ -10,7 +10,7 @@ interface AboutUsModalProps {
 
 export const AboutUsModal: React.FC<AboutUsModalProps> = ({ open, onClose }) => {
   return (
-    <LegalSheetModal open={open} onClose={onClose} title="من نحن" icon={Store}>
+    <LegalSheetModal open={open} onClose={onClose} title="من نحن" icon={Store} variant="home">
       <AboutUsContent compact showHeader />
     </LegalSheetModal>
   );

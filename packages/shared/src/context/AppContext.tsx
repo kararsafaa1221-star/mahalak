@@ -41,9 +41,10 @@ import {
 import { STORES_PUBLIC_COLLECTION } from '@shared/lib/publicStore';
 
 // Catalog listener caps — prevents loading the entire platform into memory.
-// Raise these once pagination / infinite-scroll is added to the catalog.
-const APP_STORES_LIMIT    = 500;
-const APP_PRODUCTS_LIMIT  = 1000;
+const APP_STORES_LIMIT_CUSTOMER = 280;
+const APP_PRODUCTS_LIMIT_CUSTOMER = 500;
+const APP_STORES_LIMIT_STAFF = 500;
+const APP_PRODUCTS_LIMIT_STAFF = 1000;
 import {
   mergeStoreWithSecrets,
   upsertStoreSecretsPayout,
@@ -85,6 +86,7 @@ import {
 } from '@shared/lib/uniquenessRegistry';
 import { createSavedLocation, parseCustomerAddress } from '@shared/utils/customerLocations';
 import { formatCustomerSeqId } from '@shared/utils/customerId';
+import { computeProductFinalPrice } from '@shared/utils/productPricing';
 
 const generateOrderId = () => 'ORD-' + Math.floor(Math.random() * 1000000);
 
@@ -130,6 +132,7 @@ export interface AppContextType {
   submitStoreReview: (review: any) => Promise<void>;
   submitProductReview: (review: any) => Promise<void>;
   resetCustomerPasswordSecure: (phone: string, otpCode: string, newPassword: string) => Promise<{ success: boolean; customer?: Customer; error?: string }>;
+  resetStorePasswordSecure: (phone: string, otpCode: string, newPassword: string) => Promise<{ success: boolean; storeId?: string; error?: string }>;
   validatePromoCode: (payload: {
     code: string;
     customerId: string;
@@ -157,10 +160,15 @@ export interface AppContextType {
   addBulkNotifications: (notifs: any[]) => Promise<void>;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: (userId: string, role: 'customer' | 'merchant') => void;
+  deleteNotification: (id: string) => Promise<void>;
+  deleteAllNotifications: (userId: string, role: 'customer' | 'merchant') => Promise<number>;
   redeemRechargeCode: (code: string, customerId: string) => Promise<number>;
   deletePromoCode: (id: string) => void;
   requestJoinFlashSale: (request: Omit<FlashSaleRequest, 'id'>) => Promise<void>;
   sendMerchantFollowerNotifications: (storeId: string, title: string, message: string, type?: string) => Promise<number>;
+  replaceOrderItems: (orderId: string, productId: string, quantity: number) => Promise<{ success: boolean; total?: number }>;
+  setStoreCustomerBlock: (storeId: string, customerId: string, blocked: boolean) => Promise<boolean>;
+  clearMerchantOrderInbox: (storeId: string, orderIds: string[]) => Promise<number>;
   refreshStoreAudience: () => Promise<void>;
   sendCustomerGift: (params: {
     customerId: string;
@@ -204,7 +212,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     featuredStoreIds: [],
     enableAutoNearby: true,
     nearbyStoreIds: [],
-    ads: [{ id: 'ad1', type: 'image', url: 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=800', title: 'خصومات الشتاء', desc: 'احصل على خصم 50%', targetType: 'none', targetId: '' }],
+    ads: [],
     adInterval: 5,
     merchantAdInterval: 5,
     merchantAdsSectionOrder: ['delivery', 'media'],
@@ -323,15 +331,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
 
         const currentUid = user.uid;
-        if (data.authUid && data.authUid !== currentUid) {
-          // Keep stored session id — user may need to sign in again if Firebase issued a new uid.
+        // لا نستعد الزبون إن كانت الجلسة مربوطة بحساب Auth آخر
+        if (data.authUid && data.authUid !== currentUid && custDoc.id !== currentUid) {
+          StorageService.remove('LOGGED_IN_CUSTOMER_ID');
+          return;
+        }
+        // بدون authUid على المستند لا يمكن استدعاء الدوال الآمنة — اطلب تسجيل دخول جديد
+        if (!data.authUid && custDoc.id !== currentUid) {
+          StorageService.remove('LOGGED_IN_CUSTOMER_ID');
           return;
         }
 
         setCurrentCustomerState({
           ...data,
           id: custDoc.id,
-          authUid: currentUid,
+          authUid: data.authUid || currentUid,
         });
       } catch (e: unknown) {
         if (!isFirestorePermissionDenied(e) && !isFirestoreOfflineError(e)) {
@@ -537,20 +551,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const snapshotOpts = { suppressPermissionDenied: true as const };
 
     unsubs.push(safeOnSnapshot(
-      query(collection(db, STORES_PUBLIC_COLLECTION), limit(APP_STORES_LIMIT)),
+      query(collection(db, STORES_PUBLIC_COLLECTION), limit(isStaffSession ? APP_STORES_LIMIT_STAFF : APP_STORES_LIMIT_CUSTOMER)),
       (snap) => scheduleStores(mapFirestoreDocs<Store>(snap)),
       snapshotOpts,
     ));
 
     const productsQuery = isStaffSession
-      ? query(collection(db, 'products'), limit(APP_PRODUCTS_LIMIT))
-      : query(collection(db, 'products'), where('status', '==', 'published'), limit(APP_PRODUCTS_LIMIT));
+      ? query(collection(db, 'products'), limit(isStaffSession ? APP_PRODUCTS_LIMIT_STAFF : APP_PRODUCTS_LIMIT_CUSTOMER))
+      : query(collection(db, 'products'), where('status', '==', 'published'), limit(isStaffSession ? APP_PRODUCTS_LIMIT_STAFF : APP_PRODUCTS_LIMIT_CUSTOMER));
     unsubs.push(safeOnSnapshot(productsQuery, (snap) => {
       scheduleProducts(mapFirestoreDocs<Product>(snap));
     }, snapshotOpts));
 
     unsubs.push(safeOnSnapshot(
-      query(collection(db, 'flash_sales'), limit(100)),
+      query(collection(db, 'flash_sales'), limit(40)),
       (snap) => setFlashSales(mapFirestoreDocs<FlashSale>(snap)),
       snapshotOpts,
     ));
@@ -564,7 +578,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }, snapshotOpts));
 
     unsubs.push(safeOnSnapshot(
-      query(collection(db, 'store_reviews'), orderBy('createdAt', 'desc'), limit(500)),
+      query(collection(db, 'store_reviews'), orderBy('createdAt', 'desc'), limit(isStaffSession ? 500 : 150)),
       (snap) => setStoreReviews(mapFirestoreDocs<StoreReview>(snap)),
       snapshotOpts,
     ));
@@ -649,7 +663,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               points: 0,
               ordersCount: 0,
               monthlyOrdersCount: 0,
-              isBlocked: false,
+              isBlocked: Boolean(data.blocked),
               joinedAt: '',
             } as Customer;
           }),
@@ -658,19 +672,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } else if (currentCustomer?.id) {
       const customerId = currentCustomer.id;
       unsubs.push(safeOnSnapshot(doc(db, 'customers', customerId), (snap) => {
-        if (snap.exists()) {
-          const data = { ...(snap.data() as Customer), id: snap.id };
-          setCustomers([data]);
-          setCurrentCustomerState(data);
-        }
+        if (!snap.exists()) return;
+        const data = { ...(snap.data() as Customer), id: snap.id };
+        setCustomers([data]);
+        // تجنّب إعادة رسم تطبيق الزبون عند تحديثات Firestore المتطابقة
+        setCurrentCustomerState((prev) => {
+          if (!prev || prev.id !== data.id) return data;
+          const same =
+            prev.points === data.points &&
+            prev.name === data.name &&
+            prev.phone === data.phone &&
+            prev.province === data.province &&
+            prev.address === data.address &&
+            prev.tier === data.tier &&
+            prev.isBlocked === data.isBlocked &&
+            prev.monthlyOrdersCount === data.monthlyOrdersCount &&
+            prev.ordersCount === data.ordersCount &&
+            prev.authUid === data.authUid &&
+            JSON.stringify(prev.followedStores || []) === JSON.stringify(data.followedStores || []) &&
+            JSON.stringify(prev.storeNotifications || []) === JSON.stringify(data.storeNotifications || []) &&
+            JSON.stringify(prev.blockedStoreIds || []) === JSON.stringify(data.blockedStoreIds || []) &&
+            JSON.stringify(prev.savedLocations || []) === JSON.stringify(data.savedLocations || []);
+          return same ? prev : { ...prev, ...data };
+        });
       }, snapshotOpts));
+      // يكفي لآخر طلبات تبويب الزبون + الطلب السريع (بدل 200)
       unsubs.push(safeOnSnapshot(
-        query(collection(db, 'orders'), where('customerId', '==', customerId), orderBy('createdAt', 'desc'), limit(200)),
+        query(collection(db, 'orders'), where('customerId', '==', customerId), orderBy('createdAt', 'desc'), limit(15)),
         (snap) => setOrders(mapFirestoreDocs<Order>(snap)),
         snapshotOpts,
       ));
       unsubs.push(safeOnSnapshot(
-        query(collection(db, 'notifications'), where('userId', '==', customerId), orderBy('createdAt', 'desc'), limit(50)),
+        query(collection(db, 'notifications'), where('userId', '==', customerId), orderBy('createdAt', 'desc'), limit(30)),
         (snap) => setNotifications(mapFirestoreDocs<AppNotification>(snap)),
         snapshotOpts,
       ));
@@ -711,6 +744,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       StorageService.remove('LOGGED_IN_CUSTOMER_ID');
     }
   };
+
+  /** True when Firebase Auth UID is allowed to act as this customer. */
+  const authOwnsCustomer = useCallback((customer: Customer | null | undefined): boolean => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !customer?.id) return false;
+    return customer.id === uid || customer.authUid === uid;
+  }, []);
 
   const setCurrentMerchant = (s: Store | null) => {
     setCurrentMerchantState(s);
@@ -1004,7 +1044,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateCustomerProfile = async (data: Partial<Customer>) => {
     const idToUpdate = data.id || currentCustomer?.id;
     if (!idToUpdate) return;
-    const { password: _password, points: _points, authUid: _authUid, ...safeData } = data as Partial<Customer> & {
+    const { password: _password, points: _points, authUid: _authUid, isBlocked: _isBlocked, blockedStoreIds: _blockedStoreIds, ...safeData } = data as Partial<Customer> & {
       password?: string;
     };
     try {
@@ -1038,6 +1078,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const resetStorePasswordSecure = async (phone: string, otpCode: string, newPassword: string) => {
+    try {
+      if (!auth.currentUser) {
+        await signInAnonymously(auth);
+      }
+      const fn = httpsCallable<
+        { phone: string; otpCode: string; newPassword: string },
+        { success: boolean; storeId?: string; error?: string }
+      >(mahalakFunctions, 'resetStorePasswordSecure');
+      const result = await fn({
+        phone: normalizeIraqiPhone(phone),
+        otpCode,
+        newPassword,
+      });
+      return result.data ?? { success: false, error: 'unknown' };
+    } catch (e) {
+      console.warn('[AppContext] resetStorePasswordSecure:', e);
+      return { success: false, error: getCallableErrorMessage(e) };
+    }
+  };
+
   const validatePromoCode = async (payload: {
     code: string;
     customerId: string;
@@ -1065,10 +1126,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setCustomerWalletPromos([]);
       return;
     }
+    // لا تُنشئ جلسة anonymous جديدة هنا — ذلك يقطع ربط authUid ويُسبب 403
+    if (!auth.currentUser) {
+      setCustomerWalletPromos([]);
+      return;
+    }
+    if (!authOwnsCustomer(currentCustomer)) {
+      console.warn('[AppContext] refreshCustomerWalletPromos: session not linked to customer, skipping');
+      setCustomerWalletPromos([]);
+      return;
+    }
     try {
-      if (!auth.currentUser) {
-        await signInAnonymously(auth);
-      }
       const fn = httpsCallable<
         { customerId: string },
         { promos: PromoCode[] }
@@ -1076,10 +1144,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const result = await fn({ customerId: currentCustomer.id });
       setCustomerWalletPromos(result.data?.promos ?? []);
     } catch (e) {
-      console.warn('[AppContext] refreshCustomerWalletPromos:', e);
+      const code = (e as { code?: string })?.code ?? '';
+      // جلسة غير مربوطة — لا تُغرق الكونسول بنفس الخطأ
+      if (code === 'functions/permission-denied' || code === 'permission-denied') {
+        console.warn('[AppContext] refreshCustomerWalletPromos: permission denied (re-login required)');
+      } else {
+        console.warn('[AppContext] refreshCustomerWalletPromos:', e);
+      }
       setCustomerWalletPromos([]);
     }
-  }, [currentCustomer?.id]);
+  }, [currentCustomer, authOwnsCustomer]);
 
   const registerMerchant = async (data: any) => {
     const normalizedPhone = normalizeIraqiPhone(data.phone || '');
@@ -1264,7 +1338,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const addProduct = async (data: any) => {
-    const finalPrice = data.discountType === 'percent' ? data.price - (data.price * (data.discountValue / 100)) : data.price - (data.discountValue || 0);
+    const discountType = (data.discountType || 'none') as Product['discountType'];
+    const discountValue = Number(data.discountValue) || 0;
+    const price = Number(data.price) || 0;
+    const finalPrice = computeProductFinalPrice(price, discountType, discountValue);
     // eslint-disable-next-line
     const id = 'prod_' + Date.now();
     
@@ -1281,7 +1358,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     }
 
-    const newProd = { ...data, id, image: imageUrl, finalPrice, createdAt: serverTimestamp() };
+    const newProd = {
+      ...data,
+      id,
+      image: imageUrl,
+      price,
+      discountType,
+      discountValue,
+      finalPrice,
+      createdAt: serverTimestamp(),
+    };
     try {
       await setDoc(doc(db, 'products', id), newProd);
 
@@ -1304,13 +1390,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     } catch (e: any) {
       handleFirestoreError(e, OperationType.CREATE, 'products/' + id);
+      throw e;
     }
   };
 
   const updateProduct = async (id: string, data: any) => {
     try {
       let imageUrl = data.image;
-      const storeId = String(data.storeId ?? products.find((p) => p.id === id)?.storeId ?? '');
+      const existing = products.find((p) => p.id === id);
+      const storeId = String(data.storeId ?? existing?.storeId ?? '');
       // Intercept new base64 / data URL images on edit and upload to Firebase Storage
       if (imageUrl && imageUrl.startsWith('data:image')) {
         try {
@@ -1323,11 +1411,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           throw uploadErr;
         }
       }
-      
-      const updatedData = imageUrl ? { ...data, image: imageUrl } : data;
+
+      const updatedData: Record<string, unknown> = { ...data };
+      if (imageUrl !== undefined) {
+        updatedData.image = imageUrl;
+      }
+
+      // Always keep finalPrice in sync when pricing fields change (UI shows finalPrice).
+      const pricingTouched =
+        data.price !== undefined ||
+        data.discountType !== undefined ||
+        data.discountValue !== undefined;
+      if (pricingTouched && data.finalPrice === undefined) {
+        const price = Number(data.price ?? existing?.price ?? 0);
+        const discountType = (data.discountType ?? existing?.discountType ?? 'none') as Product['discountType'];
+        const discountValue = Number(
+          data.discountValue !== undefined ? data.discountValue : (existing?.discountValue ?? 0),
+        );
+        updatedData.price = price;
+        updatedData.discountType = discountType;
+        updatedData.discountValue = discountValue;
+        updatedData.finalPrice = computeProductFinalPrice(price, discountType, discountValue);
+      }
+
+      // Firestore rejects undefined values
+      Object.keys(updatedData).forEach((key) => {
+        if (updatedData[key] === undefined) delete updatedData[key];
+      });
+
       await updateDoc(doc(db, 'products', id), updatedData);
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, 'products/' + id);
+      throw e;
     }
   };
 
@@ -1756,12 +1871,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updatedAt: serverTimestamp(),
       };
       if (status === 'rejected') updateData.rejectionReason = reason;
+      if (status === 'cancelled' && reason) updateData.rejectionReason = reason;
       if (status === 'returned' || status === 'replaced') updateData.returnReason = reason;
 
       // Loyalty points and wallet credits are handled exclusively by the
       // onOrderDelivered Cloud Function trigger — never from the client.
       // This prevents the double-award race between client transaction and CF.
       await updateDoc(orderRef, updateData);
+
+      // لا نُرسل إشعاراً للزبون عند إلغاء طلبه — هو من قام بالإلغاء ويعرفه من صفحة طلباتي
+      if (status === 'cancelled') {
+        return;
+      }
 
       if (order?.customerId) {
         let statusText = status;
@@ -1774,12 +1895,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (status === 'returned') { statusText = `تم إرجاع الطلب: ${reason || ''}`; pSound = true; }
         if (status === 'replaced') { statusText = `تم استبدال الطلب: ${reason || ''}`; pSound = true; }
 
+        const orderLabel =
+          order.orderNumber != null && Number.isFinite(Number(order.orderNumber))
+            ? `#${order.orderNumber}`
+            : id;
         await addNotification({
           userId: order.customerId,
           role: 'customer',
           type: 'order',
           title: 'تحديث حالة الطلب',
-          message: `طلب رقم ${id}: ${statusText}`,
+          message: `طلب رقم ${orderLabel}: ${statusText}`,
           targetId: id,
           sound: pSound
         });
@@ -1862,6 +1987,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const convertPointsToPromo = async (cid: string, pointsRequired: number) => {
     const customer = customers.find(c => c.id === cid) ?? (currentCustomer?.id === cid ? currentCustomer : null);
     if (!customer || customer.points < pointsRequired) return { success: false, message: 'عذراً، نقاطك غير كافية ❌' };
+    if (!authOwnsCustomer(customer)) {
+      return { success: false, message: 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول الاستبدال.' };
+    }
 
     try {
       const fn = httpsCallable<
@@ -1907,8 +2035,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       return { success: true, message: 'تم التحويل بنجاح ✅', code: data.code };
     } catch (e) {
+      const code = (e as { code?: string })?.code ?? '';
+      if (code === 'functions/permission-denied' || code === 'permission-denied') {
+        return { success: false, message: 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول الاستبدال.' };
+      }
       handleFirestoreError(e, OperationType.WRITE, 'convert_points');
-      return { success: false, message: 'عذراً، حدث خطأ ما' };
+      return { success: false, message: getCallableErrorMessage(e, 'عذراً، حدث خطأ ما') };
     }
   };
 
@@ -1950,6 +2082,61 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, 'follower_notifications');
       return 0;
+    }
+  };
+
+  const replaceOrderItems = async (orderId: string, productId: string, quantity: number) => {
+    try {
+      const fn = httpsCallable<
+        { orderId: string; productId: string; quantity: number },
+        { success: boolean; total?: number; subtotal?: number }
+      >(mahalakFunctions, 'replaceOrderItems');
+      const result = await fn({ orderId, productId, quantity });
+      return { success: !!result.data?.success, total: result.data?.total };
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'orders/' + orderId + '/replace');
+      return { success: false };
+    }
+  };
+
+  const setStoreCustomerBlock = async (storeId: string, customerId: string, blocked: boolean) => {
+    try {
+      const fn = httpsCallable<
+        { storeId: string; customerId: string; blocked: boolean },
+        { success: boolean }
+      >(mahalakFunctions, 'setStoreCustomerBlock');
+      const result = await fn({ storeId, customerId, blocked });
+      setCustomers((prev) =>
+        prev.map((c) => (c.id === customerId ? { ...c, isBlocked: blocked } : c)),
+      );
+      await refreshStoreAudience();
+      return !!result.data?.success;
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'setStoreCustomerBlock');
+      return false;
+    }
+  };
+
+  const clearMerchantOrderInbox = async (storeId: string, orderIds: string[]) => {
+    try {
+      const fn = httpsCallable<
+        { storeId: string; orderIds: string[] },
+        { success: boolean; cleared?: number }
+      >(mahalakFunctions, 'clearMerchantOrderInbox');
+      const result = await fn({ storeId, orderIds });
+      const clearedAt = new Date().toISOString();
+      const idSet = new Set(orderIds);
+      setOrders((prev) =>
+        prev.map((o) =>
+          idSet.has(o.id)
+            ? { ...o, merchantInboxCleared: true, merchantInboxClearedAt: clearedAt }
+            : o,
+        ),
+      );
+      return result.data?.cleared ?? orderIds.length;
+    } catch (e) {
+      console.warn('[AppContext] clearMerchantOrderInbox:', e);
+      throw new Error(getCallableErrorMessage(e) || 'تعذر تصفير القائمة');
     }
   };
 
@@ -2048,6 +2235,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const deleteNotification = async (id: string) => {
+    const prev = notifications;
+    setNotifications((list) => list.filter((n) => n.id !== id));
+    try {
+      await deleteDoc(doc(db, 'notifications', id));
+    } catch (e) {
+      setNotifications(prev);
+      handleFirestoreError(e, OperationType.DELETE, 'notifications/' + id);
+    }
+  };
+
+  const deleteAllNotifications = async (userId: string, role: 'customer' | 'merchant') => {
+    const mine = notifications.filter((n) => n.userId === userId && n.role === role);
+    if (mine.length === 0) return 0;
+
+    const prev = notifications;
+    setNotifications((list) => list.filter((n) => !(n.userId === userId && n.role === role)));
+
+    try {
+      for (let i = 0; i < mine.length; i += 400) {
+        const chunk = mine.slice(i, i + 400);
+        const batch = writeBatch(db);
+        chunk.forEach((n) => batch.delete(doc(db, 'notifications', n.id)));
+        await batch.commit();
+      }
+      return mine.length;
+    } catch (e) {
+      setNotifications(prev);
+      handleFirestoreError(e, OperationType.DELETE, 'delete_all_notifications');
+      return 0;
+    }
+  };
+
   const deletePromoCode = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'promo_codes', id));
@@ -2101,10 +2321,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const getOrderSeqId = useCallback((id: string | undefined | null) => {
     if (!id) return '';
+    const order = orders.find(o => o.id === id);
+    if (order?.orderNumber != null && Number.isFinite(Number(order.orderNumber))) {
+      return String(order.orderNumber);
+    }
+    // Legacy fallback when orderNumber is missing (pre-sync orders).
     const sorted = [...orders].sort((a, b) => {
-      const getVal = (order: Order) => {
-        if (order.createdAt) {
-          const timestamp = (order as any).createdAt;
+      const getVal = (o: Order) => {
+        if (o.createdAt) {
+          const timestamp = (o as any).createdAt;
           if (timestamp && typeof timestamp.toMillis === 'function') {
             return timestamp.toMillis();
           }
@@ -2124,18 +2349,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return index !== -1 ? String(index + 1) : '';
   }, [orders]);
 
-  // Auto-restore logic for persistency without Firebase Auth login
-  /* eslint-disable react-hooks/set-state-in-effect */
+  // Auto-restore customer only when Auth UID owns the document
   useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+
     const persistedCustId = StorageService.get('LOGGED_IN_CUSTOMER_ID');
     if (!currentCustomer && !persistedCustId) return;
     const targetId = currentCustomer ? currentCustomer.id : persistedCustId;
-    if (targetId && customers.length > 0) {
-      const found = customers.find(c => c.id === targetId);
-      if (found && !found.isBlocked) {
-        setCurrentCustomerState(found);
-      }
-    }
+    if (!targetId || customers.length === 0) return;
+
+    const found = customers.find((c) => c.id === targetId);
+    if (!found || found.isBlocked) return;
+
+    const owns = found.id === uid || found.authUid === uid;
+    if (!owns) return;
+
+    setCurrentCustomerState(found);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customers]);
 
@@ -2237,13 +2467,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stores.length, notifications.length, currentMerchant]);
 
+  // إن انقطعت جلسة Auth عن الزبون المحفوظ — أفرغ الجلسة بدل استدعاءات 403
+  useEffect(() => {
+    if (!authInitialized || authLoading || !currentCustomer?.id) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    if (authOwnsCustomer(currentCustomer)) return;
+
+    console.warn('[AppContext] customer session desynced from Auth — clearing local session');
+    StorageService.remove('LOGGED_IN_CUSTOMER_ID');
+    setCurrentCustomerState(null);
+    setCustomerWalletPromos([]);
+  }, [authInitialized, authLoading, currentCustomer, authOwnsCustomer]);
+
   useEffect(() => {
     if (!authInitialized || authLoading || !auth.currentUser || !currentCustomer?.id) {
       setCustomerWalletPromos([]);
       return;
     }
+    if (!authOwnsCustomer(currentCustomer)) {
+      setCustomerWalletPromos([]);
+      return;
+    }
     refreshCustomerWalletPromos();
-  }, [authInitialized, authLoading, currentCustomer?.id, refreshCustomerWalletPromos]);
+  }, [authInitialized, authLoading, currentCustomer?.id, authOwnsCustomer, refreshCustomerWalletPromos]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const contextValue = useMemo(() => ({
@@ -2252,15 +2499,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       getCustomerSeqId, getOrderSeqId,
       setOrders,
       setCurrentCustomer, setCurrentMerchant, logoutSession, deleteUserAccountSecure,
-      registerCustomer, lookupCustomerByPhone, checkPhoneAvailable, checkUsernameAvailable, verifyCustomerLogin, verifyMerchantLogin, linkCustomerAuthUid, updateCustomerProfile, resetCustomerPasswordSecure,
+      registerCustomer, lookupCustomerByPhone, checkPhoneAvailable, checkUsernameAvailable, verifyCustomerLogin, verifyMerchantLogin, linkCustomerAuthUid, updateCustomerProfile, resetCustomerPasswordSecure, resetStorePasswordSecure,
       validatePromoCode, refreshCustomerWalletPromos,
       toggleFollowStore, toggleStoreNotification, placeOrder, convertPointsToPromo, addCustomerPoints,
       submitStoreReview, submitProductReview, updateStoreReview, deleteStoreReview,
       registerMerchant, refreshStore, subscribeToStore, updateStoreProfile, addProduct, updateProduct, deleteProduct,
       createPromoCode, updatePromoCode, togglePromoCodeStatus, updateOrder, updateOrderStatus, requestPayout,
       addNotification, addBulkNotifications, markNotificationAsRead, markAllNotificationsAsRead,
-      redeemRechargeCode, deletePromoCode, requestJoinFlashSale, sendMerchantFollowerNotifications,
-      refreshStoreAudience, sendCustomerGift,
+      deleteNotification, deleteAllNotifications,
+      redeemRechargeCode, deletePromoCode, requestJoinFlashSale, sendMerchantFollowerNotifications, replaceOrderItems,
+      refreshStoreAudience, sendCustomerGift, setStoreCustomerBlock, clearMerchantOrderInbox,
     }), [
       stores, products, customers, orders, promoCodes, customerWalletPromos, notifications, payoutRequests,
       currentCustomer, currentMerchant, authLoading, authInitialized, adminSettings, flashSales, flashSaleRequests, storeReviews,

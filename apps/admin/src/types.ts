@@ -47,6 +47,8 @@ export interface Store {
   deliveryAreas?: string;
   storeCoverType?: 'image' | 'color';
   storeCoverValue?: string;
+  blockedCustomerIds?: string[];
+  inboxClearedOrderIds?: string[];
   signature?: string;
   contractAgreedAt?: string;
   terms_accepted?: boolean;
@@ -77,14 +79,43 @@ export interface Customer {
   tier: 'Silver' | 'Gold' | 'Platinum' | 'Diamond'; 
   followedStores: string[]; 
   storeNotifications: string[]; 
-  isBlocked: boolean; 
-  objectId?: string; 
+  isBlocked: boolean;
+  blockedStoreIds?: string[];
+  objectId?: string;
   lat?: number; 
   lng?: number; 
   fcmToken?: string;
   is_virtual?: boolean;
 }
-export interface Order { id: string; storeId: string; storeName: string; customerId: string; customerName: string; customerPhone: string; customerAddress: string; customerProvince: string; customerLat?: number; customerLng?: number; items: any[]; subtotal: number; deliveryPrice: number; discountAmount: number; total: number; status: 'pending' | 'accepted' | 'shipped' | 'delivered' | 'returned' | 'replaced' | 'rejected' | 'cancelled'; rejectionReason?: string; returnReason?: string; createdAt: string; promoCode?: string; objectId?: string; discountSponsor?: 'ADMIN' | 'MERCHANT'; }
+export interface Order {
+  id: string;
+  storeId: string;
+  storeName: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  customerProvince: string;
+  customerLat?: number;
+  customerLng?: number;
+  items: any[];
+  subtotal: number;
+  deliveryPrice: number;
+  discountAmount: number;
+  total: number;
+  status: 'pending' | 'accepted' | 'shipped' | 'delivered' | 'returned' | 'replaced' | 'rejected' | 'cancelled';
+  rejectionReason?: string;
+  returnReason?: string;
+  createdAt: string;
+  promoCode?: string;
+  objectId?: string;
+  discountSponsor?: 'ADMIN' | 'MERCHANT';
+  /** رقم الطلب الموحّد على مستوى المنصة (لكل المتاجر) */ orderNumber?: number;
+  merchantNotified?: boolean;
+  customerGraceUntil?: string | { seconds?: number; toMillis?: () => number };
+  merchantInboxCleared?: boolean;
+  merchantInboxClearedAt?: string;
+}
 
 export interface PayoutRequest {
   id: string;

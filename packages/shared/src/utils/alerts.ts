@@ -11,6 +11,8 @@ export const showToast = (icon: 'success' | 'error' | 'warning' | 'info', title:
     timer: 3000,
     timerProgressBar: true,
     customClass: {
+      // Stack above LegalSheetModal (10050) — see .swal2-mahalak-toast in index.css
+      container: 'swal2-mahalak-toast',
       popup: 'font-sans rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 mb-4 mx-4 md:mx-auto',
       title: 'text-sm font-medium',
     },

@@ -16,7 +16,8 @@ import {
   where,
   getDocs,
 } from 'firebase/firestore';
-import { db, uploadProductImageStorage } from '@shared/lib/firebase';
+import { db, uploadProductImageStorage, app } from '@shared/lib/firebase';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { runAdminAction, type AdminActor } from '../lib/adminActionRunner';
 import { classifyStoreUpdate, buildSettingsChangeLog } from '../lib/adminChangeLog';
 import { normalizePromoCode, PROMO_CODE_DEFAULTS } from '@shared/utils/promoCode';
@@ -43,6 +44,7 @@ import type {
   PayoutRequest,
   AppNotification,
 } from '@shared/types';
+import { computeProductFinalPrice } from '@shared/utils/productPricing';
 import { buildVirtualStore, buildVirtualProduct } from '../utils/virtualDataSeed';
 
 export interface AdminServiceContext {
@@ -188,7 +190,11 @@ export function createAdminService(actor: AdminActor) {
       id,
       { name: cust?.name },
       async () => {
-        await updateDoc(doc(db, 'customers', id), { isBlocked: willBlock });
+        const fn = httpsCallable<
+          { customerId: string; blocked: boolean },
+          { success: boolean }
+        >(getFunctions(app), 'setCustomerPlatformBlock');
+        await fn({ customerId: id, blocked: willBlock });
         if (cust?.phone) {
           if (willBlock) {
             await blockPhoneRegistry(cust.phone, {
@@ -250,7 +256,11 @@ export function createAdminService(actor: AdminActor) {
       await unblockPhoneRegistry(phoneKey);
       const customer = ctx.customers.find((c) => normalizePhoneKey(c.phone) === phoneKey);
       if (customer) {
-        await updateDoc(doc(db, 'customers', customer.id), { isBlocked: false });
+        const fn = httpsCallable<
+          { customerId: string; blocked: boolean },
+          { success: boolean }
+        >(getFunctions(app), 'setCustomerPlatformBlock');
+        await fn({ customerId: customer.id, blocked: false });
       }
       const store = ctx.stores.find((s) => normalizePhoneKey(s.phone) === phoneKey);
       if (store) {
@@ -278,6 +288,7 @@ export function createAdminService(actor: AdminActor) {
         const orderRef = doc(db, 'orders', id);
         const updateData: Record<string, unknown> = { status, updatedAt: serverTimestamp() };
         if (status === 'rejected') updateData.rejectionReason = reason;
+        if (status === 'cancelled' && reason) updateData.rejectionReason = reason;
         if (status === 'returned' || status === 'replaced') updateData.returnReason = reason;
 
         const order = ctx.orders.find((o) => o.id === id);
@@ -286,18 +297,29 @@ export function createAdminService(actor: AdminActor) {
         // onOrderDelivered Cloud Function trigger — never from the client.
         await updateDoc(orderRef, updateData);
 
+        // لا نُرسل إشعاراً للزبون عند إلغاء الطلب من طرفه / أدمن بنفس منطق التطبيق
+        if (status === 'cancelled') {
+          return;
+        }
+
         if (order?.customerId) {
           let statusText = status;
           if (status === 'accepted') statusText = 'تم قبول طلبك بنجاح';
-          if (status === 'shipped') statusText = 'طلبك في الطريق إليك';
+          if (status === 'shipped') statusText = 'طلبك في الطريق إليك ومندوب التوصيل في طريقه';
           if (status === 'delivered') statusText = 'تم توصيل طلبك بنجاح. شكراً لك!';
           if (status === 'rejected') statusText = `تم رفض الطلب: ${reason || ''}`;
+          if (status === 'returned') statusText = `تم إرجاع الطلب: ${reason || ''}`;
+          if (status === 'replaced') statusText = `تم استبدال الطلب: ${reason || ''}`;
+          const orderLabel =
+            order.orderNumber != null && Number.isFinite(Number(order.orderNumber))
+              ? `#${order.orderNumber}`
+              : id;
           await ctx.addNotification({
             userId: order.customerId,
             role: 'customer',
             type: 'order',
             title: 'تحديث حالة الطلب',
-            message: `طلب رقم ${id}: ${statusText}`,
+            message: `طلب رقم ${orderLabel}: ${statusText}`,
             targetId: id,
           });
         }
@@ -338,16 +360,25 @@ export function createAdminService(actor: AdminActor) {
 
   // ─── Products ─────────────────────────────────────────────────────────────
   async function addProduct(data: Record<string, unknown>, ctx: AdminServiceContext) {
-    const finalPrice =
-      data.discountType === 'percent'
-        ? (data.price as number) - (data.price as number) * ((data.discountValue as number) / 100)
-        : (data.price as number) - ((data.discountValue as number) || 0);
+    const discountType = (data.discountType || 'none') as Product['discountType'];
+    const discountValue = Number(data.discountValue) || 0;
+    const price = Number(data.price) || 0;
+    const finalPrice = computeProductFinalPrice(price, discountType, discountValue);
     const id = 'prod_' + Date.now();
     let imageUrl = data.image as string;
     if (imageUrl?.startsWith('data:image')) {
       imageUrl = await uploadProductImageStorage(imageUrl, id, String(data.storeId ?? ''));
     }
-    const newProd = { ...data, id, image: imageUrl, finalPrice, createdAt: serverTimestamp() };
+    const newProd = {
+      ...data,
+      id,
+      image: imageUrl,
+      price,
+      discountType,
+      discountValue,
+      finalPrice,
+      createdAt: serverTimestamp(),
+    };
     return runAdminAction(actor, 'products', 'product.create', id, { name: String(data.name ?? id) }, async () => {
       await setDoc(doc(db, 'products', id), newProd);
     });
@@ -374,7 +405,31 @@ export function createAdminService(actor: AdminActor) {
           String(data.storeId ?? product?.storeId ?? ''),
         );
       }
-      const updatedData = imageUrl ? { ...data, image: imageUrl } : data;
+      const updatedData: Record<string, unknown> = { ...data };
+      if (imageUrl !== undefined) {
+        updatedData.image = imageUrl;
+      }
+
+      const pricingTouched =
+        data.price !== undefined ||
+        data.discountType !== undefined ||
+        data.discountValue !== undefined;
+      if (pricingTouched && data.finalPrice === undefined) {
+        const price = Number(data.price ?? product?.price ?? 0);
+        const discountType = (data.discountType ?? product?.discountType ?? 'none') as Product['discountType'];
+        const discountValue = Number(
+          data.discountValue !== undefined ? data.discountValue : (product?.discountValue ?? 0),
+        );
+        updatedData.price = price;
+        updatedData.discountType = discountType;
+        updatedData.discountValue = discountValue;
+        updatedData.finalPrice = computeProductFinalPrice(price, discountType, discountValue);
+      }
+
+      Object.keys(updatedData).forEach((key) => {
+        if (updatedData[key] === undefined) delete updatedData[key];
+      });
+
       await updateDoc(doc(db, 'products', id), updatedData);
     });
   }
@@ -459,13 +514,18 @@ export function createAdminService(actor: AdminActor) {
 
   // ─── Settings / Subscriptions ─────────────────────────────────────────────
   async function updateAdminSettings(data: Partial<Record<string, unknown>>, ctx: AdminServiceContext) {
-    const updated = { ...ctx.adminSettings, ...data, autoApproveStores: true };
+    const updated = { ...ctx.adminSettings, ...data };
     const changeLog = buildSettingsChangeLog(ctx.adminSettings, data);
     ctx.setAdminSettings?.(updated);
 
+    const shouldApprovePending =
+      data.autoApproveStores === true && ctx.adminSettings?.autoApproveStores !== true;
+
     const persist = async () => {
       await setDoc(doc(db, 'settings', 'global'), updated);
-      await approveAllPendingStores(ctx, updated);
+      if (shouldApprovePending) {
+        await approveAllPendingStores(ctx, updated);
+      }
     };
 
     if (!changeLog) {

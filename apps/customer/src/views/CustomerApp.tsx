@@ -3,9 +3,11 @@ import { useApp } from '@shared/context/useApp';
 import { validateUserStatus } from '@shared/utils/userValidation';
 import { isStoreVisibleToCustomer, isStoreSubscriptionActive } from '@shared/utils/store';
 import { computeStoreRatingsMap, lookupStoreRating } from '@shared/utils/storeRatings';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { StorageService } from '@shared/services/storageService';
 import { Product, Store, Customer, CustomerSavedLocation } from '@shared/types';
+import { authService } from '@shared/services/authService';
 import { STORE_CATEGORIES, STORE_BADGES, getStoreCategoryLabel, storeCategoriesMatch } from '@shared/constants';
 import {
   storeReviewRewardHintText,
@@ -46,7 +48,7 @@ import {
   Smartphone, Laptop, Tv, Lightbulb, Bed, Hammer, Car, Bike, BookOpen, Dumbbell, Gem, Candy, Flower2, Briefcase, Beef, Pill, Printer, Coffee, Flame, ArrowRightLeft, Loader2
 } from 'lucide-react';
 import { ProductComparePanel } from '../components/ProductComparePanel';
-import { showToast, showModal } from '@shared/utils/alerts';
+import { showToast, showModal, showConfirm } from '@shared/utils/alerts';
 import { formatPromoDiscount } from '@shared/utils/promoCode';
 import { getCallableErrorMessage } from '@shared/utils/firebaseErrors';
 import { readHistoryScrollY, restoreAppScroll, saveScrollToHistoryState } from '@shared/utils/appScrollHistory';
@@ -73,17 +75,20 @@ import {
   themeFieldIconColor,
   themeFieldTextStyle,
 } from '@shared/utils/storeTheme';
-import { SavedLocationsManager } from '@/components/customer/SavedLocationsManager';
+import { SavedLocationsModal } from '@/components/customer/SavedLocationsModal';
 import { DeliveryLocationPickerSheet } from '@/components/customer/DeliveryLocationPickerSheet';
 import { useCustomerAndroidBack } from '@/hooks/useCustomerAndroidBack';
 import { CustomerAuthPage } from '@/components/CustomerAuthPage';
 import { DeleteAccountSection } from '@shared/components/DeleteAccountSection';
 import { PrivacyPolicyModal } from '@shared/components/PrivacyPolicyModal';
 import { AboutUsModal } from '@shared/components/AboutUsModal';
+import { ChangePasswordModal } from '@shared/components/ChangePasswordModal';
+import { MyInfoModal } from '@shared/components/MyInfoModal';
+import { LegalSheetModal } from '@shared/components/LegalSheetModal';
 import { MahalakLogo, MahalakLogoIcon } from '@shared/components/MahalakLogo';
 import { SponsoredAdSlider } from '@shared/components/SponsoredAdSlider';
 import { WelcomeScreenBackground } from '@shared/components/WelcomeScreenBackground';
-import { getPublishedSponsoredAds, DEFAULT_SPONSORED_AD_BADGE } from '@shared/utils/sponsoredAds';
+import { getPublishedSponsoredAds } from '@shared/utils/sponsoredAds';
 import { getStoreOfferBadge, productHasActiveDiscount, storeHasActiveDiscounts, storeHasDiscountOnAllProducts } from '@shared/utils/storeOfferBadge';
 import { MapContainer, TileLayer, Marker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -274,10 +279,10 @@ export const CustomerApp: React.FC = () => {
     currentCustomer, setCurrentCustomer, setCurrentMerchant, logoutSession, deleteUserAccountSecure, registerCustomer, lookupCustomerByPhone, checkPhoneAvailable, verifyCustomerLogin, linkCustomerAuthUid, updateCustomerProfile, resetCustomerPasswordSecure,
     authLoading, authInitialized,
     stores: allStores, products: rawProducts, customerWalletPromos, orders, placeOrder, toggleFollowStore, toggleStoreNotification, validatePromoCode, refreshStore, subscribeToStore, refreshCustomerWalletPromos,
-    notifications, markNotificationAsRead, markAllNotificationsAsRead, convertPointsToPromo,
-    customers, provinces, addCustomerPoints, adminSettings, submitStoreReview, storeReviews,
+    notifications, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification, deleteAllNotifications, convertPointsToPromo,
+    customers, provinces, addCustomerPoints, adminSettings, submitStoreReview, submitProductReview, storeReviews,
     flashSales, flashSaleRequests,
-    redeemRechargeCode, updateOrderStatus
+    redeemRechargeCode, updateOrderStatus, getOrderSeqId
   } = useApp();
 
   const loyalty = useMemo(() => resolveLoyaltySettings(adminSettings), [adminSettings]);
@@ -295,37 +300,56 @@ export const CustomerApp: React.FC = () => {
   );
 
   const stores = useMemo(() => {
-    return allStores.filter(isStoreVisibleToCustomer);
-  }, [allStores]);
+    return allStores.filter((s) =>
+      isStoreVisibleToCustomer(s, { blockedStoreIds: currentCustomer?.blockedStoreIds }),
+    );
+  }, [allStores, currentCustomer?.blockedStoreIds]);
 
   const visibleStoreIds = useMemo(() => new Set(stores.map(s => s.id)), [stores]);
 
   const products = useMemo(() => {
-    const activeFlashSales = flashSales.filter(f => f.status === 'active' || (f.status === 'upcoming' && new Date() >= new Date(f.startTime) && new Date() < new Date(f.endTime)));
-    const activeProducts = rawProducts.filter(p => visibleStoreIds.has(p.storeId));
-    if (activeFlashSales.length === 0) return activeProducts;
+    const activeProducts = rawProducts.filter((p) => visibleStoreIds.has(p.storeId));
+    if (flashSales.length === 0 || flashSaleRequests.length === 0) return activeProducts;
 
-    return activeProducts.map(p => {
-      const activeRequests = flashSaleRequests.filter(r => 
-        r.productId === p.id && 
-        r.status === 'approved' && 
-        activeFlashSales.some(f => f.id === r.flashSaleId)
-      );
+    const now = Date.now();
+    const activeFlashIds = new Set(
+      flashSales
+        .filter((f) => {
+          if (f.status === 'active') return true;
+          if (f.status === 'upcoming') {
+            const start = new Date(f.startTime).getTime();
+            const end = new Date(f.endTime).getTime();
+            return Number.isFinite(start) && Number.isFinite(end) && now >= start && now < end;
+          }
+          return false;
+        })
+        .map((f) => f.id),
+    );
+    if (activeFlashIds.size === 0) return activeProducts;
 
-      if (activeRequests.length > 0) {
-        const promoPrice = Math.min(...activeRequests.map(r => r.promotionalPrice));
-        return { 
-          ...p, 
-          finalPrice: promoPrice, 
-          discountType: 'amount' as const, 
-          discountValue: p.price - promoPrice 
-        };
+    const promoByProduct = new Map<string, number>();
+    for (const r of flashSaleRequests) {
+      if (r.status !== 'approved' || !activeFlashIds.has(r.flashSaleId)) continue;
+      const prev = promoByProduct.get(r.productId);
+      if (prev === undefined || r.promotionalPrice < prev) {
+        promoByProduct.set(r.productId, r.promotionalPrice);
       }
-      return p;
+    }
+    if (promoByProduct.size === 0) return activeProducts;
+
+    return activeProducts.map((p) => {
+      const promoPrice = promoByProduct.get(p.id);
+      if (promoPrice === undefined) return p;
+      return {
+        ...p,
+        finalPrice: promoPrice,
+        discountType: 'amount' as const,
+        discountValue: p.price - promoPrice,
+      };
     });
   }, [rawProducts, flashSales, flashSaleRequests, visibleStoreIds]);
 
-  const MERCHANTS_PAGE_SIZE = 36;
+  const MERCHANTS_PAGE_SIZE = 24;
 
   // واجهات الزبون: دخول، تسجيل، OTP، لوحة التطبيق
   const [view, setView] = useState<'login' | 'signup' | 'otp' | 'forgot' | 'dashboard'>(() =>
@@ -497,6 +521,7 @@ export const CustomerApp: React.FC = () => {
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [walletView, setWalletView] = useState<'points' | 'gifts'>('points');
+  const [showWallet, setShowWallet] = useState(false);
   const [walletSeenRevision, setWalletSeenRevision] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -513,22 +538,17 @@ export const CustomerApp: React.FC = () => {
   }, [currentCustomer?.id, currentCustomer?.points, customerWalletPromos, minRedeemPoints, walletSeenRevision]);
 
   useEffect(() => {
-    if (activeTab !== 'wallet' || !currentCustomer?.id) return;
+    if (!showWallet || !currentCustomer?.id) return;
     markWalletRewardsSeen(currentCustomer.id, currentCustomer.points ?? 0, customerWalletPromos);
     setWalletSeenRevision((n) => n + 1);
-  }, [activeTab, currentCustomer?.id, currentCustomer?.points, customerWalletPromos]);
+  }, [showWallet, currentCustomer?.id, currentCustomer?.points, customerWalletPromos]);
 
   useEffect(() => {
-    if ((activeTab === 'profile' || activeTab === 'wallet') && currentCustomer?.id) {
+    if (!currentCustomer?.id) return;
+    if (activeTab === 'profile' || showWallet) {
       void refreshCustomerWalletPromos();
     }
-  }, [activeTab, currentCustomer?.id, refreshCustomerWalletPromos]);
-
-  useEffect(() => {
-    if (activeTab === 'wallet' && walletView === 'gifts' && currentCustomer?.id) {
-      void refreshCustomerWalletPromos();
-    }
-  }, [activeTab, walletView, currentCustomer?.id, refreshCustomerWalletPromos]);
+  }, [activeTab, showWallet, walletView, currentCustomer?.id, refreshCustomerWalletPromos]);
 
   // ==========================================
   // نظام التزامن مع تاريخ المتصفح لدعم رجوع الأندرويد وإيماءات اليد
@@ -892,12 +912,14 @@ export const CustomerApp: React.FC = () => {
 
   const openLoyaltyWallet = (view: 'points' | 'gifts' = 'points') => {
     setWalletView(view);
-    handleTabChange('wallet');
+    setSelectedStore(null);
+    setShowWallet(true);
   };
 
-  const handleConfirmUnsaved = (save: boolean) => {
+  const handleConfirmUnsaved = async (save: boolean) => {
     if (save) {
-      handleSaveProfile();
+      const ok = await handleSaveProfile();
+      if (!ok) return;
     } else if (profileBaseline) {
       setProfileForm({ name: profileBaseline.name });
       setSavedLocations(profileBaseline.locations);
@@ -959,6 +981,7 @@ export const CustomerApp: React.FC = () => {
       showAboutUs,
       showMyInfo,
       showSavedLocations,
+      showWallet,
       showOrderSuccess,
       showPasswordChange,
       showStoreProductCategories,
@@ -988,6 +1011,7 @@ export const CustomerApp: React.FC = () => {
       setShowAboutUs,
       setShowMyInfo,
       setShowSavedLocations,
+      setShowWallet,
       setShowOrderSuccess,
       setShowPasswordChange,
       setShowStoreProductCategories,
@@ -1020,21 +1044,13 @@ export const CustomerApp: React.FC = () => {
                             custLat !== undefined &&
                             custLng !== undefined;
 
-  // تحديث الجلسة وتعبئة بيانات الملف الشخصي عند تسجيل الدخول
+  // تحديث الجلسة وتعبئة بيانات الملف الشخصي عند تسجيل الدخول فقط (لا أثناء تعديلات الجلسة)
   useEffect(() => {
     if (authLoading || !authInitialized) return;
 
     if (currentCustomer) {
       Promise.resolve().then(() => {
         if (view !== 'dashboard') setView('dashboard');
-        
-        const normalizedLocations = normalizeCustomerSavedLocations(currentCustomer);
-        const defaultLocation = getDefaultSavedLocation(normalizedLocations);
-
-        setProfileForm({ name: currentCustomer.name });
-        setSavedLocations(normalizedLocations);
-        setProfileBaseline({ name: currentCustomer.name, locations: normalizedLocations });
-        setOrderDeliveryLocationId(defaultLocation?.id ?? null);
       });
       return;
     }
@@ -1048,6 +1064,21 @@ export const CustomerApp: React.FC = () => {
       });
     }
   }, [currentCustomer, view, authLoading, authInitialized]);
+
+  useEffect(() => {
+    if (!currentCustomer?.id) return;
+    const normalizedLocations = normalizeCustomerSavedLocations(currentCustomer);
+    const defaultLocation = getDefaultSavedLocation(normalizedLocations);
+    setProfileForm({ name: currentCustomer.name });
+    setSavedLocations(normalizedLocations);
+    setProfileBaseline({ name: currentCustomer.name, locations: normalizedLocations });
+    setOrderDeliveryLocationId((prev) => {
+      if (prev && normalizedLocations.some((loc) => loc.id === prev)) return prev;
+      return defaultLocation?.id ?? null;
+    });
+    // Sync profile/locations only when the logged-in customer id changes (login/switch).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCustomer?.id]);
 
   const activeOrderLocation = useMemo(() => {
     const sourceLocations = savedLocations.length
@@ -1132,36 +1163,42 @@ export const CustomerApp: React.FC = () => {
     : MapPin;
 
   // حفظ تعديلات البيانات الشخصية
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async (): Promise<boolean> => {
     const defaultLocation = getDefaultSavedLocation(savedLocations);
     if (!defaultLocation) {
       alert('يرجى إضافة موقع واحد على الأقل 📍');
-      return;
+      return false;
     }
     if (!isSavedLocationAddressComplete(defaultLocation)) {
       alert('يرجى إكمال عنوان الموقع الافتراضي (المحافظة، المنطقة، وأقرب نقطة دالة)');
-      return;
+      return false;
     }
     if (defaultLocation.lat === undefined || defaultLocation.lng === undefined) {
       alert('يرجى تحديد موقع الافتراضي على الخريطة 📍');
-      return;
+      return false;
     }
 
     const fullAddress = formatSavedLocationAddress(defaultLocation);
 
-    updateCustomerProfile({
-      id: currentCustomer?.id,
-      name: profileForm.name,
-      province: defaultLocation.province,
-      address: fullAddress,
-      savedLocations,
-      defaultLocationId: defaultLocation.id,
-      lat: defaultLocation.lat,
-      lng: defaultLocation.lng
-    });
-    setProfileBaseline({ name: profileForm.name, locations: savedLocations });
-    setOrderDeliveryLocationId(defaultLocation.id);
-    alert('تم حفظ التعديلات بنجاح! ✅');
+    try {
+      await updateCustomerProfile({
+        id: currentCustomer?.id,
+        name: profileForm.name,
+        province: defaultLocation.province,
+        address: fullAddress,
+        savedLocations,
+        defaultLocationId: defaultLocation.id,
+        lat: defaultLocation.lat,
+        lng: defaultLocation.lng
+      });
+      setProfileBaseline({ name: profileForm.name, locations: savedLocations });
+      setOrderDeliveryLocationId(defaultLocation.id);
+      alert('تم حفظ التعديلات بنجاح! ✅');
+      return true;
+    } catch {
+      alert('تعذر حفظ التعديلات. حاول مرة أخرى.');
+      return false;
+    }
   };
 
   const [rechargeCodeInput, setRechargeCodeInput] = useState('');
@@ -1243,13 +1280,12 @@ export const CustomerApp: React.FC = () => {
     [userCoords, currentCustomer?.lat, currentCustomer?.lng],
   );
 
-  const verifiedStores = useMemo(
-    () =>
-      uniqueStores.filter(
-        (s) => (s.isVerified || (s as Store & { is_verified?: boolean }).is_verified) && isStoreSubscriptionActive(s),
-      ),
-    [uniqueStores],
-  );
+  const verifiedStores = useMemo(() => {
+    if (view !== 'dashboard' || (activeTab !== 'stores' && !showVerifiedStoresPage)) return [];
+    return uniqueStores.filter(
+      (s) => (s.isVerified || (s as Store & { is_verified?: boolean }).is_verified) && isStoreSubscriptionActive(s),
+    );
+  }, [uniqueStores, view, activeTab, showVerifiedStoresPage]);
 
   const filteredVerifiedStores = useMemo(() => {
     const q = verifiedStoresSearch.trim().toLowerCase();
@@ -1262,21 +1298,21 @@ export const CustomerApp: React.FC = () => {
     );
   }, [verifiedStores, verifiedStoresSearch]);
 
-  const offerStores = useMemo(
-    () =>
-      uniqueStores
-        .filter((s) => isStoreSubscriptionActive(s) && storeHasDiscountOnAllProducts(s, products))
-        .sort((a, b) => {
-          const badgeA = getStoreOfferBadge(a, products);
-          const badgeB = getStoreOfferBadge(b, products);
-          const percentA = badgeA ? parseInt(badgeA, 10) || 0 : 0;
-          const percentB = badgeB ? parseInt(badgeB, 10) || 0 : 0;
-          return percentB - percentA;
-        }),
-    [uniqueStores, products],
-  );
+  const offerStores = useMemo(() => {
+    if (view !== 'dashboard' || activeTab !== 'stores') return [];
+    return uniqueStores
+      .filter((s) => isStoreSubscriptionActive(s) && storeHasDiscountOnAllProducts(s, products))
+      .sort((a, b) => {
+        const badgeA = getStoreOfferBadge(a, products);
+        const badgeB = getStoreOfferBadge(b, products);
+        const percentA = badgeA ? parseInt(badgeA, 10) || 0 : 0;
+        const percentB = badgeB ? parseInt(badgeB, 10) || 0 : 0;
+        return percentB - percentA;
+      });
+  }, [uniqueStores, products, view, activeTab]);
 
   const nearbyStores = useMemo(() => {
+    if (view !== 'dashboard' || (activeTab !== 'stores' && !showNearbyStoresPage)) return [];
     const active = uniqueStores.filter(isStoreSubscriptionActive);
     const filtered = active.filter((s) => {
       if (!adminSettings.enableAutoNearby) {
@@ -1310,7 +1346,7 @@ export const CustomerApp: React.FC = () => {
     }
 
     return filtered;
-  }, [uniqueStores, adminSettings, currentCustomer?.province, currentCustomer?.lat, currentCustomer?.lng, userCoords]);
+  }, [uniqueStores, adminSettings, currentCustomer?.province, currentCustomer?.lat, currentCustomer?.lng, userCoords, view, activeTab, showNearbyStoresPage]);
 
   const filteredNearbyStores = useMemo(() => {
     const q = nearbyStoresSearch.trim().toLowerCase();
@@ -1330,7 +1366,7 @@ export const CustomerApp: React.FC = () => {
   } as const;
 
   const filteredStores = React.useMemo(() => {
-    if (view !== 'dashboard') return [];
+    if (view !== 'dashboard' || activeTab !== 'merchants') return [];
 
     let result = uniqueStores.filter(s => {
       if (!isStoreSubscriptionActive(s)) return false;
@@ -1395,7 +1431,7 @@ export const CustomerApp: React.FC = () => {
     }
 
     return result;
-  }, [view, uniqueStores, catalogSearchQuery, effectiveCatalogProvince, catalogCategory, catalogSubCategory, storesSortType, catalogFreeDeliveryOnly, catalogDiscountOnly, customerDeliveryCoords, customerDeliveryProvince, storeRatingsMap, products]);
+  }, [view, activeTab, uniqueStores, catalogSearchQuery, effectiveCatalogProvince, catalogCategory, catalogSubCategory, storesSortType, catalogFreeDeliveryOnly, catalogDiscountOnly, customerDeliveryCoords, customerDeliveryProvince, storeRatingsMap, products]);
 
   useEffect(() => {
     setVisibleMerchantsCount(MERCHANTS_PAGE_SIZE);
@@ -1412,11 +1448,13 @@ export const CustomerApp: React.FC = () => {
   );
 
   const followedStoresList = useMemo(() => {
-    if (!currentCustomer) return [];
+    if (!currentCustomer || view !== 'dashboard' || (activeTab !== 'stores' && !showFollowedStoresPage && activeTab !== 'profile')) {
+      return [];
+    }
     return uniqueStores
       .filter((s) => followedStoreIds.has(s.id) && isStoreSubscriptionActive(s))
       .sort((a, b) => a.shopName.localeCompare(b.shopName, 'ar'));
-  }, [uniqueStores, followedStoreIds, currentCustomer]);
+  }, [uniqueStores, followedStoreIds, currentCustomer, view, activeTab, showFollowedStoresPage]);
 
   const filteredFollowedStores = useMemo(() => {
     const q = followedStoresSearch.trim().toLowerCase();
@@ -1437,6 +1475,24 @@ export const CustomerApp: React.FC = () => {
       return (Number(timeB) || 0) - (Number(timeA) || 0);
     });
   }, [orders, currentCustomer?.id]);
+
+  const pendingOrdersCount = useMemo(
+    () => customerOrders.reduce((n, o) => (o.status === 'pending' ? n + 1 : n), 0),
+    [customerOrders],
+  );
+
+  const ORDERS_TAB_LIMIT = 10;
+
+  const displayedCustomerOrders = useMemo(() => {
+    let list = targetOrderId ? customerOrders.filter((o) => o.id === targetOrderId) : customerOrders;
+    if (showOnlyDelivered) {
+      list = list.filter((o) => o.status === 'delivered');
+    }
+    // تبويب طلباتي: أحدث 10 طلبات فقط
+    return targetOrderId ? list : list.slice(0, ORDERS_TAB_LIMIT);
+  }, [customerOrders, targetOrderId, showOnlyDelivered]);
+
+  const visibleCustomerOrders = displayedCustomerOrders;
 
   const customerNotifications = React.useMemo(() => {
     return notifications
@@ -1695,6 +1751,9 @@ export const CustomerApp: React.FC = () => {
         showModal("error", "حدث خطأ", err.message || 'حدث خطأ أثناء إنشاء الحساب.');
         setOtpCode('');
       });
+    } else {
+      setIsLoadingAuth(false);
+      showModal("error", "جلسة ناقصة", "تعذر إكمال العملية. أعد التسجيل من البداية.");
     }
   };
 
@@ -1783,60 +1842,95 @@ export const CustomerApp: React.FC = () => {
 
   // الطلب السريع: جلب آخر طلب مكتمل وإضافة منتجاته للسلة
   const lastCompletedOrder = currentCustomer
-    ? orders.filter(o => o.customerId === currentCustomer.id && o.status === 'delivered').sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
+    ? orders
+        .filter((o) => o.customerId === currentCustomer.id && o.status === 'delivered')
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
     : null;
 
   const handleQuickReorder = () => {
     if (!lastCompletedOrder) return;
-    
-    // Check if products still exist
+
     const itemsToAdd: { product: Product; quantity: number }[] = [];
     let someProductsMissing = false;
-    
+    let someQtyAdjusted = false;
+
     lastCompletedOrder.items.forEach((item: any) => {
-      const originalProduct = item.product || item;
-      const currentProduct = rawProducts.find(p => p.id === originalProduct.id);
-      if (currentProduct) {
-        itemsToAdd.push({ product: currentProduct, quantity: item.quantity || 1 });
-      } else {
+      // الطلبات تُحفظ بصيغة { productId, productName, quantity, ... } وليس product.id
+      const productId = item.productId || item.product?.id || item.id;
+      if (!productId) {
         someProductsMissing = true;
+        return;
       }
+
+      const currentProduct = rawProducts.find((p) => p.id === productId);
+      if (!currentProduct) {
+        someProductsMissing = true;
+        return;
+      }
+
+      const requestedQty = Math.max(1, Number(item.quantity) || 1);
+      const check = canOrderProductQuantity(currentProduct.inventory, requestedQty, 0);
+      if (!check.ok) {
+        if (hasTrackedInventory(currentProduct.inventory) && (currentProduct.inventory as number) > 0) {
+          itemsToAdd.push({ product: currentProduct, quantity: currentProduct.inventory as number });
+          someQtyAdjusted = true;
+        } else {
+          someProductsMissing = true;
+        }
+        return;
+      }
+
+      itemsToAdd.push({ product: currentProduct, quantity: requestedQty });
     });
 
     if (itemsToAdd.length > 0) {
       setCart(itemsToAdd);
-      if (someProductsMissing) {
-        showToast("warning", "تنبيه جزء من المنتجات", "تمت إضافة المنتجات المتوفرة فقط، بعض المنتجات انتهت!");
+      if (someProductsMissing || someQtyAdjusted) {
+        showToast(
+          'warning',
+          'تنبيه جزء من المنتجات',
+          someProductsMissing
+            ? 'تمت إضافة المنتجات المتوفرة فقط، بعض المنتجات لم تعد متاحة!'
+            : 'تم تعديل بعض الكميات حسب المخزون المتاح.',
+        );
       } else {
-        showToast("success", "تم الطلب السريع", "تم تجهيز السلة بمنتجات طلبك السابق!");
+        showToast('success', 'تم الطلب السريع', 'تم تجهيز السلة بمنتجات طلبك السابق!');
       }
     } else {
-      showModal("error", "فشل الإضافة", "جميع منتجات هذا الطلب لم تعد متوفرة.");
+      showModal('error', 'فشل الإضافة', 'جميع منتجات هذا الطلب لم تعد متوفرة.');
     }
   };
 
   // تجميع السلة حسب المتاجر (لحساب التوصيل لكل متجر)
-  const cartByStore: Record<string, { store: Store; items: { product: Product; quantity: number }[] }> = {};
-  cart.forEach(item => {
-    const store = stores.find(s => s.id === item.product.storeId);
-    if (!store) return;
-    if (!cartByStore[store.id]) {
-      cartByStore[store.id] = { store, items: [] };
-    }
-    cartByStore[store.id].items.push(item);
-  });
+  const cartByStore = useMemo(() => {
+    const grouped: Record<string, { store: Store; items: { product: Product; quantity: number }[] }> = {};
+    cart.forEach((item) => {
+      const store = stores.find((s) => s.id === item.product.storeId);
+      if (!store) return;
+      if (!grouped[store.id]) {
+        grouped[store.id] = { store, items: [] };
+      }
+      grouped[store.id].items.push(item);
+    });
+    return grouped;
+  }, [cart, stores]);
 
-  // حساب أسعار السلة
-  const subtotal = cart.reduce((acc, curr) => acc + (curr.product.finalPrice * curr.quantity), 0);
+  const subtotal = useMemo(
+    () => cart.reduce((acc, curr) => acc + curr.product.finalPrice * curr.quantity, 0),
+    [cart],
+  );
 
-  // رسوم التوصيل = مجموع رسوم كل متجر (يستخدم محافظة موقع التوصيل المختار، نفس ما يحسبه الطلب الفعلي)
-  const deliveryCost = Object.values(cartByStore).reduce((acc, group) => {
-    const hasFreeDeliveryItem = group.items.some(item => item.product.isFreeDelivery);
-    const province = activeOrderLocation?.province || currentCustomer?.province || 'بغداد';
-    const delInfo = getStoreDeliveryInfo(group.store, province);
-    if (delInfo.isFree || hasFreeDeliveryItem) return acc; // توصيل مجاني
-    return acc + delInfo.price;
-  }, 0);
+  const deliveryCost = useMemo(
+    () =>
+      Object.values(cartByStore).reduce((acc, group) => {
+        const hasFreeDeliveryItem = group.items.some((item) => item.product.isFreeDelivery);
+        const province = activeOrderLocation?.province || currentCustomer?.province || 'بغداد';
+        const delInfo = getStoreDeliveryInfo(group.store, province);
+        if (delInfo.isFree || hasFreeDeliveryItem) return acc;
+        return acc + delInfo.price;
+      }, 0),
+    [cartByStore, activeOrderLocation?.province, currentCustomer?.province],
+  );
 
   const discountAmount = useMemo(() => {
     if (!appliedPromo) return 0;
@@ -1852,22 +1946,25 @@ export const CustomerApp: React.FC = () => {
   }, [stores]);
 
   const bestsellerCounts = useMemo(() => {
-    if (view !== 'dashboard') return {} as Record<string, number>;
+    if (view !== 'dashboard' || activeTab !== 'products' || allProductsSortType !== 'bestselling') {
+      return {} as Record<string, number>;
+    }
     const counts: Record<string, number> = {};
     orders.forEach(order => {
       if (order.status !== 'returned' && order.status !== 'rejected') {
         order.items?.forEach(item => {
-          if (item?.product?.id) {
-            counts[item.product.id] = (counts[item.product.id] || 0) + (item.quantity || 1);
+          const pid = item?.productId || item?.product?.id;
+          if (pid) {
+            counts[pid] = (counts[pid] || 0) + (item.quantity || 1);
           }
         });
       }
     });
     return counts;
-  }, [orders, view]);
+  }, [orders, view, activeTab, allProductsSortType]);
 
   const filteredCatalogProducts = useMemo(() => {
-    if (view !== 'dashboard') return [];
+    if (view !== 'dashboard' || activeTab !== 'products') return [];
 
     let filtered = products.filter(p => p.status === 'published');
 
@@ -1948,7 +2045,7 @@ export const CustomerApp: React.FC = () => {
     }
 
     return filtered;
-  }, [view, products, catalogSearchQuery, allProductsSortType, catalogFreeDeliveryOnly, catalogDiscountOnly, effectiveCatalogProvince, storeMap, bestsellerCounts, customerDeliveryProvince, catalogCategory, catalogSubCategory]);
+  }, [view, activeTab, products, catalogSearchQuery, allProductsSortType, catalogFreeDeliveryOnly, catalogDiscountOnly, effectiveCatalogProvince, storeMap, bestsellerCounts, customerDeliveryProvince, catalogCategory, catalogSubCategory]);
 
   const compareEligibleProducts = useMemo(
     () =>
@@ -2084,6 +2181,15 @@ export const CustomerApp: React.FC = () => {
     prefetchImageUrls([selectedStore.logo, ...storeProducts.map((p) => p.image)]);
   }, [selectedStore, storeProducts]);
 
+  // Leave store page if this customer was blocked from the store
+  useEffect(() => {
+    if (!selectedStore?.id || !currentCustomer?.blockedStoreIds?.length) return;
+    if (currentCustomer.blockedStoreIds.includes(selectedStore.id)) {
+      setSelectedStore(null);
+      showToast('warning', 'غير متاح', 'أنت محظور من هذا المتجر.');
+    }
+  }, [selectedStore?.id, currentCustomer?.blockedStoreIds]);
+
   // Real-time per-store listener: fires immediately with latest data when the
   // user opens any store page (bypasses the collection snapshot cache entirely).
   useEffect(() => {
@@ -2114,25 +2220,29 @@ export const CustomerApp: React.FC = () => {
     const promoProvince = activeOrderLocation?.province || currentCustomer.province;
     const totalCartPrice = cart.reduce((sum, item) => sum + (item.product.finalPrice * item.quantity), 0);
 
-    const result = await validatePromoCode({
-      code: promoInput,
-      customerId: currentCustomer.id,
-      storeIdsInCart,
-      customerProvince: promoProvince,
-      subtotal: totalCartPrice,
-    });
+    try {
+      const result = await validatePromoCode({
+        code: promoInput,
+        customerId: currentCustomer.id,
+        storeIdsInCart,
+        customerProvince: promoProvince,
+        subtotal: totalCartPrice,
+      });
 
-    if (!result.valid || result.discount == null || !result.code) {
-      setPromoError(result.message || 'الكود غير صحيح أو منتهي الصلاحية ❌');
-      return;
+      if (!result.valid || result.discount == null || !result.code) {
+        setPromoError(result.message || 'الكود غير صحيح أو منتهي الصلاحية ❌');
+        return;
+      }
+
+      setAppliedPromo({
+        id: result.id || result.code,
+        code: result.code,
+        discountValue: result.discount,
+      });
+      setPromoInput('');
+    } catch (err: unknown) {
+      setPromoError(err instanceof Error ? err.message : 'تعذر التحقق من الكود. حاول مرة أخرى.');
     }
-
-    setAppliedPromo({
-      id: result.id || result.code,
-      code: result.code,
-      discountValue: result.discount,
-    });
-    setPromoInput('');
   };
 
   // إرسال الطلب - يرسل طلب منفصل لكل متجر
@@ -2196,8 +2306,8 @@ export const CustomerApp: React.FC = () => {
         };
       });
 
-      // Place all store orders in parallel for speed
-      const orderResults = await Promise.all(
+      // Place store orders; keep successful ones if some fail (avoid duplicate retry)
+      const settled = await Promise.allSettled(
         storePayloads.map(({ store, storeItems, storeSubtotal, storeDeliveryCost, storeDiscount, storeTotal, promoCode }) =>
           placeOrder(
             {
@@ -2227,6 +2337,22 @@ export const CustomerApp: React.FC = () => {
         ),
       );
 
+      const orderResults = settled
+        .filter((r): r is PromiseFulfilledResult<{ orderId: string; store: typeof storePayloads[0]['store']; storeTotal: number; storeItems: typeof storePayloads[0]['storeItems'] }> => r.status === 'fulfilled')
+        .map((r) => r.value);
+      const failedCount = settled.filter((r) => r.status === 'rejected').length;
+
+      if (orderResults.length === 0) {
+        const firstReject = settled.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+        throw firstReject?.reason || new Error('تعذر إرسال الطلب. حاول مرة أخرى.');
+      }
+
+      const successStoreIds = new Set(orderResults.map((r) => r.store.id));
+      setCart((prev) => prev.filter((item) => !successStoreIds.has(item.product.storeId)));
+      if (failedCount === 0) {
+        setAppliedPromo(null);
+      }
+
       const placedOrderIds = orderResults.map((r) => r.orderId);
       let summary = '';
       let totalValue = 0;
@@ -2235,12 +2361,14 @@ export const CustomerApp: React.FC = () => {
         summary += `📦 "${store.shopName}": ${storeItems.length} منتجات - ${(storeTotal || 0).toLocaleString()} د.ع\n`;
       }
       summary += `\n💰 الإجمالي الكلي: ${(totalValue || 0).toLocaleString()} د.ع`;
+      if (failedCount > 0) {
+        summary += `\n\n⚠️ فشل إرسال ${failedCount} طلب(ات) — بقيت منتجاتها في السلة.`;
+        showToast('warning', 'طلب جزئي', `تم إرسال ${orderResults.length} وفشل ${failedCount}. راجع السلة للمتاجر المتبقية.`);
+      }
       setOrderSummary(summary);
 
       setTargetOrderId(placedOrderIds.length === 1 ? placedOrderIds[0] : null);
       setShowOrderSuccess(true);
-      setCart([]);
-      setAppliedPromo(null);
       setShowCart(false);
     } catch (err) {
       console.error('[handlePlaceOrder]', err);
@@ -2336,6 +2464,11 @@ export const CustomerApp: React.FC = () => {
 
     if (ad.targetType === 'link' && ad.link) {
       openExternalUrl(ad.link);
+      return;
+    }
+
+    if (ad.link?.trim()) {
+      openExternalUrl(ad.link);
     }
   }, [stores, products]);
 
@@ -2363,7 +2496,7 @@ export const CustomerApp: React.FC = () => {
     setShowShareModal(true);
   };
 
-  const executeShare = (platform: SharePlatform) => {
+  const executeShare = async (platform: SharePlatform) => {
     if (!shareConfig) return;
 
     const payload =
@@ -2372,16 +2505,20 @@ export const CustomerApp: React.FC = () => {
         : buildCustomerProductSharePayload(shareConfig.data);
 
     const action = buildPlatformShareAction(platform, shareText, payload.url);
-    if (action.kind === 'copy') {
-      navigator.clipboard.writeText(shareText);
-      alert(action.message);
-    } else {
-      openExternalUrl(action.shareUrl);
-    }
+    try {
+      if (action.kind === 'copy') {
+        await navigator.clipboard.writeText(shareText);
+        alert(action.message);
+      } else {
+        openExternalUrl(action.shareUrl);
+      }
 
-    if (currentCustomer && !shareRewardGrantedRef.current) {
-      shareRewardGrantedRef.current = true;
-      addCustomerPoints(currentCustomer.id, loyalty.shareRewardPoints);
+      if (currentCustomer && !shareRewardGrantedRef.current) {
+        shareRewardGrantedRef.current = true;
+        addCustomerPoints(currentCustomer.id, loyalty.shareRewardPoints);
+      }
+    } catch {
+      showToast('error', 'تعذر المشاركة', 'فشل النسخ أو فتح الرابط. حاول مرة أخرى.');
     }
   };
 
@@ -2400,7 +2537,8 @@ export const CustomerApp: React.FC = () => {
       if (res.success) {
         showToast('success', 'تم الاستبدال!', `كود الخصم: ${res.code}`);
         setWalletView('gifts');
-        setActiveTab('wallet');
+        setSelectedStore(null);
+        setShowWallet(true);
       } else {
         showToast('error', 'تعذر الاستبدال', res.message);
       }
@@ -2465,7 +2603,7 @@ export const CustomerApp: React.FC = () => {
     // الشاشة العامة للزبون (Customer Main Tabs)
     // ==========================================
     return (
-      <div className={`min-h-screen max-w-[100vw] flex flex-col text-right font-sans selection:bg-violet/30 selection:text-violet pb-20 relative ${selectedStore ? 'overflow-x-hidden bg-mahalak-gradient' : 'overflow-x-hidden overflow-y-auto bg-deep-navy'}`} dir="rtl">
+      <div className={`min-h-screen max-w-[100vw] flex flex-col text-right font-sans selection:bg-violet/30 selection:text-violet pb-20 relative ${selectedStore ? (selectedStoreTheme.enabled ? 'overflow-x-hidden bg-mahalak-gradient' : 'overflow-x-hidden overflow-y-auto bg-deep-navy') : 'overflow-x-hidden overflow-y-auto bg-deep-navy'}`} dir="rtl">
         {showPushPrompt && (
           <PushPermissionPrompt
             userType="customer"
@@ -2473,20 +2611,40 @@ export const CustomerApp: React.FC = () => {
             onLocationGranted={(coords) => setUserCoords(coords)}
           />
         )}
-        {!selectedStore && <WelcomeScreenBackground />}
+        {/* خلفية ثابتة خفيفة جداً بدون blur ثقيل */}
+        {!selectedStore && (
+          <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+            <div className="absolute inset-0 bg-mahalak-gradient" />
+          </div>
+        )}
+        {selectedStore && !selectedStoreTheme.enabled && <WelcomeScreenBackground lite />}
         {selectedStore ? (
           <div
-            className={`min-h-screen flex flex-col animate-slide-up ${storePageBackgroundProps(selectedStoreTheme).className}`}
+            className={`min-h-screen flex flex-col animate-slide-up relative z-10 ${
+              selectedStoreTheme.enabled
+                ? storePageBackgroundProps(selectedStoreTheme).className
+                : 'bg-transparent'
+            }`}
             style={{
               ...storeThemeCssVars(selectedStoreTheme),
-              ...storePageBackgroundProps(selectedStoreTheme).style,
+              ...(selectedStoreTheme.enabled ? storePageBackgroundProps(selectedStoreTheme).style : {}),
             }}
           >
             {/* خلفية المتجر العلوية ومعلوماته */}
-            <header className="relative bg-white shadow-xs transition-all duration-300">
+            <header
+              className={`relative shadow-xs transition-all duration-300 ${
+                selectedStoreTheme.enabled
+                  ? 'bg-white'
+                  : 'welcome-card-glow welcome-card-border-glow bg-white/5 border-b border-white/20 backdrop-blur-md'
+              }`}
+            >
               <div
-                className={`h-16 sm:h-20 overflow-hidden relative ${storeGradientToLeftProps(selectedStoreTheme).className}`}
-                style={storeGradientToLeftProps(selectedStoreTheme).style}
+                className={`h-16 sm:h-20 overflow-hidden relative ${
+                  selectedStoreTheme.enabled
+                    ? storeGradientToLeftProps(selectedStoreTheme).className
+                    : 'bg-gradient-to-l from-vibrant-purple/80 to-deep-navy/90'
+                }`}
+                style={selectedStoreTheme.enabled ? storeGradientToLeftProps(selectedStoreTheme).style : undefined}
               >
                  <div
                    className="absolute inset-0 opacity-15"
@@ -2497,7 +2655,11 @@ export const CustomerApp: React.FC = () => {
               <div className="absolute top-3 right-3 z-10 flex gap-2">
                 <button 
                   onClick={() => { if (!handleAppBack()) setSelectedStore(null); }} 
-                  className="px-2.5 py-1 bg-white hover:bg-slate-50 rounded-xl text-slate-700 shadow-xs border border-slate-100 hover:scale-105 active:scale-95 transition-all flex items-center gap-1 font-bold text-[9.5px] sm:text-xs font-tajawal"
+                  className={`px-2.5 py-1 rounded-xl shadow-xs hover:scale-105 active:scale-95 transition-all flex items-center gap-1 font-bold text-[9.5px] sm:text-xs font-tajawal ${
+                    selectedStoreTheme.enabled
+                      ? 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-100'
+                      : 'welcome-btn-pulse bg-white/10 hover:bg-white/20 text-white border border-white/30 backdrop-blur-md'
+                  }`}
                 >
                   <ChevronRight size={14} />
                   <span>رجوع</span>
@@ -2505,8 +2667,12 @@ export const CustomerApp: React.FC = () => {
               </div>
 
               <div
-                className={`max-w-4xl mx-auto px-3 py-4 sm:p-5 flex flex-col md:flex-row items-center md:items-center relative gap-3 text-center md:text-right w-full ${storeInfoBarProps(selectedStoreTheme).className}`}
-                style={storeInfoBarProps(selectedStoreTheme).style}
+                className={`max-w-4xl mx-auto px-3 py-4 sm:p-5 flex flex-col md:flex-row items-center md:items-center relative gap-3 text-center md:text-right w-full ${
+                  selectedStoreTheme.enabled
+                    ? storeInfoBarProps(selectedStoreTheme).className
+                    : 'welcome-card-border-glow bg-white/5 border border-white/20 backdrop-blur-md rounded-b-2xl'
+                }`}
+                style={selectedStoreTheme.enabled ? storeInfoBarProps(selectedStoreTheme).style : undefined}
               >
                 <div className="relative shrink-0">
                   <ProductImage
@@ -2514,7 +2680,7 @@ export const CustomerApp: React.FC = () => {
                     alt={selectedStore.shopName}
                     size="custom"
                     priority
-                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl border-2 border-white shadow-md -mt-10 bg-white relative z-10 overflow-hidden"
+                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl border-2 border-white/40 shadow-md -mt-10 bg-white relative z-10 overflow-hidden"
                     imageClassName="rounded-xl"
                   />
                   {(selectedStore.isVerified || (selectedStore as any).is_verified) && (
@@ -2528,7 +2694,7 @@ export const CustomerApp: React.FC = () => {
                   <div className="flex flex-col md:flex-row md:items-center gap-1.5 justify-center md:justify-start">
                     <div className="flex items-center gap-2 justify-center md:justify-start">
                       <h1
-                        className={`text-sm sm:text-base md:text-lg font-black tracking-tight font-tajawal ${selectedStoreTheme.enabled ? '' : 'text-violet'}`}
+                        className={`text-sm sm:text-base md:text-lg font-black tracking-tight font-tajawal ${selectedStoreTheme.enabled ? '' : 'text-white'}`}
                         style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.shopNameColor) : undefined}
                       >
                         {selectedStore.shopName}
@@ -2557,7 +2723,7 @@ export const CustomerApp: React.FC = () => {
                   <div className="flex flex-col items-center md:items-start gap-1.5 mt-1.5">
                     <div
                       className={`flex flex-wrap items-center gap-3 justify-center md:justify-start text-[9px] sm:text-[10px] font-bold ${
-                        selectedStoreTheme.enabled ? '' : 'text-slate-400'
+                        selectedStoreTheme.enabled ? '' : 'text-white/70'
                       }`}
                       style={selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.infoBarTextColor) : undefined}
                     >
@@ -2616,11 +2782,14 @@ export const CustomerApp: React.FC = () => {
                       }
                       setShowRateModal({ type: 'store', data: selectedStore });
                     }}
-                    className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl font-bold text-[9.5px] transition-all border border-white/50 font-tajawal active:scale-95 ${storeGradientProps(selectedStoreTheme).className}`}
-                    style={{
-                      ...storeGradientProps(selectedStoreTheme).style,
-                      ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
-                    }}
+                    className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl font-bold text-[9.5px] transition-all border border-white/50 font-tajawal active:scale-95 ${
+                      selectedStoreTheme.enabled ? '' : 'welcome-btn-pulse'
+                    }`}
+                    style={
+                      selectedStoreTheme.enabled
+                        ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor)
+                        : undefined
+                    }
                   >
                     <Sparkles size={11} />
                     <span>قيّم المتجر</span>
@@ -2634,9 +2803,11 @@ export const CustomerApp: React.FC = () => {
                       toggleFollowStore(currentCustomer.id, selectedStore.id);
                     }}
                     className={`flex items-center justify-center gap-1 px-3.5 py-1.5 rounded-xl font-bold text-[9.5px] transition-all active:scale-95 border font-tajawal ${
+                      selectedStoreTheme.enabled ? '' : 'welcome-btn-pulse'
+                    } ${
                       isFollowing 
                       ? (selectedStoreTheme.enabled ? 'text-white shadow-2xs' : 'bg-vibrant-purple text-white border-vibrant-purple shadow-2xs')
-                      : `text-white border-white/50 ${storeGradientProps(selectedStoreTheme).className}`
+                      : 'text-white border-white/50'
                     }`}
                     style={
                       isFollowing && selectedStoreTheme.enabled
@@ -2645,11 +2816,8 @@ export const CustomerApp: React.FC = () => {
                             borderColor: selectedStoreTheme.primaryColor,
                             ...themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor),
                           }
-                        : !isFollowing
-                          ? {
-                              ...storeGradientProps(selectedStoreTheme).style,
-                              ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
-                            }
+                        : !isFollowing && selectedStoreTheme.enabled
+                          ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor)
                           : undefined
                     }
                   >
@@ -2666,16 +2834,15 @@ export const CustomerApp: React.FC = () => {
                       toggleStoreNotification(currentCustomer.id, selectedStore.id);
                     }}
                     className={`p-1.5 rounded-xl border transition-all active:scale-95 shadow-2xs ${
+                      selectedStoreTheme.enabled || isNotifOn ? '' : 'welcome-btn-pulse'
+                    } ${
                       isNotifOn 
                       ? 'bg-amber-50 text-amber-600 border-amber-100' 
-                      : `text-white border-white hover:border-white/50 ${storeGradientProps(selectedStoreTheme).className}`
+                      : 'text-white border-white hover:border-white/50'
                     }`}
                     style={
-                      !isNotifOn
-                        ? {
-                            ...storeGradientProps(selectedStoreTheme).style,
-                            ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
-                          }
+                      !isNotifOn && selectedStoreTheme.enabled
+                        ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor)
                         : undefined
                     }
                   >
@@ -2685,11 +2852,14 @@ export const CustomerApp: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => openShareModal('store', selectedStore)}
-                    className={`relative z-10 p-1.5 text-white border border-white rounded-xl shadow-2xs transition-all active:scale-95 cursor-pointer ${storeGradientProps(selectedStoreTheme).className}`}
-                    style={{
-                      ...storeGradientProps(selectedStoreTheme).style,
-                      ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
-                    }}
+                    className={`relative z-10 p-1.5 text-white border border-white rounded-xl shadow-2xs transition-all active:scale-95 cursor-pointer ${
+                      selectedStoreTheme.enabled ? '' : 'welcome-btn-pulse'
+                    }`}
+                    style={
+                      selectedStoreTheme.enabled
+                        ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor)
+                        : undefined
+                    }
                     title="مشاركة المتجر"
                     aria-label="مشاركة المتجر"
                   >
@@ -2730,7 +2900,9 @@ export const CustomerApp: React.FC = () => {
                 {cart.length > 0 && (
                   <button 
                     onClick={() => setShowCart(true)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg font-bold text-[9.5px] font-tajawal animate-pulse shadow-sm ${storePrimaryBgProps(selectedStoreTheme).className}`}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg font-bold text-[9.5px] font-tajawal shadow-sm ${
+                      selectedStoreTheme.enabled ? 'animate-pulse' : 'welcome-btn-pulse'
+                    } ${storePrimaryBgProps(selectedStoreTheme).className}`}
                     style={{
                       ...storePrimaryBgProps(selectedStoreTheme).style,
                       ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
@@ -2745,8 +2917,12 @@ export const CustomerApp: React.FC = () => {
               {/* لوحة البحث والفلترة — خاصة بالمتجر (بدون محافظة) */}
               <div
                 id="store-product-filters"
-                className={`p-4 sm:p-5 rounded-[2.2rem] border border-white/10 brand-gradient-border shadow-sm space-y-4 mb-6 scroll-mt-28 font-tajawal ${storeGradientProps(selectedStoreTheme).className}`}
-                style={storeGradientProps(selectedStoreTheme).style}
+                className={`p-4 sm:p-5 rounded-[2.2rem] shadow-sm space-y-4 mb-6 scroll-mt-28 font-tajawal ${
+                  selectedStoreTheme.enabled
+                    ? `border border-white/10 brand-gradient-border ${storeGradientProps(selectedStoreTheme).className}`
+                    : 'welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md'
+                }`}
+                style={selectedStoreTheme.enabled ? storeGradientProps(selectedStoreTheme).style : undefined}
               >
                 <div className="flex justify-between items-center mb-1">
                   <h3
@@ -2766,10 +2942,12 @@ export const CustomerApp: React.FC = () => {
                         setProdFreeDeliveryOnly(false);
                         setProdDiscountOnly(false);
                       }}
-                      className={`text-white hover:opacity-90 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer border ${storeGradientProps(selectedStoreTheme).className}`}
+                      className={`text-white hover:opacity-90 px-3 py-1.5 rounded-xl text-[10px] font-black transition-colors flex items-center gap-1 active:scale-95 cursor-pointer border ${
+                        selectedStoreTheme.enabled ? storeGradientProps(selectedStoreTheme).className : 'welcome-btn-pulse bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border-[#7B3DFF]/60'
+                      }`}
                       style={{
-                        ...storeGradientProps(selectedStoreTheme).style,
-                        borderColor: selectedStoreTheme.enabled ? selectedStoreTheme.infoBarBorderColor : '#7B3DFF',
+                        ...(selectedStoreTheme.enabled ? storeGradientProps(selectedStoreTheme).style : {}),
+                        borderColor: selectedStoreTheme.enabled ? selectedStoreTheme.infoBarBorderColor : undefined,
                         ...(selectedStoreTheme.enabled ? themeFieldTextStyle(selectedStoreTheme.fields.buttonTextColor) : {}),
                       }}
                     >
@@ -2786,7 +2964,7 @@ export const CustomerApp: React.FC = () => {
                     value={storeProductsSearchQuery}
                     onChange={(e) => setStoreProductsSearchQuery(e.target.value)}
                     placeholder="البحث باسم المنتج، الماركة أو القسم..."
-                    className="w-full input-brand pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/20 transition-all placeholder:text-white/40 font-tajawal text-right outline-none"
+                    className="w-full bg-white/10 border border-white/20 pr-11 pl-4 py-3.5 rounded-2xl text-[11px] font-bold shadow-2xs focus:ring-2 focus:ring-vibrant-purple/20 transition-all placeholder:text-white/40 font-tajawal text-white text-right outline-none"
                   />
                 </div>
 
@@ -2993,11 +3171,15 @@ export const CustomerApp: React.FC = () => {
 
               {/* آراء وتقييمات العملاء */}
               {selectedStore && (
-                <div className="mt-12 mb-8 card-dark p-6 rounded-[2.5rem] shadow-sm">
+                <div className={`mt-12 mb-8 p-6 rounded-[2.5rem] shadow-sm ${
+                  selectedStoreTheme.enabled
+                    ? 'card-dark'
+                    : 'welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md'
+                }`}>
                   <div className="flex items-center gap-3 mb-6">
-                    <div className="w-2 h-8 bg-amber-400 rounded-full"></div>
+                    <div className={`w-2 h-8 rounded-full ${selectedStoreTheme.enabled ? 'bg-amber-400' : 'bg-vibrant-purple welcome-icon-pulse'}`}></div>
                     <h2 className="text-xl font-black text-white">تقييمات الزبائن</h2>
-                    <span className="bg-white/10 text-white/70 text-xs font-bold px-3 py-1 rounded-full mr-auto border border-white/10">
+                    <span className="bg-white/10 text-white/70 text-xs font-bold px-3 py-1 rounded-full mr-auto border border-white/20 backdrop-blur-md">
                       {storeReviews.filter(r => r.storeId === selectedStore.id).length} تقييم
                     </span>
                   </div>
@@ -3010,7 +3192,11 @@ export const CustomerApp: React.FC = () => {
                   ) : (
                     <div className="space-y-4">
                       {storeReviews.filter(r => r.storeId === selectedStore.id).map(review => (
-                        <div key={review.id} className="p-4 bg-white/5 border border-white/10 rounded-2xl">
+                        <div key={review.id} className={`p-4 rounded-2xl ${
+                          selectedStoreTheme.enabled
+                            ? 'bg-white/5 border border-white/10'
+                            : 'welcome-card-border-glow bg-white/5 border border-white/20 backdrop-blur-md'
+                        }`}>
                           <div className="flex justify-between items-start mb-2">
                             <h4 className="font-bold text-white text-sm">{review.customerName}</h4>
                             <div className="flex text-amber-400 text-xs" dir="ltr">
@@ -3037,15 +3223,15 @@ export const CustomerApp: React.FC = () => {
         ) : (
           <div className="relative z-10 flex flex-col flex-1 min-h-0">
             {/* الهيدر العلوي - تصميم موحد مع WelcomeScreen */}
-            <header className="sticky top-0 z-40 customer-welcome-header transition-all shadow-sm">
+            <header className={`sticky top-0 customer-welcome-header transition-all shadow-sm ${showNotifications ? 'z-50' : 'z-40'}`}>
               <div className="max-w-4xl mx-auto px-4 h-16 flex justify-between items-center gap-2">
                 
                 <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                   {activeTab !== 'stores' && (
                     <button 
-                      onClick={() => handleTabChange(activeTab === 'wallet' ? 'profile' : 'stores')}
+                      onClick={() => handleTabChange('stores')}
                       className="p-2 merchant-icon-tile text-slate-300 rounded-xl hover:bg-white/15 hover:text-white transition-all border border-transparent ml-1 flex items-center justify-center shrink-0"
-                      title={activeTab === 'wallet' ? 'الرجوع لحسابي' : 'الرجوع للرئيسية'}
+                      title="الرجوع للرئيسية"
                     >
                       <ChevronRight size={20} />
                     </button>
@@ -3079,12 +3265,14 @@ export const CustomerApp: React.FC = () => {
                           aria-label="إغلاق قائمة المواقع"
                           onClick={() => setShowHeaderLocationPicker(false)}
                         />
-                        <div className="absolute top-full right-0 left-0 sm:left-auto sm:w-80 mt-2 bg-white rounded-2xl shadow-2xl shadow-violet/15 border border-slate-100 z-50 animate-dropdown overflow-hidden text-right">
-                          <div className="p-3 border-b border-slate-50">
-                            <p className="text-xs font-black text-violet">موقع التوصيل</p>
-                            <p className="text-[10px] text-slate-400 font-bold mt-0.5">البيت، العمل، أو أي موقع آخر</p>
+                        <div className="absolute top-full right-0 left-0 sm:left-auto sm:w-80 mt-2 welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-deep-navy/95 border border-white/30 backdrop-blur-md rounded-2xl shadow-2xl z-50 animate-dropdown overflow-hidden text-right relative">
+                          <WelcomeScreenBackground lite />
+                          <div className="relative z-10">
+                          <div className="p-3 border-b border-white/15 bg-white/5">
+                            <p className="text-xs font-black text-white">موقع التوصيل</p>
+                            <p className="text-[10px] text-white/55 font-bold mt-0.5">البيت، العمل، أو أي موقع آخر</p>
                           </div>
-                          <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
+                          <div className="max-h-56 overflow-y-auto divide-y divide-white/10">
                             {headerLocations.map((loc) => {
                               const LocIcon = savedLocationIcon(loc.label);
                               const isActive = activeOrderLocation?.id === loc.id;
@@ -3096,26 +3284,26 @@ export const CustomerApp: React.FC = () => {
                                     setOrderDeliveryLocationId(loc.id);
                                     setShowHeaderLocationPicker(false);
                                   }}
-                                  className={`w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors ${isActive ? 'bg-violet/5' : ''}`}
+                                  className={`w-full p-3 flex items-center gap-3 hover:bg-white/10 transition-colors ${isActive ? 'bg-white/10' : ''}`}
                                 >
-                                  <div className={`p-2 rounded-xl shrink-0 ${isActive ? 'bg-vibrant-purple text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                  <div className={`p-2 rounded-xl shrink-0 border ${isActive ? 'bg-vibrant-purple text-white border-white/30 welcome-icon-pulse' : 'bg-white/10 text-white/70 border-white/20'}`}>
                                     <LocIcon size={15} />
                                   </div>
                                   <div className="flex-1 min-w-0 text-right">
-                                    <p className="text-xs font-black text-slate-800">
+                                    <p className="text-xs font-black text-white">
                                       {loc.label}
                                       {loc.isDefault ? ' · الافتراضي' : ''}
                                     </p>
-                                    <p className="text-[10px] text-slate-400 font-bold truncate">
+                                    <p className="text-[10px] text-white/50 font-bold truncate">
                                       {loc.province}{loc.area ? ` — ${loc.area}` : ''}
                                     </p>
                                   </div>
-                                  {isActive && <Check size={15} className="text-vibrant-purple shrink-0" />}
+                                  {isActive && <Check size={15} className="text-[#fff700] shrink-0" />}
                                 </button>
                               );
                             })}
                             {headerLocations.length === 0 && (
-                              <p className="p-4 text-center text-[10px] text-slate-400 font-bold">
+                              <p className="p-4 text-center text-[10px] text-white/45 font-bold">
                                 لا توجد مواقع محفوظة بعد
                               </p>
                             )}
@@ -3127,19 +3315,21 @@ export const CustomerApp: React.FC = () => {
                               handleTabChange('profile');
                               setShowSavedLocations(true);
                             }}
-                            className="w-full p-3 flex items-center justify-center gap-2 border-t border-slate-50 text-vibrant-purple hover:bg-violet/5 transition-colors"
+                            className="welcome-btn-pulse w-full p-3 flex items-center justify-center gap-2 border-t border-white/15 text-white bg-white/5 hover:bg-white/10 transition-colors"
                           >
                             <Plus size={15} />
                             <span className="text-xs font-black">إضافة أو تعديل موقع</span>
                           </button>
+                          </div>
                         </div>
                       </>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 relative">
                   <button 
+                    type="button"
                     onClick={() => {
                       setShowHeaderLocationPicker(false);
                       if (!showNotifications && unreadNotifsCount > 0 && currentCustomer) {
@@ -3147,128 +3337,156 @@ export const CustomerApp: React.FC = () => {
                       }
                       setShowNotifications(!showNotifications);
                     }}
-                    className="relative p-2.5 bg-amber-50/80 text-amber-500 hover:bg-amber-100/70 rounded-full transition-all border border-amber-100/40 flex items-center justify-center shadow-sm"
+                    className={`relative p-2.5 bg-white/10 text-amber-300 hover:bg-white/20 rounded-full transition-all border flex items-center justify-center shadow-sm ${
+                      showNotifications ? 'border-amber-300/60 bg-white/20' : 'border-white/25'
+                    }`}
                   >
                     <Bell size={20} strokeWidth={1.75} />
                     {unreadNotifsCount > 0 && (
-                      <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-rose-500 text-white text-[9px] font-black flex items-center justify-center rounded-full border-2 border-white ring-px ring-rose-200">
+                      <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-rose-500 text-white text-[9px] font-black flex items-center justify-center rounded-full border-2 border-deep-navy">
                         {unreadNotifsCount}
                       </span>
                     )}
                   </button>
 
                   <button 
+                    type="button"
                     onClick={() => {
                       setShowHeaderLocationPicker(false);
+                      setShowNotifications(false);
                       setShowCart(true);
                     }}
                     className="relative p-2.5 bg-white/10 text-white hover:bg-white/20 rounded-full transition-all border border-white/20 flex items-center justify-center shadow-sm"
                   >
                     <ShoppingCart size={20} strokeWidth={1.75} />
                     {cart.length > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 w-5 h-5 bg-vibrant-purple text-white text-[10px] font-black flex items-center justify-center rounded-full shadow-lg border-2 border-white">
+                      <span className="absolute -top-0.5 -right-0.5 w-5 h-5 bg-vibrant-purple text-white text-[10px] font-black flex items-center justify-center rounded-full shadow-lg border-2 border-deep-navy">
                         {cart.reduce((sum, item) => sum + item.quantity, 0)}
                       </span>
                     )}
                   </button>
+
+                  {/* قائمة التنبيهات — منسدلة صغيرة تحت الجرس بدون دفع السلايدر */}
+                  {showNotifications && (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="إغلاق التنبيهات"
+                        className="fixed inset-0 z-40 cursor-default bg-transparent"
+                        onClick={() => setShowNotifications(false)}
+                      />
+                      <div className="absolute left-0 top-12 z-50 w-[min(19rem,calc(100vw-1.5rem))] bg-[#0F1830] border border-white/20 rounded-2xl shadow-2xl overflow-hidden text-white">
+                        <div className="px-3 py-2.5 border-b border-white/10 flex items-center justify-between gap-2 bg-white/5">
+                          <h3 className="text-xs font-black text-white">التنبيهات الأخيرة</h3>
+                          <span className="text-[9px] font-black text-white/70 bg-white/10 border border-white/15 px-2 py-0.5 rounded-full">
+                            {customerNotifications.length} تنبيه
+                          </span>
+                        </div>
+
+                        <div className="max-h-56 overflow-y-auto overscroll-contain">
+                          {customerNotifications.length === 0 ? (
+                            <div className="px-4 py-6 text-center text-white/45">
+                              <BellOff size={22} className="mx-auto mb-1.5 opacity-40" />
+                              <p className="text-[10px] font-bold">لا توجد إشعارات جديدة</p>
+                            </div>
+                          ) : (
+                            <div className="divide-y divide-white/10">
+                              {customerNotifications.slice(0, 20).map((n) => (
+                                <div
+                                  key={n.id}
+                                  className={`px-3 py-2.5 text-right hover:bg-white/10 transition-colors cursor-pointer ${!n.read ? 'bg-white/5' : ''}`}
+                                  onClick={() => {
+                                    markNotificationAsRead(n.id);
+                                    if (n.type === 'order') {
+                                      if (n.targetId) setTargetOrderId(n.targetId);
+                                      handleTabChange('orders');
+                                    } else if (n.type === 'promo') {
+                                      setSelectedStore(null);
+                                      setWalletView('gifts');
+                                      setShowWallet(true);
+                                    } else if (n.type === 'system' && (n.title?.includes('نقاط') || n.title?.includes('محفظة'))) {
+                                      setSelectedStore(null);
+                                      setWalletView('points');
+                                      setShowWallet(true);
+                                    } else if (n.type === 'product' && n.targetId) {
+                                      const prod = products.find((p) => p.id === n.targetId);
+                                      if (prod) {
+                                        const store = stores.find((s) => s.id === prod.storeId);
+                                        if (store && !store.isBanned) {
+                                          navigateToStore(store);
+                                          openProductDetail(prod, 'store');
+                                        }
+                                      }
+                                    } else {
+                                      handleTabChange('stores');
+                                    }
+                                    setShowNotifications(false);
+                                  }}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex-1 min-w-0">
+                                      <h4 className={`text-[11px] font-black mb-0.5 leading-snug truncate ${!n.read ? 'text-white' : 'text-white/75'}`}>{n.title}</h4>
+                                      <p className="text-[10px] text-white/50 font-medium leading-relaxed line-clamp-2">{n.message}</p>
+                                      <span className="text-[8px] text-white/35 font-bold mt-1 block">
+                                        {formatSafeDateTimeString(n.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}
+                                      </span>
+                                    </div>
+                                    <div className="flex flex-col items-center gap-1.5 shrink-0">
+                                      {!n.read && <span className="w-1.5 h-1.5 bg-[#fff700] rounded-full" />}
+                                      <button
+                                        type="button"
+                                        title="حذف التنبيه"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void deleteNotification(n.id);
+                                        }}
+                                        className="p-1 rounded-md text-white/30 hover:text-rose-300 hover:bg-rose-500/15 transition-colors"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {customerNotifications.length > 0 && (
+                          <div className="px-3 py-2 border-t border-white/10 flex items-center justify-between gap-2 bg-white/[0.03]">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!currentCustomer) return;
+                                const confirmed = await showConfirm(
+                                  'حذف كل التنبيهات؟',
+                                  'سيتم حذف جميع التنبيهات نهائياً ولا يمكن استرجاعها.',
+                                  'حذف الكل',
+                                  'إلغاء',
+                                );
+                                if (!confirmed.isConfirmed) return;
+                                const deleted = await deleteAllNotifications(currentCustomer.id, 'customer');
+                                if (deleted > 0) showToast('success', `تم حذف ${deleted} تنبيه`);
+                              }}
+                              className="text-[9px] font-black text-rose-300/80 hover:text-rose-200 transition-colors"
+                            >
+                              حذف الكل
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowNotifications(false)}
+                              className="text-[9px] font-black text-white/50 hover:text-white transition-colors"
+                            >
+                              إغلاق
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </header>
-
-        {/* قائمة الإشعارات المنسدلة - تصميم جديد */}
-        {showNotifications && (
-          <div className="fixed inset-x-4 top-20 max-w-sm mx-auto bg-white rounded-3xl shadow-2xl shadow-violet/25 border border-slate-100 z-50 animate-dropdown text-violet overflow-hidden">
-                <div className="p-4 border-b border-slate-50 flex justify-between items-center bg-white">
-                  <div className="flex items-center gap-3">
-                    <button 
-                      onClick={() => {
-                        if (unreadNotifsCount > 0 && currentCustomer) markAllNotificationsAsRead(currentCustomer.id, "customer");
-                        if (!handleAppBack()) setShowNotifications(false);
-                      }}
-                      className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 transition-all ml-1"
-                    >
-                      <ChevronRight size={20} />
-                    </button>
-                    <h3 className="text-xl font-black text-violet">التنبيهات الأخيرة</h3>
-                  </div>
-                  <span className="text-[10px] font-black text-vibrant-purple bg-violet/10 px-2.5 py-1 rounded-full">{customerNotifications.length} تنبيه</span>
-                </div>
-            
-            <div className="max-h-80 overflow-y-auto">
-              {customerNotifications.length === 0 ? (
-                <div className="p-12 text-center text-slate-400">
-                  <BellOff size={32} className="mx-auto mb-2 opacity-20" />
-                  <p className="text-xs font-bold">لا يوجد أي إشعارات حالياً</p>
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-50">
-                  {customerNotifications.map(n => (
-                    <div 
-                      key={n.id} 
-                      className={`p-4 text-right hover:bg-slate-50 transition-colors cursor-pointer group ${!n.read ? 'bg-violet/10' : ''}`}
-                      onClick={() => {
-                        markNotificationAsRead(n.id);
-                        if (n.type === 'order') {
-                          if (n.targetId) {
-                            setTargetOrderId(n.targetId);
-                          }
-                          handleTabChange('orders');
-                        } else if (n.type === 'promo') {
-                          setWalletView('gifts');
-                          handleTabChange('wallet');
-                        } else if (n.type === 'system' && (n.title?.includes('نقاط') || n.title?.includes('محفظة'))) {
-                          setWalletView('points');
-                          handleTabChange('wallet');
-                        } else if (n.type === 'product' && n.targetId) {
-                          const prod = products.find(p => p.id === n.targetId);
-                          if (prod) {
-                            const store = stores.find(s => s.id === prod.storeId);
-                            if (store && !store.isBanned) {
-                              navigateToStore(store);
-                              openProductDetail(prod, 'store');
-                            }
-                          }
-                        } else {
-                          // system / events / general notifications
-                          handleTabChange('stores');
-                        }
-                        setShowNotifications(false);
-                      }}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <h4 className={`text-base font-black mb-1 leading-snug ${!n.read ? 'text-slate-900' : 'text-slate-700'}`}>{n.title}</h4>
-                          <p className="text-sm text-slate-500 font-normal leading-relaxed line-clamp-3">{n.message}</p>
-                          <div className="flex items-center gap-1.5 mt-2 opacity-60">
-                            <Clock size={10} />
-                            <span className="text-[9px] font-bold">
-                              {formatSafeDateTimeString(n.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}
-                            </span>
-                          </div>
-                        </div>
-                        {!n.read && <span className="w-2 h-2 bg-vibrant-purple rounded-full mt-1.5 shadow-sm shadow-violet/20"></span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            
-            {customerNotifications.length > 0 && (
-              <div className="p-3 bg-slate-50 text-center border-t border-slate-100">
-                <button 
-                  onClick={() => {
-                    if (unreadNotifsCount > 0 && currentCustomer) markAllNotificationsAsRead(currentCustomer.id, "customer");
-                    setShowNotifications(false);
-                  }}
-                  className="text-[10px] font-black text-slate-400 hover:text-vibrant-purple transition-colors"
-                >
-                  إغلاق التنبيهات
-                </button>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* التاب المفتوح حالياً */}
         <main className="flex-1 p-3 sm:p-5 max-w-4xl mx-auto w-full min-w-0 overflow-x-hidden">
@@ -3542,7 +3760,7 @@ export const CustomerApp: React.FC = () => {
                 <SponsoredAdSlider
                   ads={ads}
                   adInterval={adminSettings.adInterval || 5}
-                  badgeLabel={adminSettings.adBadgeText ?? DEFAULT_SPONSORED_AD_BADGE}
+                  badgeLabel={adminSettings.adBadgeText}
                   className="mx-1"
                   onAdClick={handleCustomerSponsoredAdClick}
                 />
@@ -3553,15 +3771,16 @@ export const CustomerApp: React.FC = () => {
                 const activeFlashSales = flashSales.filter(f => f.status === 'active' || (f.status === 'upcoming' && new Date() >= new Date(f.startTime) && new Date() < new Date(f.endTime)));
                 if (activeFlashSales.length === 0) return null;
                 return (
-                  <div className="bg-gradient-to-l from-red-600 to-rose-500 rounded-[2rem] p-5 shadow-lg relative overflow-hidden group mx-1 mb-4 text-white">
-                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500">
+                  <div className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-2xl relative overflow-hidden group mx-1 mb-4 text-white">
+                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
                       <Zap size={140} />
                     </div>
+                    <div className="absolute inset-0 bg-gradient-to-l from-rose-600/25 to-transparent pointer-events-none" />
                     <div className="relative z-10">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
-                          <div className="p-2 bg-white/20 backdrop-blur-sm rounded-xl">
-                            <Zap size={18} fill="currentColor" />
+                          <div className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                            <Zap size={18} fill="currentColor" className="text-[#fff700]" />
                           </div>
                           <h3 className="font-black text-white text-xs sm:text-sm tracking-tight drop-shadow-sm">فلاش سيلز - خصومات لفترة محدودة!</h3>
                         </div>
@@ -3573,12 +3792,12 @@ export const CustomerApp: React.FC = () => {
                             <div 
                               key={fs.id} 
                               onClick={() => { if(targetStore && !targetStore.isBanned) setSelectedStore(targetStore); }}
-                              className="w-40 shrink-0 bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20 cursor-pointer hover:bg-white/20 transition-all text-center"
+                              className="w-40 shrink-0 welcome-card-border-glow bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/25 cursor-pointer hover:bg-white/20 transition-all text-center"
                             >
-                                <span className="block text-[10px] font-bold text-rose-100 truncate mb-1">{fs.title}</span>
+                                <span className="block text-[10px] font-bold text-white/80 truncate mb-1">{fs.title}</span>
                                 {targetStore && (
-                                  <div className="flex items-center gap-2 justify-center mt-2 bg-white rounded-xl p-1.5 shadow-sm text-slate-800">
-                                    <img src={targetStore.logo} className="w-6 h-6 rounded-lg shrink-0 object-cover" alt="" />
+                                  <div className="flex items-center gap-2 justify-center mt-2 bg-white/10 border border-white/20 rounded-xl p-1.5 text-white">
+                                    <img src={targetStore.logo} className="w-6 h-6 rounded-lg shrink-0 object-cover border border-white/20" alt="" />
                                     <span className="text-[10px] font-black truncate">{targetStore.shopName}</span>
                                   </div>
                                 )}
@@ -3599,7 +3818,7 @@ export const CustomerApp: React.FC = () => {
                 <div className="relative z-10">
                   <div className="flex items-center justify-between mb-5">
                     <div className="flex items-center gap-2">
-                      <div className="p-2 bg-rose-50 text-rose-600 rounded-xl">
+                      <div className="p-2 bg-rose-500/15 border border-rose-400/25 text-rose-200 rounded-xl">
                         <Percent size={18} />
                       </div>
                       <h3 className="font-black text-white text-xs tracking-tight">العروض</h3>
@@ -3663,19 +3882,20 @@ export const CustomerApp: React.FC = () => {
                     const approvedReqs = flashSaleRequests.filter(r => r.flashSaleId === sale.id && r.status === 'approved');
                     if(approvedReqs.length === 0) return null;
                     return (
-                      <div key={sale.id} className="bg-gradient-to-l from-rose-600 to-pink-500 rounded-[2rem] p-6 text-white shadow-xl overflow-hidden relative">
-                        <div className="absolute top-0 right-0 p-8 opacity-10">
+                      <div key={sale.id} className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-6 text-white shadow-2xl overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
                           <Zap size={150} />
                         </div>
+                        <div className="absolute inset-0 bg-gradient-to-l from-rose-600/20 via-transparent to-transparent pointer-events-none" />
                         <div className="relative z-10 text-right">
                            <div className="flex justify-between items-start mb-4">
                               <div>
-                                <span className="bg-white text-rose-600 text-[10px] font-black px-3 py-1 rounded-full mb-2 inline-flex items-center gap-1"><Zap size={12} className="fill-current" /> فعالية نشطة</span>
+                                <span className="bg-white/15 border border-white/25 text-[#fff700] text-[10px] font-black px-3 py-1 rounded-full mb-2 inline-flex items-center gap-1"><Zap size={12} className="fill-current" /> فعالية نشطة</span>
                                 <h3 className="text-2xl font-black">{sale.title}</h3>
-                                <p className="text-sm opacity-90 mt-1 max-w-lg">{sale.description}</p>
+                                <p className="text-sm text-white/80 mt-1 max-w-lg">{sale.description}</p>
                               </div>
-                              <div className="bg-deep-navy/20 backdrop-blur px-4 py-2 rounded-2xl text-center min-w-[100px]">
-                                <span className="text-[10px] font-bold block opacity-80 uppercase tracking-widest mb-1">ينتهي في</span>
+                              <div className="bg-white/10 border border-white/20 backdrop-blur px-4 py-2 rounded-2xl text-center min-w-[100px]">
+                                <span className="text-[10px] font-bold block text-white/60 uppercase tracking-widest mb-1">ينتهي في</span>
                                 <span className="font-mono font-black text-sm tracking-wider select-none">{formatSafeDate(sale.endTime, 'en-GB')} {formatSafeTimeString(sale.endTime, 'en-US', {hour: '2-digit', minute:'2-digit'})}</span>
                               </div>
                            </div>
@@ -3693,9 +3913,9 @@ export const CustomerApp: React.FC = () => {
                                     isSpecialOffer: true
                                  };
                                  return (
-                                     <div key={req.id} onClick={() => { setSelectedStore(store); openProductDetail(promoProduct, 'store'); }} className="bg-white/10 hover:bg-white/20 transition cursor-pointer backdrop-blur-md rounded-2xl p-3 border border-white/20 text-right group">
-                                       <div className="overflow-hidden rounded-xl mb-3 h-24 relative shadow-inner bg-white/5">
-                                         <div className="absolute top-0 right-0 bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded-bl-lg rounded-tr-xl z-20 shadow-md">عرض خاص</div>
+                                     <div key={req.id} onClick={() => { setSelectedStore(store); openProductDetail(promoProduct, 'store'); }} className="welcome-card-border-glow bg-white/10 hover:bg-white/20 transition cursor-pointer backdrop-blur-md rounded-2xl p-3 border border-white/25 text-right group">
+                                       <div className="overflow-hidden rounded-xl mb-3 h-24 relative shadow-inner bg-white/5 border border-white/15">
+                                         <div className="absolute top-0 right-0 bg-rose-500/90 text-white text-[9px] font-black px-2 py-0.5 rounded-bl-lg rounded-tr-xl z-20 shadow-md">عرض خاص</div>
                                          <ProductImage
                                            src={p.image}
                                            alt={p.name}
@@ -3708,10 +3928,10 @@ export const CustomerApp: React.FC = () => {
                                        </div>
                                        <h4 className="font-bold text-xs truncate drop-shadow-md mb-1">{p.name}</h4>
                                        <div className="flex gap-2 items-center flex-wrap">
-                                          <span className="font-black text-white text-sm bg-rose-500 px-2 py-0.5 rounded-lg shadow-sm">{req.promotionalPrice.toLocaleString()} <span className="text-[8px]">د.ع</span></span>
-                                          <del className="text-[10px] opacity-70">{p.price.toLocaleString()}</del>
+                                          <span className="font-black text-[#fff700] text-sm bg-white/10 border border-white/20 px-2 py-0.5 rounded-lg shadow-sm">{req.promotionalPrice.toLocaleString()} <span className="text-[8px] text-white">د.ع</span></span>
+                                          <del className="text-[10px] text-white/50">{p.price.toLocaleString()}</del>
                                        </div>
-                                       <p className="text-[9px] font-bold opacity-80 mt-2 bg-deep-navy/10 px-2 py-1 rounded-md text-center">{store.shopName}</p>
+                                       <p className="text-[9px] font-bold text-white/70 mt-2 bg-white/10 border border-white/15 px-2 py-1 rounded-md text-center">{store.shopName}</p>
                                      </div>
                                  )
                               })}
@@ -4467,234 +4687,231 @@ export const CustomerApp: React.FC = () => {
 
           {/* تاب تتبع طلباتي */}
           {activeTab === 'orders' && (
-            <div className="space-y-6 animate-fade-in px-1">
-              {(() => {
-                let displayedOrders = targetOrderId ? customerOrders.filter(o => o.id === targetOrderId) : customerOrders;
-                if (showOnlyDelivered) {
-                  displayedOrders = displayedOrders.filter(o => o.status === 'delivered');
-                }
-                
-                return (
-                  <>
-                    {/* تتبع الطلب المحدد من الإشعارات */}
-                    {targetOrderId && (
-                      <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2.5rem] flex flex-col sm:flex-row gap-3 items-center justify-between text-right shadow-2xl">
-                        <div className="flex items-center gap-3">
-                          <span className="relative flex h-3 w-3 shrink-0">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#b07aff] opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-3 w-3 bg-vibrant-purple"></span>
-                          </span>
-                          <div>
-                            <span className="text-xs font-black text-white font-tajawal block">عرض تفاصيل الطلب المحدد من التنبيهات</span>
-                            <span className="text-[10px] font-bold text-[#E9DAFF] font-tajawal">رقم الطلب: {targetOrderId}</span>
+            <div className={`space-y-4 px-1 ${isTabPending ? 'opacity-70' : ''}`}>
+              {targetOrderId && (
+                <div className="perf-list-card welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl p-4 flex flex-col sm:flex-row gap-3 items-center justify-between text-right">
+                  <div className="flex items-center gap-3">
+                    <span className="relative flex h-3 w-3 shrink-0">
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-[#fff700]"></span>
+                    </span>
+                    <div>
+                      <span className="text-xs font-black text-white font-tajawal block">عرض تفاصيل الطلب المحدد من التنبيهات</span>
+                      <span className="text-[10px] font-bold text-[#E9DAFF] font-tajawal">رقم الطلب: #{getOrderSeqId(targetOrderId) || targetOrderId}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTargetOrderId(null)}
+                    className="welcome-btn-pulse text-[10px] font-black text-white bg-white/10 hover:bg-white/20 px-4 py-2 rounded-2xl border border-white/30 transition-colors cursor-pointer shrink-0"
+                  >
+                    إلغاء التصفية وعرض كل طلباتي
+                  </button>
+                </div>
+              )}
+
+              <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+                <h2 className="text-sm font-black text-white flex items-center gap-2">
+                  <div className="welcome-icon-pulse p-2 bg-white/10 border border-white/25 text-[#E9DAFF] rounded-xl">
+                    <ClipboardList size={18} />
+                  </div>
+                  <span>تتبع طلباتك</span>
+                </h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowOnlyDelivered(!showOnlyDelivered);
+                    }}
+                    className={`text-[10px] sm:text-xs font-bold px-3 sm:px-4 py-1.5 sm:py-2 rounded-full transition-colors cursor-pointer ${
+                      showOnlyDelivered
+                        ? 'border bg-emerald-500/20 text-emerald-200 border-emerald-400/40 hover:bg-emerald-500/30'
+                        : 'text-white bg-white/10 border border-white/25 hover:bg-white/15'
+                    }`}
+                  >
+                    {showOnlyDelivered ? 'عرض الكل' : 'الطلبات المكتملة فقط'}
+                  </button>
+                  <div className="text-[10px] text-white font-bold bg-white/10 border border-white/25 px-3 py-1.5 sm:py-2 rounded-full shrink-0">
+                    إجمالي ({displayedCustomerOrders.length})
+                  </div>
+                </div>
+              </div>
+
+              {displayedCustomerOrders.length === 0 ? (
+                <div className="py-20 text-center welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl">
+                  <div className="welcome-icon-pulse w-24 h-24 bg-white/10 border border-white/25 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <ShoppingBag size={40} className="text-white" />
+                  </div>
+                  <p className="text-white font-black">لا توجد طلبات سابقة</p>
+                  <p className="text-white/70 text-[10px] mt-2 px-10 font-bold leading-relaxed">ابدأ بالتسوق من المتاجر المفضلة لديك لتظهر طلباتك هنا</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {visibleCustomerOrders.map((order) => {
+                    const lat = (order as { customerLat?: number }).customerLat;
+                    const lng = (order as { customerLng?: number }).customerLng;
+                    const mapsUrl =
+                      typeof lat === 'number' && typeof lng === 'number'
+                        ? `https://www.google.com/maps?q=${lat},${lng}`
+                        : null;
+
+                    return (
+                      <div
+                        key={order.id}
+                        className="perf-list-card welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl p-4 text-right flex flex-col gap-4 min-w-0 w-full text-white"
+                      >
+                        <div className="flex justify-between items-start gap-3 min-w-0 w-full">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="welcome-icon-pulse p-2 bg-white/10 border border-white/25 text-[#E9DAFF] rounded-xl shrink-0">
+                              <StoreIcon size={18} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <span className="text-[9px] text-white/70 font-black block mb-0.5 whitespace-nowrap">من متجر</span>
+                              <h4 className="text-xs sm:text-sm font-black text-white leading-tight truncate" title={order.storeName}>{order.storeName}</h4>
+                              {getOrderSeqId(order.id) ? (
+                                <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-black text-violet-200 bg-white/10 border border-white/25 rounded-lg px-2 py-0.5">
+                                  #{getOrderSeqId(order.id)}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="text-left shrink-0">
+                            <span className="block text-[9px] font-black text-white/60 uppercase tracking-widest mb-1 leading-none">إجمالي الطلب</span>
+                            <span className="text-sm font-black text-[#fff700] whitespace-nowrap">{(order.total || 0).toLocaleString()} <span className="text-[10px] text-white">د.ع</span></span>
                           </div>
                         </div>
-                        <button 
-                          onClick={() => setTargetOrderId(null)} 
-                          className="welcome-btn-pulse text-[10px] font-black text-white bg-white/10 hover:bg-white/20 px-4 py-2 rounded-2xl border border-white/30 backdrop-blur-md transition-colors cursor-pointer shrink-0"
-                        >
-                          إلغاء التصفية وعرض كل طلباتي
-                        </button>
-                      </div>
-                    )}
 
-                    <div className="flex items-center justify-between flex-wrap gap-3">
-                      <h2 className="text-sm font-black text-white flex items-center gap-2">
-                        <div className="p-2 bg-white/10 border border-white/20 text-vibrant-purple rounded-xl backdrop-blur-md">
-                          <ClipboardList size={18} />
-                        </div>
-                        <span>تتبع طلباتك</span>
-                      </h2>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setShowOnlyDelivered(!showOnlyDelivered)}
-                          className={`text-[10px] sm:text-xs font-bold px-3 sm:px-4 py-1.5 sm:py-2 rounded-full backdrop-blur-md transition-colors cursor-pointer shadow-sm ${
-                            showOnlyDelivered
-                              ? 'border bg-emerald-500/20 text-emerald-200 border-emerald-400/40 hover:bg-emerald-500/30'
-                              : 'welcome-btn-pulse text-white hover:opacity-90'
-                          }`}
-                        >
-                          {showOnlyDelivered ? 'عرض الكل' : 'الطلبات المكتملة فقط'}
-                        </button>
-                        <div className="text-[10px] text-white font-bold bg-white/10 border border-white/20 px-3 py-1.5 sm:py-2 rounded-full backdrop-blur-md shadow-sm shrink-0">
-                          إجمالي ({displayedOrders.length})
-                        </div>
-                      </div>
-                    </div>
+                        <div className="bg-white/10 p-3 rounded-2xl border border-white/20 w-full min-w-0">
+                          <div className="flex justify-between items-center mb-2 gap-2">
+                            <span className="text-[9px] font-black text-white/50 uppercase tracking-widest">تتبع الحالة</span>
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full whitespace-nowrap shrink-0 border ${
+                              order.status === 'pending' ? 'bg-amber-500/20 text-amber-200 border-amber-400/30' :
+                              order.status === 'accepted' ? 'bg-sky-500/20 text-sky-200 border-sky-400/30' :
+                              order.status === 'shipped' ? 'bg-violet/20 text-[#b07aff] border-violet-400/30' :
+                              order.status === 'delivered' ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/30' :
+                              order.status === 'cancelled' ? 'bg-white/10 text-white/70 border-white/20' :
+                              'bg-rose-500/20 text-rose-200 border-rose-400/30'
+                            }`}>
+                              {order.status === 'pending' ? 'بانتظار المراجعة' :
+                               order.status === 'accepted' ? 'قيد التحضير' :
+                               order.status === 'shipped' ? 'في الطريق إليك' :
+                               order.status === 'delivered' ? 'تم الاستلام' :
+                               order.status === 'returned' ? 'مرتجع' :
+                               order.status === 'replaced' ? 'تم الاستبدال' :
+                               order.status === 'cancelled' ? 'ملغى' : 'مرفوض'}
+                            </span>
+                          </div>
 
-                    {displayedOrders.length === 0 ? (
-                      <div className="py-20 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] shadow-sm">
-                        <div className="w-24 h-24 bg-white/10 border border-white/20 rounded-full flex items-center justify-center mx-auto mb-6">
-                          <ShoppingBag size={40} className="text-white" />
-                        </div>
-                        <p className="text-white font-black">لا توجد طلبات سابقة</p>
-                        <p className="text-white/70 text-[10px] mt-2 px-10 font-bold leading-relaxed">ابدأ بالتسوق من المتاجر المفضلة لديك لتظهر طلباتك هنا</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {displayedOrders.map(order => (
-                    <div key={order.id} className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-4 sm:p-6 text-right shadow-2xl hover:shadow-vibrant-purple/20 transition-all relative overflow-hidden flex flex-col gap-5 min-w-0 w-full text-white">
-                      
-                      {/* ترويسة الطلب */}
-                      <div className="flex justify-between items-start gap-3 min-w-0 w-full">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                           <div className="p-2 sm:p-2.5 bg-vibrant-purple text-white rounded-2xl shadow-lg shadow-violet/20 shrink-0">
-                             <StoreIcon size={18} />
-                           </div>
-                           <div className="min-w-0 flex-1">
-                             <span className="text-[9px] sm:text-[10px] text-white/70 font-black block mb-0.5 whitespace-nowrap">من متجر</span>
-                             <h4 className="text-xs sm:text-sm font-black text-white leading-tight truncate" title={order.storeName}>{order.storeName}</h4>
-                           </div>
-                        </div>
-                        <div className="text-left shrink-0">
-                           <span className="block text-[9px] sm:text-[10px] font-black text-white uppercase tracking-widest mb-1 leading-none">إجمالي الطلب</span>
-                           <span className="text-sm sm:text-base font-black text-white whitespace-nowrap">{(order.total || 0).toLocaleString()} <span className="text-[10px]">د.ع</span></span>
-                        </div>
-                      </div>
-
-                      {/* حالة الطلب - الرسم البياني للتتبع */}
-                      <div className="bg-slate-50/50 p-3 sm:p-4 rounded-3xl border border-slate-100 w-full min-w-0">
-                        <div className="flex justify-between items-center mb-2 gap-2">
-                           <span className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest">تتبع الحالة</span>
-                           <span className={`text-[9px] sm:text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap shrink-0 ${
-                              order.status === 'pending' ? 'bg-amber-100 text-amber-600' :
-                              order.status === 'accepted' ? 'bg-sky-100 text-sky-600' :
-                              order.status === 'shipped' ? 'bg-violet/20 text-vibrant-purple' :
-                              order.status === 'delivered' ? 'bg-emerald-100 text-emerald-600' :
-                              'bg-rose-100 text-rose-600'
-                           }`}>
-                             {order.status === 'pending' ? 'بانتظار المراجعة' :
-                              order.status === 'accepted' ? 'قيد التحضير' :
-                              order.status === 'shipped' ? 'في الطريق إليك' :
-                              order.status === 'delivered' ? 'تم الاستلام' :
-                              order.status === 'returned' ? 'مرتجع' :
-                              order.status === 'replaced' ? 'تم الاستبدال' : 'مرفوض'}
-                           </span>
-                        </div>
-
-                        {/* الخط الزمني المطور */}
-                        <div className="relative h-1 bg-slate-200 rounded-full mt-4 flex items-center justify-between">
-                           {/* مستوى التقدم */}
-                           <div className={`absolute top-0 right-0 h-full bg-vibrant-purple rounded-full transition-all duration-700 ${
+                          <div className="relative h-1 bg-white/20 rounded-full mt-3 flex items-center justify-between">
+                            <div className={`absolute top-0 right-0 h-full bg-vibrant-purple rounded-full ${
                               order.status === 'pending' ? 'w-0' :
                               order.status === 'accepted' ? 'w-1/3' :
                               order.status === 'shipped' ? 'w-2/3' :
                               order.status === 'delivered' ? 'w-full' : 'w-full !bg-rose-400'
-                           }`} />
-                           
-                           {/* نقاط الحالة */}
-                           {['pending', 'accepted', 'shipped', 'delivered'].map((s) => {
+                            }`} />
+                            {['pending', 'accepted', 'shipped', 'delivered'].map((s) => {
                               const isActive = order.status === s || (
-                                 (s === 'pending' && ['accepted', 'shipped', 'delivered'].includes(order.status)) ||
-                                 (s === 'accepted' && ['shipped', 'delivered'].includes(order.status)) ||
-                                 (s === 'shipped' && order.status === 'delivered')
+                                (s === 'pending' && ['accepted', 'shipped', 'delivered'].includes(order.status)) ||
+                                (s === 'accepted' && ['shipped', 'delivered'].includes(order.status)) ||
+                                (s === 'shipped' && order.status === 'delivered')
                               );
                               const isRejected = order.status === 'rejected' || order.status === 'returned';
-
                               return (
                                 <div key={s} className="relative flex flex-col items-center">
-                                  <div className={`w-3 h-3 rounded-full border-2 border-white shadow-sm z-10 transition-colors ${
-                                    isActive ? 'bg-vibrant-purple scale-125' : isRejected ? 'bg-rose-400' : 'bg-slate-300'
+                                  <div className={`w-3 h-3 rounded-full border-2 border-[#0B1320] z-10 ${
+                                    isActive ? 'bg-vibrant-purple scale-110' : isRejected ? 'bg-rose-400' : 'bg-white/30'
                                   }`} />
                                 </div>
                               );
-                           })}
+                            })}
+                          </div>
+                          <div className="flex justify-between mt-3 px-1">
+                            {['استلام', 'موافقة', 'شحن', 'توصيل'].map((l) => (
+                              <span key={l} className="text-[9px] font-black text-white/45">{l}</span>
+                            ))}
+                          </div>
                         </div>
-                        
-                        <div className="flex justify-between mt-3 px-1">
-                           {['استلام', 'موافقة', 'شحن', 'توصيل'].map((l, i) => (
-                             <span key={i} className="text-[9px] font-black text-slate-400">{l}</span>
-                           ))}
-                        </div>
-                      </div>
 
-                      {/* تفاصيل الهوية والرفض */}
-                      {(order.rejectionReason || order.returnReason) && (
-                        <div className={`p-3 rounded-2xl border flex items-start gap-3 min-w-0 w-full ${
-                          order.status === 'rejected' ? 'bg-rose-50 border-rose-100 text-rose-600' : 'bg-amber-50 border-amber-100 text-amber-700'
-                        }`}>
-                           <Info size={16} className="shrink-0 mt-0.5" />
-                           <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                        {(order.status === 'cancelled' || order.rejectionReason || order.returnReason) && (
+                          <div className={`p-3 rounded-2xl border flex items-start gap-3 min-w-0 w-full ${
+                            order.status === 'cancelled' ? 'bg-white/10 border-white/20 text-white/80' :
+                            order.status === 'rejected' ? 'bg-rose-500/15 border-rose-400/25 text-rose-200' : 'bg-amber-500/15 border-amber-400/25 text-amber-200'
+                          }`}>
+                            <Info size={16} className="shrink-0 mt-0.5" />
+                            <div className="flex flex-col gap-0.5 min-w-0 flex-1">
                               <span className="text-[10px] font-black uppercase tracking-widest leading-none opacity-60">
-                                {order.status === 'rejected' ? 'سبب الرفض' : 'معلومات الإرجاع'}
+                                {order.status === 'cancelled' ? 'حالة الطلب' :
+                                 order.status === 'rejected' ? 'سبب الرفض' : 'معلومات الإرجاع'}
                               </span>
-                              <p className="text-xs font-black truncate" title={order.rejectionReason || order.returnReason}>{order.rejectionReason || order.returnReason}</p>
-                           </div>
-                        </div>
-                      )}
+                              <p className="text-xs font-black truncate" title={
+                                order.status === 'cancelled'
+                                  ? 'قمتَ بإلغاء هذا الطلب'
+                                  : (order.rejectionReason || order.returnReason)
+                              }>
+                                {order.status === 'cancelled'
+                                  ? 'قمتَ بإلغاء هذا الطلب'
+                                  : (order.rejectionReason || order.returnReason)}
+                              </p>
+                            </div>
+                          </div>
+                        )}
 
-                      {/* المنتجات والتفاصيل المالية */}
-                      <div className="space-y-3 min-w-0 w-full">
-                         <div className="flex items-center justify-between text-[9px] sm:text-[10px] font-black text-white uppercase tracking-widest gap-2 min-w-0">
+                        <div className="space-y-3 min-w-0 w-full">
+                          <div className="flex items-center justify-between text-[9px] font-black text-white/70 uppercase tracking-widest gap-2 min-w-0">
                             <span className="shrink-0">المنتجات ({order.items.length})</span>
                             <div className="flex items-center gap-1 min-w-0 truncate">
-                               <Calendar size={12} className="shrink-0" />
-                               <span className="truncate text-white">{formatSafeDateTimeString(order.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                              <Calendar size={12} className="shrink-0" />
+                              <span className="truncate text-white">{formatSafeDateTimeString(order.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}</span>
                             </div>
-                         </div>
-                         <div className="grid gap-2 max-h-[120px] overflow-y-auto no-scrollbar">
-                           {order.items.map((item, idx) => (
-                             <div key={idx} className="flex justify-between items-center gap-3 group min-w-0">
-                               <div className="flex items-center gap-2 min-w-0 flex-1">
-                                  <div className="w-5 h-5 sm:w-6 sm:h-6 bg-white/15 rounded-lg flex items-center justify-center text-[9px] font-bold text-white shrink-0">
+                          </div>
+                          <div className="grid gap-2 max-h-[120px] overflow-y-auto no-scrollbar">
+                            {order.items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between items-center gap-3 min-w-0">
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <div className="w-5 h-5 bg-white/15 border border-white/20 rounded-lg flex items-center justify-center text-[9px] font-bold text-white shrink-0">
                                     {item.quantity}
                                   </div>
                                   <span className="text-xs font-bold text-white truncate flex-1" title={item.productName}>{item.productName}</span>
                                 </div>
-                               <span className="text-[11px] font-bold text-white whitespace-nowrap shrink-0">
-                                 {((item.price || 0) * (item.quantity || 0)).toLocaleString()} د.ع
-                               </span>
-                             </div>
-                           ))}
-                         </div>
-                         
-                         {/* زر إلغاء الطلب الموقت */}
-                         <CancelOrderButton order={order} onCancelClick={(o) => setOrderToCancel(o)} />
-
-                         {/* تفاصيل التوصيل */}
-                         <div className="pt-3 border-t border-white/20 flex flex-col gap-2 min-w-0 w-full">
-                            <div className="flex items-center gap-2">
-                              <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
-                                 <MapPin size={12} />
+                                <span className="text-[11px] font-bold text-white whitespace-nowrap shrink-0">
+                                  {((item.price || 0) * (item.quantity || 0)).toLocaleString()} د.ع
+                                </span>
                               </div>
-                              <span className="text-[11px] font-bold text-white whitespace-normal break-words flex-1" title={`عنوان التوصيل: ${order.customerProvince} - ${order.customerAddress}`}>
-                                 عنوان التوصيل: {order.customerProvince} - {order.customerAddress}
+                            ))}
+                          </div>
+
+                          <CancelOrderButton order={order} onCancelClick={(o) => setOrderToCancel(o)} />
+
+                          <div className="pt-3 border-t border-white/15 flex flex-col gap-2 min-w-0 w-full">
+                            <div className="flex items-center gap-2">
+                              <div className="p-1.5 bg-emerald-500/20 text-emerald-300 border border-emerald-400/20 rounded-lg shrink-0">
+                                <MapPin size={12} />
+                              </div>
+                              <span className="text-[11px] font-bold text-white whitespace-normal break-words flex-1">
+                                عنوان التوصيل: {order.customerProvince} - {order.customerAddress}
                               </span>
                             </div>
-                            {adminSettings?.enableMaps !== false && (order as any).customerLat && (order as any).customerLng && (
-                              <div className="w-full h-24 rounded-xl overflow-hidden border border-slate-200 pointer-events-none relative mt-1 z-0">
-                                <MapContainer 
-                                  key={`order-${order.id}`}
-                                  center={[(order as any).customerLat, (order as any).customerLng]} 
-                                  zoom={14} 
-                                  style={{ height: "100%", width: "100%", zIndex: 0 }}
-                                  zoomControl={false}
-                                  attributionControl={false}
-                                  dragging={false}
-                                  scrollWheelZoom={false}
-                                  doubleClickZoom={false}
-                                >
-                                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                                  <Marker position={[(order as any).customerLat, (order as any).customerLng]} />
-                                </MapContainer>
-                                <div className="absolute inset-0 z-[400] bg-transparent"></div>
-                              </div>
+                            {mapsUrl && (
+                              <a
+                                href={mapsUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] font-black text-[#b07aff] underline underline-offset-2 w-fit"
+                              >
+                                فتح الموقع على الخريطة
+                              </a>
                             )}
-                         </div>
+                          </div>
+                        </div>
                       </div>
-
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
-                  </>
-                );
-              })()}
             </div>
           )}
 
-          {/* تاب المحفظة ونظام النقاط */}
-          {activeTab === 'wallet' && (() => {
+          {/* المحفظة والجوائز — ورقة بنفس أسلوب من نحن */}
+          {showWallet && (() => {
             const walletTierState = currentCustomer
               ? getEffectiveCustomerTierState(currentCustomer, loyalty)
               : { monthlyOrdersCount: 0, tier: 'Silver' as const, lastResetMonth: '', needsPersistReset: false };
@@ -4703,7 +4920,6 @@ export const CustomerApp: React.FC = () => {
             const walletTierProgress = getNextTierProgress(walletTier, walletMonthlyOrders, loyalty.tiers);
             const sortedTiers = getSortedTiers(loyalty.tiers);
             const upgradeTiers = getUpgradeableTiers(loyalty.tiers);
-            const tierUpgradeRule = loyaltyEarnRules.find((r) => r.type === 'tier_upgrade');
             const upgradeGridClass =
               upgradeTiers.length <= 2
                 ? 'grid-cols-2'
@@ -4712,35 +4928,38 @@ export const CustomerApp: React.FC = () => {
                   : 'grid-cols-3';
 
             return (
-            <div className="space-y-6 animate-fade-in px-1">
-              <div className="flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('profile')}
-                  className="p-2 merchant-icon-tile text-slate-300 rounded-xl hover:bg-white/15 hover:text-white transition-all border border-transparent flex items-center justify-center shrink-0"
-                  title="الرجوع لحسابي"
-                >
-                  <ChevronRight size={20} />
-                </button>
-                <h2 className="text-sm font-black text-white flex items-center gap-2">
-                  <div className="p-2 bg-white/10 border border-white/20 text-vibrant-purple rounded-xl backdrop-blur-md">
-                    <Wallet size={18} />
+            <LegalSheetModal
+              open={showWallet}
+              onClose={() => setShowWallet(false)}
+              title={loyalty.texts.pageTitle}
+              icon={Wallet}
+              variant="home"
+            >
+            <div className="space-y-4 animate-fade-in font-tajawal text-right" dir="rtl">
+              <header className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-5 sm:p-6 text-white shadow-2xl relative overflow-hidden text-center">
+                <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
+                <div className="relative z-10">
+                  <div className="welcome-icon-pulse mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-[#fff700] bg-brand-horizontal border border-white shadow-brand-glow-lg">
+                    <Wallet size={28} />
                   </div>
-                  <span>{loyalty.texts.pageTitle}</span>
-                </h2>
-                <div className="w-9" />
-              </div>
+                  <h1 className="font-black text-[#fff700] mb-1.5 text-lg">{loyalty.texts.pageTitle}</h1>
+                  <p className="text-[10px] sm:text-xs font-bold text-purple-100">
+                    رصيدك {currentCustomer?.points ?? 0} {loyalty.texts.pointsUnit} — الأكواد والخصومات
+                  </p>
+                </div>
+              </header>
 
               <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-1.5 flex gap-1 shadow-sm">
                 <button
                   onClick={() => setWalletView('points')}
-                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'points' ? 'welcome-btn-pulse text-white shadow-lg shadow-violet/20 border border-vibrant-purple/60' : 'text-white/50 hover:bg-white/10 hover:text-white/80'}`}
+                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'points' ? 'welcome-btn-pulse text-white bg-brand-horizontal border border-white/30 shadow-brand-glow' : 'text-white/50 hover:bg-white/10 hover:text-white/80'}`}
                 >
                   {loyalty.texts.pointsTabLabel}
                 </button>
                 <button
                   onClick={() => setWalletView('gifts')}
-                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'gifts' ? 'welcome-btn-pulse text-white shadow-[0.96px_0_10px_15px_rgba(0,0,0,0.15),0.96px_0_4px_6px_rgba(0,0,0,0.15)]' : 'text-white/50 hover:bg-white/10 hover:text-white/80'}`}
+                  className={`flex-1 py-3 rounded-2xl text-[10px] font-black transition-all ${walletView === 'gifts' ? 'welcome-btn-pulse text-white bg-brand-horizontal border border-white/30 shadow-brand-glow' : 'text-white/50 hover:bg-white/10 hover:text-white/80'}`}
                 >
                   {loyalty.texts.giftsTabLabel}
                 </button>
@@ -4749,23 +4968,23 @@ export const CustomerApp: React.FC = () => {
               {walletView === 'points' && (
                 <div className="space-y-6">
                   {/* كارد النقاط ونظام المستويات المحسن */}
-                  <div className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow relative overflow-hidden rounded-[2.5rem] p-5 text-white shadow-[0_25px_50px_-12px_rgba(0,0,0,0.15)] border border-white/10">
-                    <div className="absolute top-0 right-0 w-64 h-64 bg-vibrant-purple/10 rounded-full -mr-32 -mt-32 blur-3xl animate-pulse"></div>
-                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-amber-500/5 rounded-full -ml-24 -mb-24 blur-3xl"></div>
+                  <div className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow relative overflow-hidden rounded-[2.5rem] p-5 text-white shadow-2xl border border-white/30 bg-white/5 backdrop-blur-md">
+                    <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+                    <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
                     
                     <div className="relative z-10">
                       {/*Header: Balance & Badge*/}
                       <div className="flex justify-between items-center mb-5">
                         <div className="text-right">
-                          <h2 className="text-[11px] font-black text-white mb-1 flex items-center gap-1.5">
-                             <Award size={14} className="text-[#b07aff]" />
+                          <h2 className="text-[11px] font-black text-[#fff700] mb-1 flex items-center gap-1.5">
+                             <Award size={14} className="text-[#fff700]" />
                              {loyalty.texts.balanceLabel}
                           </h2>
                           <div className="flex items-baseline gap-1">
-                             <span className="text-3xl font-black text-white leading-none tracking-tighter">
+                             <span className="text-3xl font-black text-[#fff700] leading-none tracking-tighter">
                                 {currentCustomer?.points || 0}
                              </span>
-                             <span className="text-[10px] font-black text-[#b07aff]">{loyalty.texts.pointsUnit}</span>
+                             <span className="text-[10px] font-black text-purple-100">{loyalty.texts.pointsUnit}</span>
                           </div>
                         </div>
                         
@@ -4850,7 +5069,10 @@ export const CustomerApp: React.FC = () => {
 
                   {/* عروض استبدال النقاط */}
                   <div className="space-y-4">
-                     <h3 className="text-xs font-black text-white mr-2 uppercase tracking-widest">{loyalty.texts.rewardShopTitle}</h3>
+                     <h3 className="text-xs font-black text-[#fff700] mr-2 uppercase tracking-widest flex items-center gap-2">
+                       <Gift size={14} className="text-[#fff700]" />
+                       {loyalty.texts.rewardShopTitle}
+                     </h3>
                      <div className="grid gap-3">
                         {loyaltyRedemptionPackages.map((pkg) => {
                           const userPoints = currentCustomer?.points || 0;
@@ -4858,25 +5080,25 @@ export const CustomerApp: React.FC = () => {
                           const progressPercent = Math.min(100, Math.round((userPoints / pkg.points) * 100));
                           
                           return (
-                            <div key={pkg.id} className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.2rem] p-5 shadow-lg flex flex-col gap-4 group hover:shadow-vibrant-purple/20 transition-all duration-300 relative overflow-hidden">
+                            <div key={pkg.id} className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.2rem] p-5 shadow-lg flex flex-col gap-4 group hover:bg-white/10 transition-all duration-300 relative overflow-hidden">
                                {/* الجزء العلوي: المعلومات والزر */}
                                <div className="flex items-center justify-between w-full">
                                  <div className="flex items-center gap-3.5 text-right bg-transparent">
-                                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300 ${
+                                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center border border-white/20 transition-all duration-300 ${
                                       canRedeem 
-                                      ? 'welcome-icon-pulse bg-amber-100 text-amber-500 scale-105 shadow-xs shadow-amber-200' 
-                                      : 'bg-white/10 text-white'
+                                      ? 'welcome-icon-pulse bg-brand-horizontal text-[#fff700] scale-105 shadow-brand-glow' 
+                                      : 'bg-white/10 text-[#fff700]'
                                     }`}>
                                        <Gift size={24} />
                                     </div>
                                     <div>
-                                       <h4 className="font-extrabold text-white text-sm leading-tight flex items-center gap-1.5 font-tajawal">
+                                       <h4 className="font-extrabold text-[#fff700] text-sm leading-tight flex items-center gap-1.5 font-tajawal">
                                           <span>خصم {(pkg.discountIqd || 0).toLocaleString()} د.ع</span>
                                           {canRedeem && (
-                                            <span className="text-[9px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-md font-black border border-emerald-100 font-tajawal">متاح</span>
+                                            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded-md font-black border border-emerald-400/30 font-tajawal">متاح</span>
                                           )}
                                        </h4>
-                                       <p className="text-[10px] text-white font-bold mt-0.5 font-tajawal">{pkg.title}</p>
+                                       <p className="text-[10px] text-purple-100 font-bold mt-0.5 font-tajawal">{pkg.title}</p>
                                     </div>
                                  </div>
                                  
@@ -4885,7 +5107,7 @@ export const CustomerApp: React.FC = () => {
                                    disabled={!canRedeem}
                                    className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all duration-300 active:scale-95 ${
                                      canRedeem 
-                                     ? 'welcome-btn-pulse bg-white text-violet shadow-lg shadow-black/10 hover:shadow-xl cursor-pointer hover:scale-[1.03]' 
+                                     ? 'welcome-btn-pulse bg-brand-horizontal text-white border border-white/30 shadow-brand-glow hover:opacity-95 cursor-pointer' 
                                      : 'bg-white/10 text-white/70 cursor-not-allowed border border-white/20 font-mono'
                                    }`}
                                  >
@@ -4919,12 +5141,12 @@ export const CustomerApp: React.FC = () => {
                   </div>
 
                   {/* معلومات الشحن */}
-                  <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-6 shadow-sm">
+                  <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-6 shadow-sm">
                      <div className="flex items-center gap-3 mb-4">
-                        <div className="p-2 bg-white/10 border border-white/20 text-white rounded-xl backdrop-blur-md">
-                           <Zap size={18} />
+                        <div className="p-2.5 rounded-xl bg-white/15 border border-white/20 text-[#fff700] shrink-0 shadow-sm">
+                           <Zap size={16} />
                         </div>
-                        <h3 className="font-black text-white text-sm">{loyalty.texts.rechargeTitle}</h3>
+                        <h3 className="font-black text-[#fff700] text-sm">{loyalty.texts.rechargeTitle}</h3>
                      </div>
                      <div className="flex gap-2">
                         <input 
@@ -4937,19 +5159,19 @@ export const CustomerApp: React.FC = () => {
                         <button 
                           onClick={handleRedeemCode}
                           disabled={isRedeeming || !rechargeCodeInput.trim()}
-                          className="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-black text-[10px] hover:bg-emerald-700 transition shadow-lg shadow-emerald-100 active:scale-95 disabled:opacity-50"
+                          className="welcome-btn-pulse bg-brand-horizontal border border-white/30 text-white px-6 py-3 rounded-2xl font-black text-[10px] shadow-brand-glow hover:opacity-95 transition active:scale-95 disabled:opacity-50"
                         >
                           {isRedeeming ? '...' : loyalty.texts.rechargeButton}
                         </button>
                      </div>
                   </div>
 
-                  <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-6 rounded-[2rem]">
-                    <p className="text-[11px] font-black text-white mb-3 flex items-center gap-2">
-                       <Award size={16} className="text-vibrant-purple" />
+                  <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-6 rounded-[2rem]">
+                    <p className="text-[11px] font-black text-[#fff700] mb-3 flex items-center gap-2">
+                       <Award size={16} className="text-[#fff700]" />
                        {loyalty.texts.earnSectionTitle}
                     </p>
-                    <p className="text-[10px] text-white font-bold mb-4">
+                    <p className="text-[10px] text-purple-100/90 font-bold mb-4">
                        {loyalty.texts.earnSectionSubtitle}
                     </p>
                     <ul className="space-y-4 text-slate-600">
@@ -5048,36 +5270,29 @@ export const CustomerApp: React.FC = () => {
                     <motion.div 
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="welcome-card-glow welcome-card-border-glow rounded-[2.5rem] p-8 text-white shadow-2xl shadow-violet/20 relative overflow-hidden"
+                      className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-6 sm:p-8 text-white shadow-2xl relative overflow-hidden text-center"
                     >
-                       <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl animate-pulse"></div>
-                       <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#b07aff]/20 rounded-full -ml-24 -mb-24 blur-2xl"></div>
+                       <div className="absolute top-0 right-0 w-44 h-44 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+                       <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none" />
                        
-                       <div className="relative z-10 flex flex-col md:flex-row items-center gap-6 text-center md:text-right">
-                          <div className="p-4 bg-white/10 backdrop-blur-md rounded-3xl border border-white/20">
-                             <Gift size={48} className="text-amber-400" />
+                       <div className="relative z-10">
+                          <div className="welcome-icon-pulse mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-[#fff700] bg-brand-horizontal border border-white shadow-brand-glow-lg">
+                             <Gift size={28} />
                           </div>
-                          <div className="flex-1">
-                             <h3 className="font-black text-2xl mb-2">{loyalty.texts.giftsHeaderTitle}</h3>
-                             <p className="text-sm font-medium opacity-80 leading-relaxed max-w-md mx-auto md:mr-0">
-                                {loyalty.texts.giftsHeaderSubtitle}
-                             </p>
-                          </div>
+                          <h3 className="font-black text-[#fff700] text-lg mb-1.5">{loyalty.texts.giftsHeaderTitle}</h3>
+                          <p className="text-[10px] sm:text-xs font-bold text-purple-100 leading-relaxed max-w-md mx-auto">
+                             {loyalty.texts.giftsHeaderSubtitle}
+                          </p>
                        </div>
                     </motion.div>
 
                     {allCodes.length === 0 ? (
-                      <div className="py-24 text-center welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[3rem] shadow-sm px-10">
-                        <div className="relative inline-block mb-8">
-                           <div className="w-24 h-24 bg-white/10 border border-white/20 rounded-full flex items-center justify-center animate-bounce duration-[3000ms]">
-                              <Ticket size={48} className="text-[#e9daff]" />
-                           </div>
-                           <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-white shadow-md rounded-2xl flex items-center justify-center">
-                              <Search size={20} className="text-vibrant-purple" />
-                           </div>
+                      <div className="py-16 text-center welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] shadow-sm px-8">
+                        <div className="welcome-icon-pulse mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl text-[#fff700] bg-brand-horizontal border border-white shadow-brand-glow-lg">
+                           <Ticket size={32} />
                         </div>
-                        <h4 className="text-white font-black text-lg mb-2">{loyalty.texts.giftsEmptyTitle}</h4>
-                        <p className="text-white/70 text-xs font-bold leading-relaxed max-w-xs mx-auto">
+                        <h4 className="text-[#fff700] font-black text-lg mb-2">{loyalty.texts.giftsEmptyTitle}</h4>
+                        <p className="text-purple-100/80 text-xs font-bold leading-relaxed max-w-xs mx-auto">
                            {loyalty.texts.giftsEmptyText}
                         </p>
                       </div>
@@ -5180,10 +5395,14 @@ export const CustomerApp: React.FC = () => {
                                            </div>
                                            
                                            <button 
-                                              onClick={() => {
-                                                navigator.clipboard.writeText(p.code);
-                                                setCopiedId(p.objectId || p.id || idx.toString());
-                                                setTimeout(() => setCopiedId(null), 2000);
+                                              onClick={async () => {
+                                                try {
+                                                  await navigator.clipboard.writeText(p.code);
+                                                  setCopiedId(p.objectId || p.id || idx.toString());
+                                                  setTimeout(() => setCopiedId(null), 2000);
+                                                } catch {
+                                                  showToast('error', 'تعذر النسخ', 'انسخ الكود يدوياً.');
+                                                }
                                               }}
                                               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black transition-all ${
                                                 isCopied 
@@ -5237,6 +5456,7 @@ export const CustomerApp: React.FC = () => {
                 );
               })()}
             </div>
+            </LegalSheetModal>
             );
           })()}
 
@@ -5279,10 +5499,10 @@ export const CustomerApp: React.FC = () => {
 
               {/* أقسام البيانات والإعدادات */}
               <div className="space-y-4">
-                  {/* 1. معلوماتي — قابل للطي */}
+                  {/* 1. معلوماتي */}
                     <button
                       type="button"
-                      onClick={() => setShowMyInfo(prev => !prev)}
+                      onClick={() => setShowMyInfo(true)}
                       className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
                     >
                       <div className="flex items-center gap-4">
@@ -5294,50 +5514,13 @@ export const CustomerApp: React.FC = () => {
                           <span className="text-[10px] text-white font-bold">رقم الهاتف والاسم الكامل</span>
                         </div>
                       </div>
-                      <ChevronLeft size={18} className={`text-white group-hover:translate-x-1 transition-transform duration-300 ${showMyInfo ? '-rotate-90' : ''}`} />
+                      <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
                     </button>
 
-                    {showMyInfo && (
-                      <div className="p-6 space-y-6 welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] shadow-sm animate-fade-in">
-                        <div className="grid md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-black text-white/80 mb-2 mr-1">رقم الهاتف (لا يمكن تغييره)</label>
-                            <div className="flex items-center gap-3 bg-white/10 border border-white/20 px-4 py-3.5 rounded-2xl opacity-70 backdrop-blur-md">
-                              <Phone size={14} className="text-white/60" />
-                              <span className="text-xs font-black text-white/70 tracking-wider">
-                                {currentCustomer?.phone}
-                              </span>
-                              <div className="mr-auto">
-                                <Lock size={12} className="text-white/60" />
-                              </div>
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-black text-white/80 mb-2 mr-1">الاسم الكامل</label>
-                            <input
-                              type="text"
-                              value={profileForm.name}
-                              onChange={e => setProfileForm(prev => ({ ...prev, name: e.target.value }))}
-                              className="w-full bg-white/10 border border-white/20 text-white px-4 py-3.5 rounded-2xl text-xs font-black placeholder:text-white/40 focus:ring-4 focus:ring-vibrant-purple/20 focus:border-vibrant-purple transition-all outline-none backdrop-blur-md"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="pt-2">
-                          <button
-                            onClick={handleSaveProfile}
-                            className="welcome-btn-pulse w-full py-4 bg-vibrant-purple text-white rounded-2xl text-sm font-black shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-[0.98]"
-                          >
-                            حفظ التغييرات
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                  {/* 2. مواقع التوصيل المحفوظة — قابل للطي */}
+                  {/* 2. مواقع التوصيل المحفوظة */}
                     <button
                       type="button"
-                      onClick={() => setShowSavedLocations(prev => !prev)}
+                      onClick={() => setShowSavedLocations(true)}
                       className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
                     >
                       <div className="flex items-center gap-4">
@@ -5353,29 +5536,8 @@ export const CustomerApp: React.FC = () => {
                           </span>
                         </div>
                       </div>
-                      <ChevronLeft size={18} className={`text-white group-hover:translate-x-1 transition-transform duration-300 ${showSavedLocations ? '-rotate-90' : ''}`} />
+                      <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
                     </button>
-
-                    {showSavedLocations && (
-                      <div className="p-6 space-y-6 welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] shadow-sm animate-fade-in">
-                        <SavedLocationsManager
-                          locations={savedLocations}
-                          onChange={setSavedLocations}
-                          provinces={provinces}
-                          hideHeader
-                          labelClassName="block text-xs font-bold text-white mb-1"
-                        />
-
-                        <div className="pt-2">
-                          <button
-                            onClick={handleSaveProfile}
-                            className="welcome-btn-pulse w-full py-4 bg-vibrant-purple text-white rounded-2xl text-sm font-black shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-[0.98]"
-                          >
-                            حفظ التغييرات
-                          </button>
-                        </div>
-                      </div>
-                    )}
 
                   {/* 3. المحفظة والجوائز */}
                     <button
@@ -5472,14 +5634,16 @@ export const CustomerApp: React.FC = () => {
                       </div>
                       <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
                     </button>
+
+                    <DeleteAccountSection
+                      variant="glass"
+                      accountLabel={`حساب الزبون: ${currentCustomer?.name || ''}`}
+                      onConfirmDelete={() => deleteUserAccountSecure('customer')}
+                    />
               </div>
 
-              {/* تسجيل الخروج وحذف الحساب */}
+              {/* تسجيل الخروج */}
               <div className="pt-4 space-y-3 pb-20">
-                 <DeleteAccountSection
-                   accountLabel={`حساب الزبون: ${currentCustomer?.name || ''}`}
-                   onConfirmDelete={() => deleteUserAccountSecure('customer')}
-                 />
                  <button 
                   onClick={handleLogoutClick}
                   className="w-full py-5 bg-rose-500/10 text-rose-200 rounded-[2rem] font-black text-sm flex items-center justify-center gap-3 border border-rose-400/30 backdrop-blur-md hover:bg-rose-600 hover:text-white hover:border-rose-600 transition-all shadow-sm active:scale-95"
@@ -5490,87 +5654,25 @@ export const CustomerApp: React.FC = () => {
 
               </div>
 
-              {showPasswordChange && (
-                <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md z-[100] flex items-center justify-center p-6">
-                  <div className="bg-white rounded-[2.5rem] w-full max-w-sm shadow-2xl animate-scale-up overflow-hidden border border-white/20">
-                    <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
-                       <div className="flex items-center gap-3">
-                          <div className="p-2 bg-violet/20 text-vibrant-purple rounded-xl">
-                             <Shield size={18} />
-                          </div>
-                          <h3 className="font-black text-violet text-sm">تغيير كلمة المرور</h3>
-                       </div>
-                       <button onClick={() => { setShowPasswordChange(false); setPwStep(1); setOtpPwCode(''); setNewPassword(''); }} className="p-2 hover:bg-white hover:shadow-sm rounded-xl transition-all"><X size={18} className="text-slate-400" /></button>
-                    </div>
-                    <div className="p-8 space-y-6">
-                      {pwStep === 1 ? (
-                        <>
-                          <div className="text-center bg-violet/10 p-6 rounded-3xl mb-4 border border-violet/25">
-                             <p className="text-[11px] font-black text-vibrant-purple leading-relaxed">سنقوم بإرسال رمز التحقق (OTP) إلى رقم هاتفك المسجل لتأكيد هويتك</p>
-                          </div>
-                          <div className="space-y-4">
-                             <input type="tel" value={currentCustomer?.phone} disabled className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-center text-sm font-black text-slate-400" />
-                             <button onClick={async () => {
-                                if (!currentCustomer) return;
-                                try {
-                                  const ok = await authService.requestOTP(currentCustomer.phone, 'forgot');
-                                  setPwStep(2);
-                                  if (ok) {
-                                    showToast("success", "تم الإرسال!");
-                                  } else {
-                                    showModal("error", "حدث خطأ", "لم نتمكن من الإرسال، حاول لاحقاً.");
-                                  }
-                                } catch (err: any) {
-                                  showModal("error", "خطأ في الاتصال", err.message || "حدث خطأ");
-                                }
-                             }} className="w-full py-4 bg-vibrant-purple text-white font-black text-sm rounded-2xl shadow-xl shadow-violet/20 hover:bg-deep-navy transition active:scale-95">إرسال رمز التحقق</button>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="space-y-5">
-                          <div className="space-y-4">
-                             <input 
-                               type="text" 
-                               value={otpPwCode} 
-                               onChange={e => setOtpPwCode(e.target.value.replace(/\D/g, '').slice(0, 6))} 
-                               placeholder="إدخال الرمز" 
-                               className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-center text-lg font-black tracking-[0.5em] focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple outline-none transition-all placeholder:tracking-normal placeholder:text-[10px]" 
-                             />
-                             <div className="relative">
-                                <input 
-                                  type="password" 
-                                  value={newPassword} 
-                                  onChange={e => setNewPassword(e.target.value)} 
-                                  placeholder="كلمة المرور الجديدة (8+ رموز)" 
-                                  className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-center text-sm font-black focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple outline-none transition-all" 
-                                />
-                             </div>
-                             <button onClick={handleChangePassword} className="w-full py-4 bg-emerald-600 text-white font-black text-sm rounded-2xl shadow-xl shadow-emerald-100 hover:bg-emerald-700 transition active:scale-95">تحديث كلمة المرور</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
             </div>
           )}
 
         </main>
           </div>
         )}
-        <nav className={`fixed bottom-0 left-0 right-0 z-50 select-none overflow-x-auto flex justify-around p-2 ${selectedStore ? 'merchant-nav-mobile' : 'customer-welcome-nav'}`}>
+        <nav className={`fixed bottom-0 left-0 right-0 z-50 select-none overflow-x-auto flex justify-around p-2 ${
+          selectedStore && selectedStoreTheme.enabled ? 'merchant-nav-mobile' : 'customer-welcome-nav'
+        }`}>
           <div className="max-w-4xl mx-auto w-full flex justify-around items-center">
             {[
               { id: 'stores', label: 'الرئيسية', icon: MahalakLogoIcon, iconSize: 24 },
               /*{ id: 'reels', label: 'الفيديو', icon: Tv },*/
               { id: 'merchants', label: 'المتاجر', icon: StoreIcon },
               { id: 'products', label: 'المنتجات', icon: ShoppingBag },
-              { id: 'orders', label: 'طلباتي', icon: ClipboardList, badge: customerOrders.filter(o => o.status === 'pending').length },
+              { id: 'orders', label: 'طلباتي', icon: ClipboardList, badge: pendingOrdersCount },
               { id: 'profile', label: 'حسابي', icon: User, gift: showProfileGiftBadge }
             ].map((tab) => {
-              const active = (activeTab === tab.id || (tab.id === 'profile' && activeTab === 'wallet')) && !selectedStore;
+              const active = (activeTab === tab.id || (tab.id === 'profile' && showWallet)) && !selectedStore;
               const iconSize = 'iconSize' in tab ? tab.iconSize : 18;
               return (
                 <button
@@ -5605,74 +5707,67 @@ export const CustomerApp: React.FC = () => {
           </div>
         </nav>
 
-        {/* زر عائم تفاعلي للرجوع للمتاجر عند التصفح كلياً */}
-        {selectedStore && (
-          <div className="fixed bottom-24 left-6 z-[60]">
-            <button 
-              onClick={() => { if (!handleAppBack()) setSelectedStore(null); }}
-              className="px-4 py-3 bg-gradient-to-r from-vibrant-purple to-[#7B3DFF] text-white hover:from-[#381a66] hover:to-[#0B1320] rounded-full flex items-center gap-2 shadow-xl shadow-purple-500/30 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer font-black text-xs border border-white/20 font-tajawal"
-              title="رجوع"
-            >
-              <span className="text-white">رجوع</span>
-            </button>
-          </div>
-        )}
 
-        {/* سلة المشتريات (Drawer) - تصميم مصغر ومحسن ليتناسق مع المتجر */}
+        {/* سلة المشتريات (Drawer) — تأثيرات الرئيسية */}
         {showCart && (
-          <div className="fixed inset-0 bg-deep-navy/40 backdrop-blur-xs z-55 flex justify-end">
-            <div className="bg-white w-full max-w-[335px] h-full shadow-xl flex flex-col animate-slide-left text-right border-r border-slate-100 font-tajawal">
+          <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md z-55 flex justify-end">
+            <div className="relative w-full max-w-[335px] h-full shadow-2xl flex flex-col animate-slide-left text-right border-r border-white/20 font-tajawal overflow-hidden bg-deep-navy">
+              <WelcomeScreenBackground lite />
               
-              <div className="p-3 bg-deep-navy text-white flex justify-between items-center shrink-0">
+              <div className="relative z-10 customer-welcome-header welcome-card-border-glow p-3 text-white flex justify-between items-center shrink-0 border-b border-white/20">
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => { if (!handleAppBack()) setShowCart(false); }}
-                    className="p-1 px-2 border border-white/20 rounded-lg hover:bg-white/10 transition-all flex items-center gap-0.5 font-bold text-[9px]"
+                    className="welcome-btn-pulse p-1 px-2 border border-white/30 rounded-lg bg-white/10 hover:bg-white/20 transition-all flex items-center gap-0.5 font-bold text-[9px] backdrop-blur-md"
                   >
                     <ChevronRight size={12} />
                     <span>رجوع</span>
                   </button>
                   <div className="flex items-center space-x-1.5 space-x-reverse">
-                    <ShoppingBag size={16} />
+                    <div className="welcome-icon-pulse p-1.5 bg-white/10 border border-white/20 rounded-lg">
+                      <ShoppingBag size={14} />
+                    </div>
                     <h3 className="text-xs font-black">سلة المشتريات ({cart.reduce((acc, curr) => acc + curr.quantity, 0)})</h3>
                   </div>
                 </div>
-                <button onClick={() => setShowCart(false)} className="p-1 hover:bg-deep-navy rounded-lg shrink-0">
-                  <X size={16} />
+                <button onClick={() => setShowCart(false)} className="p-1.5 hover:bg-white/10 rounded-lg shrink-0 border border-transparent hover:border-white/20 transition-all">
+                  <X size={16} className="text-white/80" />
                 </button>
               </div>
 
               {cart.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center p-6 text-gray-400">
-                  <ShoppingBag size={48} className="mb-3 text-gray-200" />
-                  <p className="font-bold text-xs">سلة مشترياتك فارغة!</p>
-                  <p className="text-[10px] mt-1 text-center text-slate-400">أضف منتجات من المتاجر لبدء الطلب.</p>
-                  <button onClick={() => setShowCart(false)} className="mt-4 px-4 py-1.5 bg-vibrant-purple hover:bg-deep-navy text-white font-bold text-[10px] rounded-lg shadow-xs transition">تصفح المتاجر الآن</button>
-                  
-                  {lastCompletedOrder && (
-                    <button 
-                      onClick={handleQuickReorder} 
-                      className="mt-4 w-full py-2.5 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-600 border border-emerald-200 font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-2 active:scale-95"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-                      الطلب السريع (إعادة آخر طلب)
-                    </button>
-                  )}
+                <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-6">
+                  <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-8 w-full text-center">
+                    <ShoppingBag size={48} className="mb-3 mx-auto text-white/30" />
+                    <p className="font-bold text-xs text-white">سلة مشترياتك فارغة!</p>
+                    <p className="text-[10px] mt-1 text-center text-white/60">أضف منتجات من المتاجر لبدء الطلب.</p>
+                    <button onClick={() => setShowCart(false)} className="welcome-btn-pulse mt-4 px-4 py-1.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/30 text-white font-bold text-[10px] rounded-lg shadow-xs transition">تصفح المتاجر الآن</button>
+                    
+                    {lastCompletedOrder && (
+                      <button 
+                        onClick={handleQuickReorder} 
+                        className="welcome-btn-pulse mt-4 w-full py-2.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-2 active:scale-95 backdrop-blur-md"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                        الطلب السريع (إعادة آخر طلب)
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <>
                   {/* تنبيه الطلب من عدة متاجر */}
                   {Object.keys(cartByStore).length > 1 && (
-                    <div className="px-3 py-1.5 bg-amber-50 border-b border-amber-100 text-[8.5px] font-bold text-amber-700 text-center">
+                    <div className="relative z-10 px-3 py-1.5 bg-amber-500/15 border-b border-amber-400/30 text-[8.5px] font-bold text-amber-200 text-center backdrop-blur-md">
                       ⚠️ أنت تطلب من {Object.keys(cartByStore).length} متاجر مختلفة - سيتم إرسال طلب منفصل لكل متجر
                     </div>
                   )}
 
                   {lastCompletedOrder && cart.length > 0 && (
-                    <div className="order-actions-container px-3 pt-3 flex w-full">
+                    <div className="relative z-10 order-actions-container px-3 pt-3 flex w-full">
                       <button 
                         onClick={handleQuickReorder} 
-                        className="group flex-1 w-full py-2.5 bg-emerald-50 text-emerald-600 border border-emerald-200 hover:border-emerald-300 hover:bg-emerald-100/80 rounded-xl font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-2 shadow-sm hover:shadow active:scale-95 transition-all duration-300 min-w-[100px]"
+                        className="welcome-btn-pulse group flex-1 w-full py-2.5 bg-emerald-500/15 text-emerald-200 border border-emerald-400/30 hover:bg-emerald-500/25 rounded-xl font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all duration-300 min-w-[100px] backdrop-blur-md"
                       >
                         <RefreshCw className="group-hover:rotate-180 transition-transform duration-500 shrink-0" size={16} />
                         <span>الطلب السريع (استبدال السلة بآخر طلب)</span>
@@ -5680,27 +5775,27 @@ export const CustomerApp: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320]">
+                  <div className="relative z-10 flex-1 overflow-y-auto p-3 space-y-3">
                     {/* معلومات العنوان المختار داخل السلة مع إمكانية التغيير */}
-                    <div className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl p-2.5 border border-[#7B3DFF] shadow-2xs space-y-2">
+                    <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-xl p-2.5 shadow-2xs space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <button
                           type="button"
                           onClick={() => setShowCartLocationPicker(true)}
                           className="flex items-center gap-2 min-w-0 flex-1 text-right hover:opacity-90 transition-opacity"
                         >
-                           <div className="p-1.5 bg-white text-vibrant-purple rounded-lg shadow-3xs border border-slate-100 shrink-0">
+                           <div className="welcome-icon-pulse p-1.5 bg-white/10 text-violet border border-white/20 rounded-lg shrink-0 backdrop-blur-md">
                               <MapPin size={14} />
                            </div>
                            <div className="min-w-0">
-                              <p className="text-[8.5px] font-black text-white mb-0.5">عنوان التوصيل الحالي</p>
+                              <p className="text-[8.5px] font-black text-white/70 mb-0.5">عنوان التوصيل الحالي</p>
                               <p className="text-[9.5px] font-black text-white leading-tight whitespace-normal break-words">
                                 {activeOrderLocation
                                   ? `${activeOrderLocation.province} — ${formatSavedLocationAddress(activeOrderLocation)}`
                                   : `${currentCustomer?.province || ''}${currentCustomer?.address ? ` — ${currentCustomer.address}` : ''}`}
                               </p>
                               {activeOrderLocation && (
-                                <p className="text-[8.5px] font-black text-white mt-1">
+                                <p className="text-[8.5px] font-black text-white/70 mt-1">
                                   📍 موقع التوصيل: {activeOrderLocation.label}
                                 </p>
                               )}
@@ -5709,7 +5804,7 @@ export const CustomerApp: React.FC = () => {
                         <button 
                           type="button"
                           onClick={() => setShowCartLocationPicker(true)}
-                          className="p-1.5 text-vibrant-purple hover:bg-violet/10 rounded-lg transition-all shrink-0"
+                          className="p-1.5 text-violet hover:bg-white/10 rounded-lg transition-all shrink-0 border border-white/20"
                           title="تغيير موقع التوصيل"
                           aria-label="تغيير موقع التوصيل"
                         >
@@ -5718,8 +5813,8 @@ export const CustomerApp: React.FC = () => {
                       </div>
                       
                       {/* الخريطة المصغرة في السلة */}
-                      {adminSettings?.enableMaps !== false && activeOrderLocation && (
-                        <div className="w-full h-24 rounded-xl overflow-hidden border border-slate-200 pointer-events-none relative mt-2 z-0">
+                      {adminSettings?.enableMaps !== false && activeOrderLocation && activeOrderLocation.lat != null && activeOrderLocation.lng != null && (
+                        <div className="w-full h-24 rounded-xl overflow-hidden border border-white/20 pointer-events-none relative mt-2 z-0">
                           <MapContainer 
                             key={`customer-${currentCustomer?.id}-${activeOrderLocation.id}`}
                             center={[activeOrderLocation.lat, activeOrderLocation.lng]} 
@@ -5741,14 +5836,14 @@ export const CustomerApp: React.FC = () => {
 
                     {/* عرض المنتجات مجمعة حسب المتجر */}
                     {Object.entries(cartByStore).map(([storeId, group]) => (
-                      <div key={storeId} className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl p-2.5 border border-[#7B3DFF] space-y-2">
+                      <div key={storeId} className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-xl p-2.5 space-y-2">
                         {/* اسم المتجر */}
-                        <div className="flex items-center space-x-1.5 space-x-reverse pb-1.5 border-b border-dashed border-[#7B3DFF]">
-                          <img src={group.store.logo || undefined} alt="" className="w-4.5 h-4.5 rounded object-cover" />
+                        <div className="flex items-center space-x-1.5 space-x-reverse pb-1.5 border-b border-dashed border-white/20">
+                          <img src={group.store.logo || undefined} alt="" className="w-4.5 h-4.5 rounded object-cover border border-white/20" />
                           <span className="text-[10px] font-black text-white truncate max-w-[120px]">{group.store.shopName}</span>
-                          <span className="text-[8.5px] text-white mr-auto whitespace-nowrap">
+                          <span className="text-[8.5px] text-white/70 mr-auto whitespace-nowrap">
                             🚚 {(() => {
-                              const delInfo = getStoreDeliveryInfo(group.store, currentCustomer?.province || 'بغداد');
+                              const delInfo = getStoreDeliveryInfo(group.store, activeOrderLocation?.province || currentCustomer?.province || 'بغداد');
                               const isFree = delInfo.isFree || group.items.some(i => i.product.isFreeDelivery);
                               return isFree ? 'مجاني' : `${delInfo.price.toLocaleString()} د.ع`;
                             })()}
@@ -5757,26 +5852,26 @@ export const CustomerApp: React.FC = () => {
                         
                         {/* منتجات هذا المتجر */}
                         {group.items.map(item => (
-                          <div key={item.product.id} className="flex items-center space-x-2 space-x-reverse py-1.5 border-b border-gray-100 last:border-0 last:pb-0">
-                            <img src={item.product.image || undefined} alt={item.product.name} className="w-8 h-8 object-cover rounded border border-gray-150 shrink-0" />
+                          <div key={item.product.id} className="flex items-center space-x-2 space-x-reverse py-1.5 border-b border-white/10 last:border-0 last:pb-0">
+                            <img src={item.product.image || undefined} alt={item.product.name} className="w-8 h-8 object-cover rounded border border-white/20 shrink-0" />
                             
                             <div className="flex-1 min-w-0">
-                              <h4 className="font-bold text-violet text-[10px] truncate leading-tight">{item.product.name}</h4>
+                              <h4 className="font-bold text-white text-[10px] truncate leading-tight">{item.product.name}</h4>
                               <div className="flex flex-wrap items-baseline gap-1 mt-0.5">
                                 <span className="text-[#FFF700] font-extrabold text-[10px] leading-tight">
-                                  {((item.product?.finalPrice || 0) * (item.quantity || 0)).toLocaleString()} <span className="text-[7px] text-white font-normal">د.ع</span>
+                                  {((item.product?.finalPrice || 0) * (item.quantity || 0)).toLocaleString()} <span className="text-[7px] text-white/70 font-normal">د.ع</span>
                                 </span>
                                 {item.product?.discountType !== 'none' && (
-                                  <span className="text-[8px] text-red-400 line-through">
+                                  <span className="text-[8px] text-rose-300 line-through">
                                     {((item.product?.price || 0) * (item.quantity || 0)).toLocaleString()} د.ع
                                   </span>
                                 )}
                               </div>
                             </div>
 
-                            <div className="flex items-center border border-white/90 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-md overflow-hidden shrink-0">
+                            <div className="flex items-center border border-white/30 bg-white/10 backdrop-blur-md rounded-md overflow-hidden shrink-0">
                               <button onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)} className="p-0.5 px-1 hover:bg-white/10 text-white border-l border-white/20">
-                                {item.quantity === 1 ? <Trash2 size={9} className="text-red-500" /> : <Minus size={9} />}
+                                {item.quantity === 1 ? <Trash2 size={9} className="text-rose-300" /> : <Minus size={9} />}
                               </button>
                               <span className="px-1.5 text-[10px] font-bold text-white">{item.quantity}</span>
                               <button onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)} className="p-0.5 px-1 hover:bg-white/10 text-white border-r border-white/20">
@@ -5789,7 +5884,7 @@ export const CustomerApp: React.FC = () => {
                     ))}
                   </div>
 
-                  <div className="p-3 border-t border-[#7B3DFF] bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] shadow-[0_-3px_8px_rgba(0,0,0,0.02)] space-y-3 shrink-0 text-white">
+                  <div className="relative z-10 p-3 border-t border-white/20 welcome-card-border-glow bg-white/5 backdrop-blur-md shadow-[0_-3px_8px_rgba(0,0,0,0.15)] space-y-3 shrink-0 text-white">
                     
                     {!appliedPromo ? (
                       <form onSubmit={handleApplyPromo} className="space-y-1">
@@ -5799,28 +5894,28 @@ export const CustomerApp: React.FC = () => {
                             placeholder="أدخل بروموكود خصم..." 
                             value={promoInput}
                             onChange={(e) => setPromoInput(e.target.value)}
-                            className="flex-1 border border-white bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] p-1.5 rounded-lg text-[10px] text-center text-white placeholder:text-white/60 focus:ring-1 focus:ring-vibrant-purple focus:outline-none font-mono uppercase"
+                            className="flex-1 border border-white/20 bg-white/10 p-1.5 rounded-lg text-[10px] text-center text-white placeholder:text-white/50 focus:ring-1 focus:ring-vibrant-purple focus:outline-none font-mono uppercase backdrop-blur-md"
                             style={{ direction: 'ltr', color: 'white' }}
                           />
-                          <button type="submit" className="px-3 py-1.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] hover:opacity-90 text-white font-bold text-[10px] rounded-lg transition shrink-0 border border-white">تطبيق</button>
+                          <button type="submit" className="welcome-btn-pulse px-3 py-1.5 hover:opacity-90 text-white font-bold text-[10px] rounded-lg transition shrink-0 border border-white/30">تطبيق</button>
                         </div>
-                        {promoError && <p className="text-[8.5px] text-red-500 font-semibold">{promoError}</p>}
+                        {promoError && <p className="text-[8.5px] text-rose-300 font-semibold">{promoError}</p>}
                       </form>
                     ) : (
-                      <div className="bg-green-50 border border-green-200 text-green-700 p-2 rounded-lg flex justify-between items-center text-[10px] font-semibold">
+                      <div className="welcome-card-border-glow bg-emerald-500/15 border border-emerald-400/30 text-emerald-200 p-2 rounded-lg flex justify-between items-center text-[10px] font-semibold backdrop-blur-md">
                         <span className="flex items-center space-x-1 space-x-reverse">
                           <Check size={12} />
-                          <span>تم تطبيق الخصم: <strong className="font-mono bg-green-200/50 px-1 py-0.5 rounded">{appliedPromo.code}</strong></span>
+                          <span>تم تطبيق الخصم: <strong className="font-mono bg-emerald-500/20 px-1 py-0.5 rounded">{appliedPromo.code}</strong></span>
                         </span>
-                        <button onClick={() => setAppliedPromo(null)} className="p-0.5 text-green-700 hover:bg-green-100 rounded">
+                        <button onClick={() => setAppliedPromo(null)} className="p-0.5 text-emerald-200 hover:bg-emerald-500/20 rounded">
                           <Trash2 size={12} />
                         </button>
                       </div>
                     )}
 
-                    <div className="border-b border-dashed border-[#7B3DFF] pb-2.5 text-[10px] font-semibold text-white space-y-1.5">
+                    <div className="border-b border-dashed border-white/20 pb-2.5 text-[10px] font-semibold text-white space-y-1.5">
                       <div className="flex justify-between">
-                        <span>المجموع الفرعي:</span>
+                        <span className="text-white/70">المجموع الفرعي:</span>
                         <span className="text-white">{(subtotal || 0).toLocaleString()} د.ع</span>
                       </div>
                       
@@ -5830,30 +5925,30 @@ export const CustomerApp: React.FC = () => {
                         const hasFree = delInfo.isFree || group.items.some(i => i.product.isFreeDelivery);
                         return (
                           <div key={storeId} className="flex justify-between text-[8.5px]">
-                            <span className="text-white">🚚 توصيل {group.store.shopName}:</span>
-                            <span className={hasFree ? 'text-green-600' : 'text-white'}>
+                            <span className="text-white/70">🚚 توصيل {group.store.shopName}:</span>
+                            <span className={hasFree ? 'text-emerald-300' : 'text-white'}>
                               {hasFree ? 'مجاني' : `${delInfo.price.toLocaleString()} د.ع`}
                             </span>
                           </div>
                         );
                       })}
                       
-                      <div className="flex justify-between border-t border-[#7B3DFF] pt-1.5">
-                        <span className="text-white">إجمالي التوصيل:</span>
-                        <span className={deliveryCost === 0 ? 'text-green-600' : 'text-white'}>
+                      <div className="flex justify-between border-t border-white/20 pt-1.5">
+                        <span className="text-white/70">إجمالي التوصيل:</span>
+                        <span className={deliveryCost === 0 ? 'text-emerald-300' : 'text-white'}>
                           {deliveryCost === 0 ? 'مجاني 🎉' : `${(deliveryCost || 0).toLocaleString()} د.ع`}
                         </span>
                       </div>
                       {appliedPromo && (
-                        <div className="flex justify-between text-red-600">
+                        <div className="flex justify-between text-rose-300">
                           <span>خصم البروموكود:</span>
                           <span>- {(appliedPromo?.discountValue || 0).toLocaleString()} د.ع</span>
                         </div>
                       )}
                       
-                      <div className="flex justify-between text-[11px] font-black text-white border-t border-[#7B3DFF] pt-2 mt-1">
+                      <div className="flex justify-between text-[11px] font-black text-white border-t border-white/20 pt-2 mt-1">
                         <span>الإجمالي النهائي:</span>
-                        <span className="text-white text-xs">{(total || 0).toLocaleString()} د.ع</span>
+                        <span className="text-[#FFF700] text-xs">{(total || 0).toLocaleString()} د.ع</span>
                       </div>
                     </div>
 
@@ -5862,7 +5957,7 @@ export const CustomerApp: React.FC = () => {
                         type="button"
                         onClick={handlePlaceOrder}
                         disabled={isPlacingOrder}
-                        className={`relative overflow-hidden group flex-1 w-full py-3 bg-vibrant-purple text-white rounded-xl shadow-[0_4px_12px_rgba(153,82,255,0.3)] font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-2 transition-all duration-300 min-w-[100px] ${
+                        className={`welcome-btn-pulse relative overflow-hidden group flex-1 w-full py-3 border border-white/30 text-white rounded-xl shadow-[0_4px_12px_rgba(153,82,255,0.3)] font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-2 transition-all duration-300 min-w-[100px] ${
                           isPlacingOrder
                             ? 'opacity-80 cursor-wait'
                             : 'hover:shadow-[0_8px_20px_rgba(153,82,255,0.4)] hover:-translate-y-1 active:scale-95'
@@ -5889,7 +5984,7 @@ export const CustomerApp: React.FC = () => {
                       </button>
                     </div>
                     
-                    <p className="text-[8px] text-white text-center font-bold pb-1 pt-1">
+                    <p className="text-[8px] text-white/60 text-center font-bold pb-1 pt-1">
                       💡 الدفع عند الاستلام | الطلبات ترسل منفصلة
                     </p>
                   </div>
@@ -5914,7 +6009,7 @@ export const CustomerApp: React.FC = () => {
           }}
         />
 
-        {/* مودال تفاصيل المنتج المطور */}
+        {/* مودال تفاصيل المنتج — تأثيرات الرئيسية */}
         <AnimatePresence>
           {selectedProductDetail && (
             <div className="fixed inset-0 bg-deep-navy/70 backdrop-blur-xl z-[80] flex items-start md:items-center justify-center p-0 md:p-6 overflow-y-auto">
@@ -5922,14 +6017,16 @@ export const CustomerApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95, y: 50 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 50 }}
-                className="bg-white w-full max-w-4xl h-[100dvh] md:h-auto md:min-h-0 md:max-h-[88vh] md:rounded-[2.5rem] shadow-2xl overflow-hidden text-right flex flex-col relative"
+                className="relative bg-deep-navy w-full max-w-4xl h-[100dvh] md:h-auto md:min-h-0 md:max-h-[88vh] md:rounded-[2.5rem] shadow-2xl overflow-hidden text-right flex flex-col border border-white/20 welcome-card-border-glow"
               >
+                <WelcomeScreenBackground lite />
+
                 {/* شريط علوي ثابت — زر الرجوع ومشاركة المنتج */}
-                <div className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] shrink-0 px-3 sm:px-4 py-3 flex items-center justify-between gap-2 z-50 shadow-lg pt-[max(0.75rem,env(safe-area-inset-top))]">
+                <div className="relative z-50 customer-welcome-header welcome-card-border-glow shrink-0 px-3 sm:px-4 py-3 flex items-center justify-between gap-2 border-b border-white/20 pt-[max(0.75rem,env(safe-area-inset-top))]">
                   <button
                     type="button"
                     onClick={handleProductDetailBack}
-                    className="flex items-center gap-1.5 text-white bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl px-3 sm:px-4 py-2.5 text-[11px] sm:text-xs font-black transition-all active:scale-95 cursor-pointer font-tajawal shrink-0"
+                    className="welcome-btn-pulse flex items-center gap-1.5 text-white bg-white/10 hover:bg-white/20 border border-white/30 rounded-xl px-3 sm:px-4 py-2.5 text-[11px] sm:text-xs font-black transition-all active:scale-95 cursor-pointer font-tajawal shrink-0 backdrop-blur-md"
                     title={compareSession && !compareSession.listOpen ? 'رجوع لقائمة المقارنة' : 'رجوع'}
                   >
                     <ChevronRight size={18} strokeWidth={2.5} />
@@ -5945,7 +6042,7 @@ export const CustomerApp: React.FC = () => {
                         closeProductDetail();
                         setSelectedStore(store);
                       }}
-                      className="inline-flex max-w-full px-3 py-1 rounded-full border border-white text-white text-[10px] sm:text-[11px] font-bold truncate cursor-pointer hover:bg-white/10 transition-colors active:scale-95"
+                      className="inline-flex max-w-full px-3 py-1 rounded-full border border-white/30 bg-white/10 text-white text-[10px] sm:text-[11px] font-bold truncate cursor-pointer hover:bg-white/20 transition-colors active:scale-95 backdrop-blur-md"
                       title={selectedStore?.shopName ?? storeMap.get(selectedProductDetail.storeId)?.shopName ?? 'المتجر'}
                     >
                       {selectedStore?.shopName ?? storeMap.get(selectedProductDetail.storeId)?.shopName ?? 'المتجر'}
@@ -5958,7 +6055,7 @@ export const CustomerApp: React.FC = () => {
                       const store = selectedStore ?? storeMap.get(selectedProductDetail.storeId);
                       openShareModal('product', { ...selectedProductDetail, shopName: store?.shopName });
                     }}
-                    className="flex items-center gap-1.5 text-white bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl px-3 sm:px-3.5 py-2.5 text-[11px] sm:text-xs font-black transition-all active:scale-95 shrink-0 cursor-pointer font-tajawal"
+                    className="welcome-btn-pulse flex items-center gap-1.5 text-white bg-white/10 hover:bg-white/20 border border-white/30 rounded-xl px-3 sm:px-3.5 py-2.5 text-[11px] sm:text-xs font-black transition-all active:scale-95 shrink-0 cursor-pointer font-tajawal backdrop-blur-md"
                     title="مشاركة المنتج"
                   >
                     <Share2 size={16} />
@@ -5966,9 +6063,9 @@ export const CustomerApp: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
+                <div className="relative z-10 flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
                   {/* صورة المنتج */}
-                  <div className="w-full md:w-5/12 h-[36vh] md:h-full bg-slate-100 relative shrink-0 flex items-center justify-center">
+                  <div className="w-full md:w-5/12 h-[36vh] md:h-full bg-white/5 border-b md:border-b-0 md:border-l border-white/10 relative shrink-0 flex items-center justify-center">
                     <ProductImage
                       src={selectedProductDetail.image}
                       alt={selectedProductDetail.name}
@@ -5977,18 +6074,18 @@ export const CustomerApp: React.FC = () => {
                       objectFit="contain"
                       className="w-full h-full"
                     />
-                    <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-deep-navy/40 to-transparent pointer-events-none" />
+                    <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-deep-navy/60 to-transparent pointer-events-none" />
                     {(selectedProductDetail.discountType !== 'none' || selectedProductDetail.isFreeDelivery) && (
                       <div className="absolute bottom-3 right-3 flex flex-wrap gap-1.5 justify-end">
                         {selectedProductDetail.discountType !== 'none' && (
-                          <div className="bg-rose-500 text-white px-3 py-1.5 rounded-xl font-black text-[10px] shadow-lg">
+                          <div className="bg-rose-500/90 text-white px-3 py-1.5 rounded-xl font-black text-[10px] shadow-lg border border-rose-300/30 backdrop-blur-md">
                             {selectedProductDetail.discountType === 'percent'
                               ? `خصم ${selectedProductDetail.discountValue}%`
                               : `توفير ${selectedProductDetail.discountValue.toLocaleString()} د.ع`}
                           </div>
                         )}
                         {selectedProductDetail.isFreeDelivery && (
-                          <div className="bg-vibrant-purple text-white px-3 py-1.5 rounded-xl font-black text-[10px] shadow-lg flex items-center gap-1">
+                          <div className="welcome-btn-pulse bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white px-3 py-1.5 rounded-xl font-black text-[10px] shadow-lg flex items-center gap-1 border border-white/30">
                             <Zap size={10} className="fill-white" />
                             <span>توصيل مجاني</span>
                           </div>
@@ -5999,24 +6096,24 @@ export const CustomerApp: React.FC = () => {
 
                   {/* تفاصيل المنتج */}
                   <div className="w-full md:w-7/12 flex flex-col overflow-hidden relative flex-1">
-                    <div className="p-5 md:p-6 overflow-y-auto flex-1 space-y-4 pb-36 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320]">
+                    <div className="p-5 md:p-6 overflow-y-auto flex-1 space-y-4 pb-36">
 
                       {/* التصنيف والتوفر */}
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] font-black text-[#FFF700] px-3 py-1 bg-violet/10 rounded-xl border border-white/25">
+                        <span className="text-[10px] font-black text-[#FFF700] px-3 py-1 bg-white/10 rounded-xl border border-white/25 backdrop-blur-md">
                           {selectedProductDetail.category || 'غير مصنف'}
                         </span>
                         {hasTrackedInventory(selectedProductDetail.inventory) ? (
-                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1.5 shrink-0 ${
+                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1.5 shrink-0 backdrop-blur-md ${
                             Number(selectedProductDetail.inventory) > 0
-                              ? 'bg-violet/10 text-vibrant-purple border border-violet/25'
-                              : 'bg-rose-50 text-rose-600 border border-rose-150'
+                              ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/30'
+                              : 'bg-rose-500/15 text-rose-200 border border-rose-400/30'
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${Number(selectedProductDetail.inventory) > 0 ? 'bg-[#FFF700]' : 'bg-rose-500'}`} />
+                            <span className={`w-1.5 h-1.5 rounded-full ${Number(selectedProductDetail.inventory) > 0 ? 'bg-emerald-300' : 'bg-rose-400'}`} />
                             {getProductAvailabilityLabel(selectedProductDetail.inventory)}
                           </span>
                         ) : (
-                          <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1.5 bg-violet/10 text-white border border-violet/25 shrink-0">
+                          <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1.5 bg-white/10 text-white border border-white/25 shrink-0 backdrop-blur-md">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#FFF700]" />
                             {getProductAvailabilityLabel(selectedProductDetail.inventory)}
                           </span>
@@ -6039,7 +6136,7 @@ export const CustomerApp: React.FC = () => {
                       {selectedProductDetail.tags && selectedProductDetail.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
                           {selectedProductDetail.tags.map((tag) => (
-                            <span key={tag} className="px-2.5 py-0.5 bg-deep-navy text-white rounded-lg text-[9.5px] font-semibold">
+                            <span key={tag} className="px-2.5 py-0.5 bg-white/10 border border-white/20 text-white rounded-lg text-[9.5px] font-semibold backdrop-blur-md">
                               #{tag}
                             </span>
                           ))}
@@ -6048,19 +6145,19 @@ export const CustomerApp: React.FC = () => {
 
                       {/* السعر */}
                       {selectedProductDetail.discountType !== 'none' ? (
-                        <div className="bg-brand-horizontal rounded-2xl p-4 flex justify-between items-center shadow-lg border border-white/10">
+                        <div className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl p-4 flex justify-between items-center shadow-lg">
                           <div>
                             <span className="text-[10px] text-[#FFF700] font-bold block mb-0.5">السعر بعد الخصم</span>
                             <div className="flex items-baseline gap-1">
                               <span className="text-2xl sm:text-3xl font-black text-[#FFF700]">
                                 {selectedProductDetail.finalPrice.toLocaleString()}
                               </span>
-                              <span className="text-xs font-black text-white">د.ع</span>
+                              <span className="text-xs font-black text-white/80">د.ع</span>
                             </div>
                           </div>
                           <div className="text-left">
-                            <span className="text-[10px] text-[#FFF700] font-medium block mb-0.5">السعر الأصلي</span>
-                            <span className="text-sm font-bold text-red-500/60 line-through block">
+                            <span className="text-[10px] text-white/60 font-medium block mb-0.5">السعر الأصلي</span>
+                            <span className="text-sm font-bold text-rose-300/80 line-through block">
                               {selectedProductDetail.price.toLocaleString()} د.ع
                             </span>
                             <span className="mt-1 inline-block bg-white/15 text-[#FFF700] text-[9px] font-black px-2 py-0.5 rounded-md border border-white/20">
@@ -6071,17 +6168,17 @@ export const CustomerApp: React.FC = () => {
                           </div>
                         </div>
                       ) : (
-                        <div className="bg-brand-horizontal rounded-2xl p-4 flex justify-between items-center shadow-lg border border-white/10">
+                        <div className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl p-4 flex justify-between items-center shadow-lg">
                           <div>
-                            <span className="text-[10px] text-purple-100 font-bold block mb-0.5">السعر الشامل للمنتج</span>
+                            <span className="text-[10px] text-white/70 font-bold block mb-0.5">السعر الشامل للمنتج</span>
                             <div className="flex items-baseline gap-1">
-                              <span className="text-2xl sm:text-3xl font-black text-white">
+                              <span className="text-2xl sm:text-3xl font-black text-[#FFF700]">
                                 {selectedProductDetail.price.toLocaleString()}
                               </span>
-                              <span className="text-xs font-black text-purple-100">د.ع</span>
+                              <span className="text-xs font-black text-white/80">د.ع</span>
                             </div>
                           </div>
-                          <span className="text-[9.5px] text-white bg-white/15 border border-white/25 px-3 py-1.5 rounded-xl font-black">
+                          <span className="text-[9.5px] text-white bg-white/10 border border-white/25 px-3 py-1.5 rounded-xl font-black backdrop-blur-md">
                             الدفع عند التوصيل
                           </span>
                         </div>
@@ -6089,8 +6186,8 @@ export const CustomerApp: React.FC = () => {
 
                       {/* العرض الخاص */}
                       {selectedProductDetail.specialOffer?.trim() && (
-                        <div className="bg-violet/10 border border-violet/25 border-dashed rounded-2xl p-4 flex items-start gap-3">
-                          <div className="p-2.5 bg-vibrant-purple/15 text-white rounded-xl shrink-0">
+                        <div className="welcome-card-border-glow bg-white/5 border border-white/30 border-dashed backdrop-blur-md rounded-2xl p-4 flex items-start gap-3">
+                          <div className="welcome-icon-pulse p-2.5 bg-white/10 border border-white/20 text-violet rounded-xl shrink-0">
                             <Ticket size={18} />
                           </div>
                           <div className="flex-1">
@@ -6112,9 +6209,9 @@ export const CustomerApp: React.FC = () => {
                           <h3 className="text-xs font-black text-[#FFF700] border-r-4 border-vibrant-purple pr-2.5">
                             مواصفات المنتج
                           </h3>
-                          <div className="grid grid-cols-2 gap-2 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/15 p-2.5 rounded-2xl">
+                          <div className="grid grid-cols-2 gap-2 welcome-card-border-glow bg-white/5 border border-white/20 backdrop-blur-md p-2.5 rounded-2xl">
                             {selectedProductDetail.condition?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                              <div className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/15">
                                 <span className="text-[#FFF700] text-[10px] font-bold">الحالة</span>
                                 <span className="text-[10.5px] font-black text-white">
                                   {selectedProductDetail.condition === 'new' ? 'جديد' : selectedProductDetail.condition === 'used' ? 'مستعمل' : selectedProductDetail.condition}
@@ -6122,32 +6219,32 @@ export const CustomerApp: React.FC = () => {
                               </div>
                             )}
                             {selectedProductDetail.warranty?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                              <div className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/15">
                                 <span className="text-[#FFF700] text-[10px] font-bold">الضمان</span>
-                                <span className="text-[10.5px] font-black text-vibrant-purple">{selectedProductDetail.warranty}</span>
+                                <span className="text-[10.5px] font-black text-violet-200">{selectedProductDetail.warranty}</span>
                               </div>
                             )}
                             {selectedProductDetail.color?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                              <div className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/15">
                                 <span className="text-[#FFF700] text-[10px] font-bold">اللون</span>
                                 <span className="text-[10.5px] font-black text-white">{selectedProductDetail.color}</span>
                               </div>
                             )}
                             {selectedProductDetail.size?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                              <div className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/15">
                                 <span className="text-[#FFF700] text-[10px] font-bold">المقاس</span>
-                                <span className="text-[10.5px] font-black text-vibrant-purple bg-violet/10 px-2 py-0.5 rounded">{selectedProductDetail.size}</span>
+                                <span className="text-[10.5px] font-black text-white bg-white/10 px-2 py-0.5 rounded border border-white/20">{selectedProductDetail.size}</span>
                               </div>
                             )}
                             {selectedProductDetail.weight?.trim() && (
-                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border">
+                              <div className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/15">
                                 <span className="text-[#FFF700] text-[10px] font-bold">الوزن</span>
                                 <span className="text-[10.5px] font-black text-white font-mono">{selectedProductDetail.weight}</span>
                               </div>
                             )}
                             {((selectedProductDetail.length && String(selectedProductDetail.length).trim()) ||
                               (selectedProductDetail.width && String(selectedProductDetail.width).trim())) && (
-                              <div className="flex justify-between items-center p-2.5 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] rounded-xl border border-[#0B1320] brand-gradient-border col-span-2">
+                              <div className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/15 col-span-2">
                                 <span className="text-[#FFF700] text-[10px] font-bold">الأبعاد</span>
                                 <span className="text-[10.5px] font-black text-white font-mono" dir="ltr">
                                   {selectedProductDetail.length || '—'} × {selectedProductDetail.width || '—'}
@@ -6163,10 +6260,7 @@ export const CustomerApp: React.FC = () => {
                         <h3 className="text-xs font-black text-[#FFF700] border-r-4 border-vibrant-purple pr-2.5">
                           نبذة ووصف المنتج
                         </h3>
-                        <div
-                          className="bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-[rgba(181,141,255,0.15)] p-4 rounded-2xl text-white text-xs leading-relaxed font-tajawal break-words"
-                          style={{ borderImage: 'linear-gradient(90deg, rgba(11, 19, 32, 0.15) 0%, rgba(123, 61, 255, 1) 100%) 1' }}
-                        >
+                        <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 rounded-2xl text-white/80 text-xs leading-relaxed font-tajawal break-words">
                           {selectedProductDetail.description || 'هذا المنتج المميز متوفر الآن في متجرنا الرسمي.'}
                         </div>
                       </div>
@@ -6174,10 +6268,10 @@ export const CustomerApp: React.FC = () => {
                     </div>
 
                     {/* شريط الإجراءات السفلي */}
-                    <div className="absolute bottom-0 left-0 right-0 bg-brand-horizontal p-4 sm:p-5 border-t border-white/10 flex flex-col gap-3 z-10 shrink-0">
+                    <div className="absolute bottom-0 left-0 right-0 welcome-card-border-glow bg-white/5 backdrop-blur-md p-4 sm:p-5 border-t border-white/20 flex flex-col gap-3 z-10 shrink-0">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-black text-purple-100">الكمية:</span>
-                        <div className="flex items-center bg-white/15 border border-white/25 rounded-2xl p-0.5">
+                        <span className="text-[11px] font-black text-white/70">الكمية:</span>
+                        <div className="flex items-center bg-white/10 border border-white/25 rounded-2xl p-0.5 backdrop-blur-md">
                           <button
                             type="button"
                             onClick={() => setDetailQty(Math.max(1, detailQty - 1))}
@@ -6218,11 +6312,11 @@ export const CustomerApp: React.FC = () => {
                             closeProductDetail();
                           }}
                           disabled={isProductOutOfStock(selectedProductDetail.inventory)}
-                          className="flex-[4] bg-white hover:bg-purple-50 disabled:bg-white/40 disabled:cursor-not-allowed text-vibrant-purple py-3.5 px-4 rounded-2xl font-black text-xs sm:text-sm shadow-lg transition-all active:scale-[0.97] flex items-center justify-center gap-2 cursor-pointer"
+                          className="welcome-btn-pulse flex-[4] bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] hover:opacity-95 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3.5 px-4 rounded-2xl font-black text-xs sm:text-sm shadow-lg border border-white/30 transition-all active:scale-[0.97] flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <ShoppingCart size={16} />
                           <span>إضافة للسلة</span>
-                          <span className="font-mono bg-vibrant-purple/10 px-2 py-0.5 rounded-lg text-[10px] sm:text-xs">
+                          <span className="font-mono bg-white/15 px-2 py-0.5 rounded-lg text-[10px] sm:text-xs border border-white/20">
                             ({((selectedProductDetail.finalPrice || selectedProductDetail.price) * detailQty).toLocaleString()} د.ع)
                           </span>
                         </button>
@@ -6230,7 +6324,7 @@ export const CustomerApp: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setShowRateModal({ type: 'product', data: selectedProductDetail })}
-                          className="w-12 h-12 bg-white/15 hover:bg-white/25 border border-white/25 text-white rounded-2xl flex items-center justify-center transition-all active:scale-[0.95] shrink-0 cursor-pointer"
+                          className="w-12 h-12 bg-white/10 hover:bg-white/20 border border-white/25 text-white rounded-2xl flex items-center justify-center transition-all active:scale-[0.95] shrink-0 cursor-pointer backdrop-blur-md"
                           title="التقييمات"
                         >
                           <Sparkles size={18} />
@@ -6242,7 +6336,7 @@ export const CustomerApp: React.FC = () => {
                             if (!selectedProductDetail) return;
                             setCompareSession({ baseProduct: selectedProductDetail, listOpen: true });
                           }}
-                          className="w-12 h-12 bg-white/15 hover:bg-white/25 border border-white/25 text-white rounded-2xl flex items-center justify-center transition-all active:scale-[0.95] shrink-0 cursor-pointer"
+                          className="w-12 h-12 bg-white/10 hover:bg-white/20 border border-white/25 text-white rounded-2xl flex items-center justify-center transition-all active:scale-[0.95] shrink-0 cursor-pointer backdrop-blur-md"
                           title="مقارنة الأسعار"
                         >
                           <ArrowRightLeft size={18} />
@@ -6258,70 +6352,81 @@ export const CustomerApp: React.FC = () => {
         </AnimatePresence>
 
 
-        {/* مودال تأكيد الاستبدال */}
-        <AnimatePresence>
-          {showRedeemConfirm && (
-            <div className="fixed inset-0 bg-deep-navy/40 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white rounded-[2rem] shadow-2xl overflow-hidden w-full max-w-sm"
+        {/* مودال تأكيد الاستبدال — تأثيرات الرئيسية */}
+        {createPortal(
+          <AnimatePresence>
+            {showRedeemConfirm && (
+              <div
+                key="redeem-confirm"
+                className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md flex items-center justify-center p-4"
+                style={{ zIndex: 10100 }}
               >
-                <div className="p-6">
-                  <div className="w-16 h-16 bg-amber-100 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Gift size={32} />
-                  </div>
-                  <h3 className="font-black text-violet text-xl text-center mb-2">تأكيد الاستبدال</h3>
-                  <p className="text-sm font-bold text-slate-500 text-center mb-6">
-                    هل أنت متأكد من رغبتك في استبدال {showRedeemConfirm} نقطة وتحويلها إلى كود خصم؟
-                  </p>
-                  
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={confirmRedeemPoints}
-                      disabled={isRedeemingPoints}
-                      className="flex-1 bg-vibrant-purple text-white font-black py-4 rounded-2xl transition hover:bg-deep-navy disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      {isRedeemingPoints ? (
-                        <>
-                          <Loader2 size={16} className="animate-spin" />
-                          <span>جاري التحويل...</span>
-                        </>
-                      ) : 'نعم، استبدل الآن'}
-                    </button>
-                    <button 
-                      onClick={() => { if (!isRedeemingPoints) setShowRedeemConfirm(null); }}
-                      disabled={isRedeemingPoints}
-                      className="flex-1 bg-slate-100 text-slate-600 font-bold py-4 rounded-2xl transition hover:bg-slate-200 disabled:opacity-50"
-                    >
-                      إلغاء
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            </div>
-          )}
-        </AnimatePresence>
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                  className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy border border-white/30 rounded-[2rem] shadow-2xl overflow-hidden w-full max-w-sm"
+                >
+                  <WelcomeScreenBackground lite />
+                  <div className="relative z-10 p-6">
+                    <div className="welcome-icon-pulse w-16 h-16 bg-amber-500/15 text-amber-300 border border-amber-400/30 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
+                      <Gift size={32} />
+                    </div>
+                    <h3 className="font-black text-white text-xl text-center mb-2">تأكيد الاستبدال</h3>
+                    <p className="text-sm font-bold text-white/70 text-center mb-6">
+                      هل أنت متأكد من رغبتك في استبدال {showRedeemConfirm} نقطة وتحويلها إلى كود خصم؟
+                    </p>
 
-        {/* مودال التقييم */}
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={confirmRedeemPoints}
+                        disabled={isRedeemingPoints}
+                        className="welcome-btn-pulse flex-1 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/30 text-white font-black py-4 rounded-2xl transition hover:opacity-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {isRedeemingPoints ? (
+                          <>
+                            <Loader2 size={16} className="animate-spin" />
+                            <span>جاري التحويل...</span>
+                          </>
+                        ) : 'نعم، استبدل الآن'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { if (!isRedeemingPoints) setShowRedeemConfirm(null); }}
+                        disabled={isRedeemingPoints}
+                        className="flex-1 bg-white/10 border border-white/20 text-white/80 font-bold py-4 rounded-2xl transition hover:bg-white/20 disabled:opacity-50 backdrop-blur-md"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>,
+          document.body,
+        )}
+
+        {/* مودال التقييم — تأثيرات الرئيسية */}
         <AnimatePresence>
           {showRateModal && (
-            <div className="fixed inset-0 bg-deep-navy/40 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md z-[80] flex items-center justify-center p-4">
               <motion.div 
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white rounded-[2rem] w-full max-w-sm overflow-hidden shadow-2xl"
+                className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy border border-white/30 rounded-[2rem] w-full max-w-sm overflow-hidden shadow-2xl"
               >
-                <div className="p-6 text-center space-y-4 text-right">
+                <WelcomeScreenBackground lite />
+                <div className="relative z-10 p-6 text-center space-y-4 text-right">
                   <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-black text-violet text-lg">تقييم ال{showRateModal.type === 'store' ? 'متجر' : 'منتج'}</h3>
-                    <button onClick={() => setShowRateModal(null)} className="p-2 bg-slate-50 text-slate-400 hover:text-rose-500 rounded-full transition-colors"><X size={16} /></button>
+                    <h3 className="font-black text-white text-lg">تقييم ال{showRateModal.type === 'store' ? 'متجر' : 'منتج'}</h3>
+                    <button onClick={() => setShowRateModal(null)} className="p-2 bg-white/10 border border-white/20 text-white/70 hover:text-rose-300 rounded-full transition-colors backdrop-blur-md"><X size={16} /></button>
                   </div>
                   
                   <div className="flex flex-col items-center gap-2 py-4">
-                    <p className="text-sm font-bold text-slate-500 mb-2">كيف كانت تجربتك مع {showRateModal.type === 'store' ? showRateModal.data.shopName : showRateModal.data.name}؟</p>
+                    <p className="text-sm font-bold text-white/70 mb-2">كيف كانت تجربتك مع {showRateModal.type === 'store' ? showRateModal.data.shopName : showRateModal.data.name}؟</p>
                     <div className="flex gap-2 mb-4" dir="ltr">
                       {[1,2,3,4,5].map(star => (
                         <button 
@@ -6329,45 +6434,68 @@ export const CustomerApp: React.FC = () => {
                           onClick={() => setRatingValue(star)}
                           className="text-4xl hover:scale-110 transition-transform active:scale-95 outline-none"
                         >
-                          <span className={star <= ratingValue ? 'text-amber-400' : 'text-slate-200'}>★</span>
+                          <span className={star <= ratingValue ? 'text-amber-400' : 'text-white/20'}>★</span>
                         </button>
                       ))}
                     </div>
                     {showRateModal.type === 'store' && (
                       <>
-                        <p className="text-[11px] font-bold text-vibrant-purple mb-2">
+                        <p className="text-[11px] font-bold text-violet-300 mb-2">
                           🎁 ستحصل على {loyalty.storeReviewRewardPoints} نقطة ولاء عند إرسال تقييمك
                         </p>
                         <textarea
                         placeholder="شاركنا رأيك أو تجربتك مع المتجر..."
                         value={reviewMessage}
                         onChange={(e) => setReviewMessage(e.target.value)}
-                        className="w-full text-sm p-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-vibrant-purple/20 resize-none h-24"
+                        className="w-full text-sm p-3 border border-white/20 rounded-xl bg-white/10 text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-vibrant-purple/30 resize-none h-24 backdrop-blur-md"
                       />
                       </>
+                    )}
+                    {showRateModal.type === 'product' && (
+                      <textarea
+                        placeholder="اختياري: اكتب ملاحظاتك عن المنتج..."
+                        value={reviewMessage}
+                        onChange={(e) => setReviewMessage(e.target.value)}
+                        className="w-full text-sm p-3 border border-white/20 rounded-xl bg-white/10 text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-vibrant-purple/30 resize-none h-24 backdrop-blur-md"
+                      />
                     )}
                   </div>
 
                   <button 
-                    onClick={() => {
-                      if (showRateModal.type === 'store' && currentCustomer) {
-                        submitStoreReview({
-                          storeId: showRateModal.data.id,
-                          customerId: currentCustomer.id,
-                          customerName: currentCustomer.name,
-                          rating: ratingValue,
-                          message: reviewMessage
-                        }).then(() => {
-                          alert(`شكرًا لك! تم إرسال تقييمك بنجاح (${ratingValue} نجوم)`);
-                        });
-                      } else {
-                        alert(`شكرًا لك! تم إرسال تقييمك بنجاح (${ratingValue} نجوم)`);
+                    onClick={async () => {
+                      if (!currentCustomer || !showRateModal) return;
+                      if (ratingValue < 1) {
+                        alert('يرجى اختيار تقييم بالنجوم أولاً');
+                        return;
                       }
-                      setShowRateModal(null);
-                      setRatingValue(5);
-                      setReviewMessage('');
+                      try {
+                        if (showRateModal.type === 'store') {
+                          await submitStoreReview({
+                            storeId: showRateModal.data.id,
+                            customerId: currentCustomer.id,
+                            customerName: currentCustomer.name,
+                            rating: ratingValue,
+                            message: reviewMessage
+                          });
+                        } else {
+                          await submitProductReview({
+                            productId: showRateModal.data.id,
+                            storeId: showRateModal.data.storeId,
+                            customerId: currentCustomer.id,
+                            customerName: currentCustomer.name,
+                            rating: ratingValue,
+                            message: reviewMessage || undefined,
+                          });
+                        }
+                        alert(`شكرًا لك! تم إرسال تقييمك بنجاح (${ratingValue} نجوم)`);
+                        setShowRateModal(null);
+                        setRatingValue(5);
+                        setReviewMessage('');
+                      } catch (err: any) {
+                        alert(err?.message || 'تعذر إرسال التقييم، حاول مجدداً');
+                      }
                     }}
-                    className="w-full bg-vibrant-purple text-white font-black py-4 rounded-2xl shadow-xl shadow-violet/20"
+                    className="welcome-btn-pulse w-full bg-transparent border border-white/30 text-white font-black py-4 rounded-2xl shadow-xl"
                   >
                     إرسال التقييم
                   </button>
@@ -6397,45 +6525,45 @@ export const CustomerApp: React.FC = () => {
           )}
         </AnimatePresence>
 
-        {/* مودال نجاح الطلب */}
+        {/* مودال نجاح الطلب — تأثيرات الرئيسية */}
         <AnimatePresence>
           {showOrderSuccess && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 backdrop-blur-md bg-deep-navy/40 text-right">
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 backdrop-blur-md bg-deep-navy/60 text-right">
               <motion.div 
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white w-full max-w-sm rounded-[3rem] overflow-hidden shadow-2xl text-center relative border border-slate-100"
+                className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy w-full max-w-sm rounded-[3rem] overflow-hidden shadow-2xl text-center border border-white/30"
               >
-                <div className="bg-vibrant-purple p-10 flex flex-col items-center relative">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-2xl"></div>
-                  <div className="w-20 h-20 bg-white rounded-[1.5rem] flex items-center justify-center shadow-inner mb-4 relative z-10">
-                    <CheckCircle size={48} className="text-emerald-500" />
+                <WelcomeScreenBackground lite />
+                <div className="relative z-10 welcome-card-shimmer bg-white/5 border-b border-white/20 p-10 flex flex-col items-center backdrop-blur-md">
+                  <div className="welcome-icon-pulse w-20 h-20 bg-emerald-500/15 border border-emerald-400/40 rounded-[1.5rem] flex items-center justify-center shadow-inner mb-4">
+                    <CheckCircle size={48} className="text-emerald-300" />
                   </div>
-                  <h3 className="text-xl font-black text-white relative z-10 text-center">تم إرسال طلبك بنجاح! 🎉</h3>
+                  <h3 className="text-xl font-black text-white text-center">تم إرسال طلبك بنجاح! 🎉</h3>
                 </div>
-                <div className="p-8 space-y-6">
-                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100/50">
-                    <p className="text-[10px] font-black text-slate-400 mb-3 uppercase tracking-widest text-right">تفاصيل الطلبات</p>
-                    <div className="text-[11px] font-black text-slate-600 whitespace-pre-line leading-relaxed text-right">
+                <div className="relative z-10 p-8 space-y-6">
+                  <div className="welcome-card-border-glow bg-white/5 rounded-2xl p-4 border border-white/20 backdrop-blur-md">
+                    <p className="text-[10px] font-black text-white/50 mb-3 uppercase tracking-widest text-right">تفاصيل الطلبات</p>
+                    <div className="text-[11px] font-black text-white/80 whitespace-pre-line leading-relaxed text-right">
                       {orderSummary}
                     </div>
                   </div>
 
-                  <p className="text-[11px] text-slate-400 font-bold leading-relaxed text-center">
+                  <p className="text-[11px] text-white/60 font-bold leading-relaxed text-center">
                     شكراً لتسوقك من محلك! سيتم مراجعة الطلب من قبل المتاجر المختارة وتأكيده قريباً.
                   </p>
 
                   <div className="grid grid-cols-2 gap-3">
                     <button 
                       onClick={() => { setShowOrderSuccess(false); handleTabChange('orders'); setSelectedStore(null); }}
-                      className="py-4 bg-vibrant-purple text-white font-black rounded-2xl shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-95 text-[10px] sm:text-xs"
+                      className="welcome-btn-pulse py-4 border border-white/30 text-white font-black rounded-2xl shadow-lg hover:opacity-95 transition-all active:scale-95 text-[10px] sm:text-xs"
                     >
                       تتبع طلبي الآن
                     </button>
                     <button 
                       onClick={() => { setShowOrderSuccess(false); handleTabChange('stores'); setSelectedStore(null); }}
-                      className="py-4 bg-white text-vibrant-purple border border-violet/25 font-black rounded-2xl shadow-sm hover:bg-violet/10 transition-all active:scale-95 text-[10px] sm:text-xs"
+                      className="py-4 bg-white/10 text-white border border-white/25 font-black rounded-2xl shadow-sm hover:bg-white/20 transition-all active:scale-95 text-[10px] sm:text-xs backdrop-blur-md"
                     >
                       إكمال التسوق
                     </button>
@@ -6446,74 +6574,75 @@ export const CustomerApp: React.FC = () => {
           )}
         </AnimatePresence>
 
-        {/* مودال المشاركة المطور */}
+        {/* مودال المشاركة — تأثيرات الرئيسية */}
         <AnimatePresence>
           {showShareModal && (
-            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
               <motion.div 
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white w-full max-w-sm rounded-[3rem] shadow-2xl overflow-hidden text-right border border-slate-100"
+                className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy w-full max-w-sm rounded-[3rem] shadow-2xl overflow-hidden text-right border border-white/30"
               >
-                <div className="p-8 pb-4">
+                <WelcomeScreenBackground lite />
+                <div className="relative z-10 p-8 pb-4">
                    <div className="flex justify-between items-center mb-6">
                       <div className="flex items-center gap-3">
                         <button 
                           onClick={() => setShowShareModal(false)}
-                          className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 transition-all ml-1"
+                          className="welcome-btn-pulse p-2 bg-white/10 border border-white/20 text-white rounded-xl hover:bg-white/20 transition-all ml-1 backdrop-blur-md"
                         >
                           <ChevronRight size={20} />
                         </button>
-                        <h3 className="text-xl font-black text-violet">مشاركة مع الأصدقاء</h3>
+                        <h3 className="text-xl font-black text-white">مشاركة مع الأصدقاء</h3>
                       </div>
-                      <button onClick={() => setShowShareModal(false)} className="p-2 text-slate-400 hover:text-rose-500 transition-colors">
+                      <button onClick={() => setShowShareModal(false)} className="p-2 text-white/50 hover:text-rose-300 transition-colors">
                         <X size={20} />
                       </button>
                    </div>
 
-                   <p className="text-[10px] font-black text-slate-400 mb-2 mr-1 uppercase tracking-widest">معاينة نص المشاركة</p>
+                   <p className="text-[10px] font-black text-white/50 mb-2 mr-1 uppercase tracking-widest">معاينة نص المشاركة</p>
                    <textarea 
                     value={shareText}
                     onChange={(e) => setShareText(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-xs font-bold text-slate-600 focus:ring-1 focus:ring-vibrant-purple outline-none leading-relaxed mb-4 min-h-[100px]"
+                    className="w-full bg-white/10 border border-white/20 p-4 rounded-2xl text-xs font-bold text-white placeholder:text-white/40 focus:ring-1 focus:ring-vibrant-purple outline-none leading-relaxed mb-4 min-h-[100px] backdrop-blur-md"
                    />
 
-                   <p className="text-[10px] font-black text-slate-400 mb-3 mr-1 uppercase tracking-widest text-center">اختر منصة المشاركة</p>
+                   <p className="text-[10px] font-black text-white/50 mb-3 mr-1 uppercase tracking-widest text-center">اختر منصة المشاركة</p>
                    
                    <div className="grid grid-cols-3 gap-2">
-                      <button onClick={() => executeShare('whatsapp')} className="flex flex-col items-center gap-2 p-4 bg-emerald-50 text-emerald-600 rounded-3xl hover:bg-emerald-100 transition-colors group">
-                        <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
+                      <button onClick={() => executeShare('whatsapp')} className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-emerald-500/15 text-emerald-200 border border-emerald-400/30 rounded-3xl hover:bg-emerald-500/25 transition-colors group backdrop-blur-md">
+                        <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform">
                           <MessageCircle size={24} />
                         </div>
                         <span className="text-[9px] font-black">واتساب</span>
                       </button>
-                      <button onClick={() => executeShare('telegram')} className="flex flex-col items-center gap-2 p-4 bg-violet/10 text-vibrant-purple rounded-3xl hover:bg-violet/20 transition-colors group">
-                        <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-[#b07aff]">
+                      <button onClick={() => executeShare('telegram')} className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-violet-200 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md">
+                        <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-violet-200">
                            <Send size={24} />
                         </div>
                         <span className="text-[9px] font-black">تيليجرام</span>
                       </button>
-                      <button onClick={() => executeShare('messenger')} className="flex flex-col items-center gap-2 p-4 bg-violet/10 text-vibrant-purple rounded-3xl hover:bg-violet/20 transition-colors group">
-                        <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-[#b07aff]">
+                      <button onClick={() => executeShare('messenger')} className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-violet-200 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md">
+                        <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-violet-200">
                           <MessageCircle size={24} />
                         </div>
                         <span className="text-[9px] font-black">ماسنجر</span>
                       </button>
-                      <button onClick={() => executeShare('instagram')} className="flex flex-col items-center gap-2 p-4 bg-rose-50 text-rose-500 rounded-3xl hover:bg-rose-100 transition-colors group">
-                        <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-rose-400">
+                      <button onClick={() => executeShare('instagram')} className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-rose-500/15 text-rose-200 border border-rose-400/30 rounded-3xl hover:bg-rose-500/25 transition-colors group backdrop-blur-md">
+                        <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-rose-200">
                           <Camera size={24} />
                         </div>
                         <span className="text-[9px] font-black">انستقرام</span>
                       </button>
-                      <button onClick={() => executeShare('facebook')} className="flex flex-col items-center gap-2 p-4 bg-violet/10 text-violet rounded-3xl hover:bg-violet/20 transition-colors group">
-                        <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-violet">
+                      <button onClick={() => executeShare('facebook')} className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-violet-200 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md">
+                        <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-violet-200">
                           <Users size={24} />
                         </div>
                         <span className="text-[9px] font-black">فيسبوك</span>
                       </button>
-                      <button onClick={() => executeShare('copy')} className="flex flex-col items-center gap-2 p-4 bg-slate-50 text-slate-600 rounded-3xl hover:bg-slate-100 transition-colors group">
-                        <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
+                      <button onClick={() => executeShare('copy')} className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-white/80 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md">
+                        <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform">
                           <ClipboardList size={24} />
                         </div>
                         <span className="text-[9px] font-black">نسخ الرابط</span>
@@ -6521,8 +6650,8 @@ export const CustomerApp: React.FC = () => {
                    </div>
                 </div>
                 
-                <div className="p-8 pt-0">
-                  <p className="text-[9px] text-slate-400 text-center font-bold">
+                <div className="relative z-10 p-8 pt-0">
+                  <p className="text-[9px] text-white/50 text-center font-bold">
                     سيتم منحك {loyalty.shareRewardPoints} نقاط مكافأة عند كل مشاركة ناجحة 🎁
                   </p>
                 </div>
@@ -6531,42 +6660,43 @@ export const CustomerApp: React.FC = () => {
           )}
         </AnimatePresence>
 
-        {/* مودال تأكيد التغييرات غير المحفوظة */}
+        {/* مودال تأكيد التغييرات غير المحفوظة — تأثيرات الرئيسية */}
         <AnimatePresence>
           {showUnsavedModal && (
-            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
               <motion.div 
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden text-right border border-slate-100"
+                className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden text-right border border-white/30"
               >
-                <div className="p-8">
-                  <div className="w-16 h-16 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <WelcomeScreenBackground lite />
+                <div className="relative z-10 p-8">
+                  <div className="welcome-icon-pulse w-16 h-16 bg-amber-500/15 text-amber-300 border border-amber-400/30 rounded-2xl flex items-center justify-center mx-auto mb-6 backdrop-blur-md">
                     <AlertCircle size={32} />
                   </div>
-                  <h3 className="text-xl font-black text-violet text-center mb-2">تنبيه: تغييرات غير محفوظة</h3>
-                  <p className="text-sm text-slate-500 text-center leading-relaxed">
+                  <h3 className="text-xl font-black text-white text-center mb-2">تنبيه: تغييرات غير محفوظة</h3>
+                  <p className="text-sm text-white/70 text-center leading-relaxed">
                     لقد قمت بتعديل بياناتك الشخصية ولكن لم تقم بحفظها بعد. هل تريد حفظ التغييرات قبل الانتقال؟
                   </p>
                 </div>
                 
-                <div className="p-6 bg-slate-50 flex flex-col gap-3">
+                <div className="relative z-10 p-6 border-t border-white/15 bg-white/5 backdrop-blur-md flex flex-col gap-3">
                   <button 
                     onClick={() => handleConfirmUnsaved(true)}
-                    className="w-full py-4 bg-vibrant-purple text-white rounded-2xl font-black text-sm shadow-lg shadow-violet/20 hover:bg-deep-navy transition-all active:scale-[0.98]"
+                    className="welcome-btn-pulse w-full py-4 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/30 text-white rounded-2xl font-black text-sm shadow-lg hover:opacity-95 transition-all active:scale-[0.98]"
                   >
                     نعم، حفظ التغييرات
                   </button>
                   <button 
                     onClick={() => handleConfirmUnsaved(false)}
-                    className="w-full py-4 bg-white text-slate-600 border border-slate-200 rounded-2xl font-black text-sm hover:bg-slate-100 transition-all active:scale-[0.98]"
+                    className="w-full py-4 bg-white/10 text-white/80 border border-white/20 rounded-2xl font-black text-sm hover:bg-white/20 transition-all active:scale-[0.98] backdrop-blur-md"
                   >
                     لا، تجاهل التغييرات
                   </button>
                   <button 
                     onClick={() => { setShowUnsavedModal(false); setPendingTab(null); }}
-                    className="w-full py-2 text-xs font-bold text-slate-400 hover:text-vibrant-purple transition-colors"
+                    className="w-full py-2 text-xs font-bold text-white/50 hover:text-white transition-colors"
                   >
                     إلغاء والبقاء في الصفحة
                   </button>
@@ -6592,11 +6722,12 @@ export const CustomerApp: React.FC = () => {
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       try {
-                        navigator.clipboard.writeText(iframeUrl);
+                        await navigator.clipboard.writeText(iframeUrl);
                         alert('تم نسخ الرابط بنجاح! ✅');
-                      } catch (err) {
+                      } catch {
+                        alert('تعذر نسخ الرابط.');
                       }
                     }}
                     className="p-2 hover:bg-white/10 rounded-xl text-white transition-colors animate-pulse"
@@ -6627,53 +6758,123 @@ export const CustomerApp: React.FC = () => {
           )}
         </AnimatePresence>
 
-        {/* نافذة تأكيد إلغاء الطلب بفترة الـ 30 ثانية */}
-        <AnimatePresence>
-          {orderToCancel && (
-            <div className="fixed inset-0 bg-deep-navy/50 backdrop-blur-xs z-[100] flex items-center justify-center p-4" dir="rtl">
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden text-right border border-slate-100"
+        {/* نافذة تأكيد إلغاء الطلب — تأثيرات الرئيسية */}
+        {createPortal(
+          <AnimatePresence>
+            {orderToCancel && (
+              <div
+                className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md flex items-center justify-center p-4"
+                style={{ zIndex: 10100 }}
+                dir="rtl"
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) setOrderToCancel(null);
+                }}
               >
-                <div className="p-8">
-                  <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-rose-100">
-                    <AlertTriangle size={32} />
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                  className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden text-right border border-white/30 pointer-events-auto"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <WelcomeScreenBackground lite />
+                  <div className="relative z-10 p-8 pointer-events-auto">
+                    <div className="welcome-icon-pulse w-16 h-16 bg-rose-500/15 text-rose-300 border border-rose-400/30 rounded-2xl flex items-center justify-center mx-auto mb-6 backdrop-blur-md">
+                      <AlertTriangle size={32} />
+                    </div>
+                    <h3 className="text-xl font-black text-white text-center mb-2">تأكيد إلغاء الطلب</h3>
+                    <p className="text-sm text-white/70 text-center leading-relaxed font-tajawal">
+                      هل أنت متأكد من رغبتك في إلغاء الطلب رقم <span className="font-sans font-black bg-white/10 text-violet-200 px-1.5 py-0.5 rounded-sm border border-white/20">#{getOrderSeqId(orderToCancel.id) || orderToCancel.orderNumber || '—'}</span> من متجر <span className="text-violet-200 font-black">{orderToCancel.storeName}</span>؟ هذا الإجراء فوري وسيتم إلغاء تحضير الطلب تلقائياً ولا يمكن الرجوع عنه.
+                    </p>
                   </div>
-                  <h3 className="text-xl font-black text-slate-800 text-center mb-2">تأكيد إلغاء الطلب</h3>
-                  <p className="text-sm text-slate-500 text-center leading-relaxed font-tajawal">
-                    هل أنت متأكد من رغبتك في إلغاء الطلب رقم <span className="font-sans font-black bg-slate-100 text-violet px-1.5 py-0.5 rounded-sm">#{orderToCancel.id}</span> من متجر <span className="text-vibrant-purple font-black">{orderToCancel.storeName}</span>؟ هذا الإجراء فوري وسيتم إلغاء تحضير الطلب تلقائياً ولا يمكن الرجوع عنه.
-                  </p>
-                </div>
-                
-                <div className="p-6 bg-slate-50 flex flex-col gap-3">
-                  <button 
-                    onClick={async () => {
-                      try {
-                        await updateOrderStatus(orderToCancel.id, 'cancelled', 'تم إلغاء الطلب تلقائياً من قبل الزبون خلال 30 ثانية');
+                  
+                  <div className="relative z-20 p-6 border-t border-white/15 bg-white/5 backdrop-blur-md flex flex-col gap-3 pointer-events-auto">
+                    <button 
+                      type="button"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const orderId = orderToCancel?.id;
+                        if (!orderId) return;
+                        try {
+                          await updateOrderStatus(orderId, 'cancelled', 'ألغاه الزبون خلال مهلة الإلغاء');
+                          setOrderToCancel(null);
+                        } catch (err) {
+                          console.error(err);
+                          alert('تعذر إلغاء الطلب حالياً، حاول مرة أخرى.');
+                        }
+                      }}
+                      className="relative z-20 welcome-btn-pulse w-full py-4 bg-gradient-to-r from-rose-500 to-[#0B1320] border border-white/30 text-white rounded-2xl font-black text-sm shadow-lg hover:opacity-95 transition-all active:scale-[0.98] cursor-pointer pointer-events-auto"
+                    >
+                      نعم، إلغاء الطلب
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                         setOrderToCancel(null);
-                      } catch (e) {
-                      }
-                    }}
-                    className="w-full py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-sm shadow-lg shadow-rose-100 transition-all active:scale-[0.98] cursor-pointer"
-                  >
-                    نعم، إلغاء الطلب
-                  </button>
-                  <button 
-                    onClick={() => setOrderToCancel(null)}
-                    className="w-full py-4 bg-white text-slate-600 border border-slate-200 rounded-2xl font-black text-sm hover:bg-slate-100 transition-all active:scale-[0.98] cursor-pointer"
-                  >
-                    تراجع
-                  </button>
-                </div>
-              </motion.div>
-            </div>
-          )}
-        </AnimatePresence>
+                      }}
+                      className="relative z-20 w-full py-4 bg-white/10 text-white/80 border border-white/20 rounded-2xl font-black text-sm hover:bg-white/20 transition-all active:scale-[0.98] cursor-pointer backdrop-blur-md pointer-events-auto"
+                    >
+                      تراجع
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>,
+          document.body,
+        )}
 
         <PrivacyPolicyModal open={showPrivacyPolicy} onClose={() => setShowPrivacyPolicy(false)} />
         <AboutUsModal open={showAboutUs} onClose={() => setShowAboutUs(false)} />
+        <MyInfoModal
+          open={showMyInfo}
+          onClose={() => setShowMyInfo(false)}
+          phone={currentCustomer?.phone ?? ''}
+          name={profileForm.name}
+          onNameChange={(value) => setProfileForm((prev) => ({ ...prev, name: value }))}
+          onSave={handleSaveProfile}
+        />
+        <SavedLocationsModal
+          open={showSavedLocations}
+          onClose={() => setShowSavedLocations(false)}
+          locations={savedLocations}
+          onChange={setSavedLocations}
+          provinces={provinces}
+          onSave={handleSaveProfile}
+        />
+        <ChangePasswordModal
+          open={showPasswordChange}
+          onClose={() => {
+            setShowPasswordChange(false);
+            setPwStep(1);
+            setOtpPwCode('');
+            setNewPassword('');
+          }}
+          phone={currentCustomer?.phone ?? ''}
+          pwStep={pwStep as 1 | 2}
+          otpPwCode={otpPwCode}
+          newPassword={newPassword}
+          onOtpChange={setOtpPwCode}
+          onNewPasswordChange={setNewPassword}
+          onSubmit={handleChangePassword}
+          onResendOtp={async () => {
+            if (!currentCustomer) return;
+            try {
+              const ok = await authService.requestOTP(currentCustomer.phone, 'forgot');
+              if (ok) {
+                setPwStep(2);
+                showToast('success', 'تم إرسال رمز التحقق إلى واتساب!');
+              } else {
+                showModal('error', 'فشل إرسال الرمز', 'حاول مرة أخرى.');
+              }
+            } catch (err: any) {
+              showModal('error', 'خطأ في الاتصال', err.message || 'حاول مرة أخرى.');
+            }
+          }}
+        />
       </div>
     );
   }

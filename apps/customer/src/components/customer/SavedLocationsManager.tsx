@@ -44,8 +44,8 @@ function locationIcon(label: string) {
 }
 
 const fieldClass =
-  'w-full bg-white/10 border border-white/20 px-4 py-3.5 rounded-2xl text-xs font-black text-white placeholder:text-white/50 focus:ring-4 focus:ring-vibrant-purple/20 focus:border-vibrant-purple transition-all outline-none';
-const labelClass = 'block text-[10px] font-black text-white/80 mb-2 mr-1';
+  'w-full bg-white/10 border border-white/20 px-4 py-3.5 rounded-2xl text-xs font-black text-white placeholder:text-white/50 focus:ring-4 focus:ring-white/10 focus:border-white/40 transition-all outline-none';
+const labelClass = 'block text-[10px] font-black text-purple-100/80 mb-2 mr-1';
 
 function AddressFields({
   draft,
@@ -267,9 +267,9 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
   };
 
   const renderLocationForm = (mode: 'add' | 'edit') => (
-    <div className="space-y-4 p-4 rounded-2xl bg-white/10 border border-white/15 animate-fade-in text-right">
+    <div className="space-y-4 p-4 rounded-2xl welcome-card-border-glow bg-white/5 border border-white/20 animate-fade-in text-right">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-black text-white">{mode === 'add' ? 'موقع جديد' : 'تعديل الموقع'}</span>
+        <span className="text-xs font-black text-[#fff700]">{mode === 'add' ? 'موقع جديد' : 'تعديل الموقع'}</span>
         <button type="button" onClick={resetDraft} className="p-1.5 rounded-lg hover:bg-white/10 text-white/70">
           <X size={16} />
         </button>
@@ -285,7 +285,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
               onClick={() => setPreset(name)}
               className={`px-3 py-2 rounded-xl text-[10px] font-black border transition-colors ${
                 preset === name
-                  ? 'bg-vibrant-purple text-white border-vibrant-purple'
+                  ? 'bg-brand-horizontal text-white border-white/30 shadow-brand-glow'
                   : 'bg-white/10 text-white/80 border-white/20 hover:bg-white/15'
               }`}
             >
@@ -297,7 +297,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
             onClick={() => setPreset('custom')}
             className={`px-3 py-2 rounded-xl text-[10px] font-black border transition-colors ${
               preset === 'custom'
-                ? 'bg-vibrant-purple text-white border-vibrant-purple'
+                ? 'bg-brand-horizontal text-white border-white/30 shadow-brand-glow'
                 : 'bg-white/10 text-white/80 border-white/20 hover:bg-white/15'
             }`}
           >
@@ -334,7 +334,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
       <button
         type="button"
         onClick={mode === 'add' ? handleAddLocation : handleUpdateLocation}
-        className="w-full py-3 bg-vibrant-purple text-white rounded-2xl text-xs font-black flex items-center justify-center gap-2 hover:bg-deep-navy transition-colors"
+        className="welcome-btn-pulse w-full py-3 bg-brand-horizontal border border-white/30 text-white rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-brand-glow hover:opacity-95 transition-all active:scale-95"
       >
         <Check size={14} />
         {mode === 'add' ? 'حفظ هذا الموقع' : 'تحديث الموقع'}
@@ -357,7 +357,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                 resetDraft();
                 setIsAdding(true);
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-white text-[10px] font-black border border-white/20 hover:bg-white/15 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-[#fff700] text-[10px] font-black border border-white/20 hover:bg-white/15 transition-colors"
             >
               <Plus size={12} />
               إضافة موقع
@@ -373,7 +373,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                 resetDraft();
                 setIsAdding(true);
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-white text-[10px] font-black border border-white/20 hover:bg-white/15 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-[#fff700] text-[10px] font-black border border-white/20 hover:bg-white/15 transition-colors"
             >
               <Plus size={12} />
               إضافة موقع
@@ -390,21 +390,21 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
 
             return (
               <React.Fragment key={loc.id}>
-                <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-white/10 border border-white/15">
-                  <div className="p-2.5 rounded-xl bg-white/10 text-white shrink-0">
+                <div className="flex items-start gap-3 p-3.5 rounded-2xl welcome-card-border-glow bg-white/5 border border-white/20">
+                  <div className="p-2.5 rounded-xl bg-white/15 border border-white/20 text-[#fff700] shrink-0">
                     <Icon size={16} />
                   </div>
                   <div className="flex-1 min-w-0 text-right">
                     <div className="flex items-center gap-2 flex-wrap justify-end">
-                      <span className="text-xs font-black text-white">{loc.label}</span>
+                      <span className="text-xs font-black text-[#fff700]">{loc.label}</span>
                       {loc.isDefault && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-200 text-[9px] font-black">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#fff700]/15 text-[#fff700] text-[9px] font-black border border-[#fff700]/30">
                           <Star size={10} fill="currentColor" />
                           الافتراضي
                         </span>
                       )}
                     </div>
-                    <p className="text-[10px] text-white/80 mt-1 leading-relaxed">
+                    <p className="text-[10px] text-purple-100/90 mt-1 leading-relaxed">
                       {formatSavedLocationSummary(loc)}
                     </p>
                   </div>
@@ -412,7 +412,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                     <button
                       type="button"
                       onClick={() => startEdit(loc)}
-                      className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors"
+                      className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 hover:text-[#fff700] transition-colors"
                       title="تعديل الموقع"
                     >
                       <Pencil size={14} />
@@ -421,7 +421,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                       <button
                         type="button"
                         onClick={() => handleSetDefault(loc.id)}
-                        className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors"
+                        className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 hover:text-[#fff700] transition-colors"
                         title="تعيين كموقع افتراضي"
                       >
                         <Star size={14} />
@@ -443,7 +443,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
           })}
         </div>
       ) : (
-        <p className="text-[10px] text-white/60 font-bold text-center py-2">
+        <p className="text-[10px] text-purple-100/70 font-bold text-center py-2">
           لم تُضف أي مواقع بعد. أضف موقع البيت أو العمل مع العنوان الكامل.
         </p>
       )}

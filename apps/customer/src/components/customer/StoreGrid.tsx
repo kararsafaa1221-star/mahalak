@@ -40,14 +40,18 @@ const StoreGridItem = memo(function StoreGridItem({
       className="group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center transition-all duration-200 hover:scale-[1.04] active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-vibrant-purple/50 cursor-pointer"
       aria-label={`${store.shopName} — ${store.province} — ${categoryLabel}`}
     >
-      <div className="relative flex aspect-square w-full max-w-[76px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-shadow group-hover:border-vibrant-purple/30 group-hover:shadow-md sm:max-w-[84px]">
+      <div className={`relative flex aspect-square w-full max-w-[76px] items-center justify-center overflow-hidden rounded-xl shadow-sm transition-shadow sm:max-w-[84px] ${
+        onDark
+          ? 'welcome-card-border-glow border border-white/30 bg-white/10 backdrop-blur-md group-hover:border-white/50 group-hover:bg-white/15'
+          : 'border border-slate-200 bg-white group-hover:border-vibrant-purple/30 group-hover:shadow-md'
+      }`}>
         {store.logo ? (
           <ProductImage
             src={store.logo}
             alt={store.shopName}
             size="custom"
             priority={priority}
-            variant="light"
+            variant={onDark ? 'dark' : 'light'}
             className="h-full w-full rounded-xl"
             imageClassName="transition-transform duration-300 group-hover:scale-105"
           />
@@ -62,14 +66,14 @@ const StoreGridItem = memo(function StoreGridItem({
             className="pointer-events-none absolute left-0 top-0 z-10 h-10 w-10 overflow-hidden"
             aria-hidden
           >
-            <span className="absolute -left-4 top-3 w-[4.5rem] rotate-[-45deg] bg-red-500 py-0.5 text-center text-[7px] font-black leading-none text-white shadow-sm">
+            <span className="absolute -left-4 top-3 w-[4.5rem] rotate-[-45deg] bg-rose-500/90 py-0.5 text-center text-[7px] font-black leading-none text-white shadow-sm">
               {offerBadge}
             </span>
           </div>
         )}
 
         {distanceLabel && (
-          <div className="absolute top-1 right-1 z-10 rounded-md border border-violet/25 bg-vibrant-purple px-1.5 py-0.5 shadow-sm">
+          <div className="absolute top-1 right-1 z-10 rounded-md border border-white/30 bg-vibrant-purple/90 px-1.5 py-0.5 shadow-sm backdrop-blur-sm">
             <span className="text-[7px] font-black leading-none text-white sm:text-[8px]">{distanceLabel}</span>
           </div>
         )}
@@ -103,13 +107,17 @@ const StoreGridItem = memo(function StoreGridItem({
         >
           {store.shopName}
         </span>
-        <div className="flex items-center gap-0.5 rounded-md border border-amber-100/30 bg-amber-50 px-1.5 py-[2px] text-amber-500">
-          <Sparkles size={9} className="fill-amber-400 text-amber-500" />
+        <div className={`flex items-center gap-0.5 rounded-md px-1.5 py-[2px] ${
+          onDark
+            ? 'border border-amber-300/30 bg-amber-400/15 text-amber-200'
+            : 'border border-amber-100/30 bg-amber-50 text-amber-500'
+        }`}>
+          <Sparkles size={9} className={`fill-amber-400 ${onDark ? 'text-amber-300' : 'text-amber-500'}`} />
           <span className="text-[9px] font-bold sm:text-[9.5px]">{rating}</span>
         </div>
         <span
           className={`line-clamp-1 w-full text-[8px] font-medium sm:text-[9px] ${
-            onDark ? 'text-white' : 'text-slate-400'
+            onDark ? 'text-white/70' : 'text-slate-400'
           }`}
           title={store.province}
         >
@@ -118,7 +126,7 @@ const StoreGridItem = memo(function StoreGridItem({
         <span
           className={`line-clamp-1 w-full rounded-full px-2 py-0.5 text-[7.5px] font-extrabold sm:text-[8px] ${
             onDark
-              ? 'bg-white/10 text-white'
+              ? 'bg-white/10 text-white border border-white/20'
               : 'bg-vibrant-purple/5 text-vibrant-purple'
           }`}
           title={categoryLabel}

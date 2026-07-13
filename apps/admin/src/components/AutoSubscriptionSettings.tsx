@@ -166,7 +166,6 @@ export const AutoSubscriptionSettingsModal: React.FC<
               onClick={async () => {
                 try {
                   await updateAdminSettings({
-                    autoApproveStores: true,
                     autoSubscriptionEnabled: form.enabled,
                     autoSubscriptionDurationValue: form.durationValue,
                     autoSubscriptionDurationUnit: form.durationUnit,

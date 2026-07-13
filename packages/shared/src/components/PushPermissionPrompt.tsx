@@ -181,8 +181,8 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
       : 'يرجى السماح بالوصول لموقعك لعرض المتاجر الأقرب إليك وحساب مسافات التوصيل بدقة.';
     return (
       <PermissionModal
-        icon={<MapPin size={32} className="text-vibrant-purple animate-bounce" />}
-        iconBg="bg-violet/10"
+        icon={<MapPin size={32} className="text-[#E9DAFF] animate-bounce" />}
+        iconBg="bg-white/10"
         title="تفعيل الموقع الجغرافي"
         body={locationBody}
         primaryLabel={isBusy ? 'جاري الطلب...' : 'حسناً، تفعيل الموقع'}
@@ -200,8 +200,8 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
       : 'يمكنك المتابعة بدون الموقع. لاحقاً فعّله من إعدادات المتصفح أو الهاتف إذا أردت عرض المتاجر الأقرب إليك.';
     return (
       <PermissionModal
-        icon={<MapPin size={32} className="text-amber-500" />}
-        iconBg="bg-amber-50"
+        icon={<MapPin size={32} className="text-amber-300" />}
+        iconBg="bg-white/10"
         title="لم يُفعَّل الموقع"
         body={deniedBody}
         primaryLabel="متابعة"
@@ -227,7 +227,7 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
     return (
       <PermissionModal
         icon={
-          <svg className="w-8 h-8 text-blue-500 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-8 h-8 text-sky-300 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -236,7 +236,7 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
             />
           </svg>
         }
-        iconBg="bg-blue-50"
+        iconBg="bg-white/10"
         title={notificationContent.title}
         body={notificationContent.body}
         primaryLabel={isBusy ? 'جاري الطلب...' : 'تفعيل الآن'}
@@ -251,7 +251,7 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
   return (
     <PermissionModal
       icon={
-        <svg className="w-8 h-8 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-8 h-8 text-rose-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -260,7 +260,7 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
           />
         </svg>
       }
-      iconBg="bg-rose-50"
+      iconBg="bg-white/10"
       title="لم تُفعَّل الإشعارات"
       body="يمكنك المتابعة بدون إشعارات. لتفعيلها لاحقاً، افتح إعدادات المتصفح أو الهاتف واسمح بالإشعارات لتطبيق محلك."
       primaryLabel="حسناً"
@@ -283,7 +283,7 @@ interface PermissionModalProps {
 
 function PermissionModal({
   icon,
-  iconBg,
+  iconBg: _iconBg,
   title,
   body,
   primaryLabel,
@@ -312,25 +312,25 @@ function PermissionModal({
       aria-modal="true"
       aria-labelledby="permission-modal-title"
     >
-      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" aria-hidden />
+      <div className="absolute inset-0 bg-deep-navy/75 backdrop-blur-md" aria-hidden />
 
       <div className="relative z-[1] flex h-full w-full items-center justify-center p-4 pointer-events-none">
-        <div className="pointer-events-auto w-full max-w-sm overflow-hidden rounded-[2rem] bg-white shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-300">
-          <div className="space-y-4 p-8 text-center">
-            <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full ${iconBg}`}>
+        <div className="pointer-events-auto relative w-full max-w-sm overflow-hidden rounded-[2rem] welcome-card-glow welcome-card-border-glow bg-deep-navy border border-white/30 shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="welcome-card-shimmer space-y-4 p-8 text-center bg-white/5 backdrop-blur-md border-b border-white/15">
+            <div className="welcome-icon-pulse mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-white/10">
               {icon}
             </div>
-            <h3 id="permission-modal-title" className="text-2xl font-black tracking-tight text-slate-900">
+            <h3 id="permission-modal-title" className="text-2xl font-black tracking-tight text-white">
               {title}
             </h3>
-            <p className="px-2 text-[15px] font-medium leading-relaxed text-slate-500">{body}</p>
+            <p className="px-2 text-[15px] font-medium leading-relaxed text-white/65">{body}</p>
           </div>
-          <div className="space-y-3 border-t border-slate-100 bg-slate-50/80 p-5">
+          <div className="space-y-3 bg-white/5 p-5">
             <button
               type="button"
               onClick={onPrimary}
               disabled={primaryDisabled}
-              className="w-full rounded-2xl bg-vibrant-purple py-4 text-base font-black text-white shadow-xl shadow-vibrant-purple/25/20 transition-all hover:bg-violet active:scale-[0.98] disabled:opacity-60"
+              className="welcome-btn-pulse w-full rounded-2xl bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/30 py-4 text-base font-black text-white shadow-xl transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-60"
             >
               {primaryLabel}
             </button>
@@ -339,7 +339,7 @@ function PermissionModal({
                 type="button"
                 onClick={onSecondary}
                 disabled={primaryDisabled}
-                className="w-full rounded-2xl py-3 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-200/50 disabled:opacity-60"
+                className="w-full rounded-2xl py-3 text-sm font-bold text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-60 border border-transparent"
               >
                 {secondaryLabel}
               </button>

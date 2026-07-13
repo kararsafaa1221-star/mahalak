@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronRight, X } from 'lucide-react';
+import { WelcomeScreenBackground } from './WelcomeScreenBackground';
 
 const MODAL_Z_INDEX = 10050;
 
@@ -45,6 +46,7 @@ interface LegalSheetModalProps {
   title: string;
   icon: LucideIcon;
   children: React.ReactNode;
+  variant?: 'default' | 'home';
 }
 
 export const LegalSheetModal: React.FC<LegalSheetModalProps> = ({
@@ -53,6 +55,7 @@ export const LegalSheetModal: React.FC<LegalSheetModalProps> = ({
   title,
   icon: Icon,
   children,
+  variant = 'default',
 }) => {
   useLockBodyScroll(open);
 
@@ -67,36 +70,56 @@ export const LegalSheetModal: React.FC<LegalSheetModalProps> = ({
 
   if (!open) return null;
 
+  const isHome = variant === 'home';
+
   return createPortal(
     <div
-      className="fixed inset-0 flex flex-col bg-mahalak-gradient text-white"
+      className={`fixed inset-0 flex flex-col text-white ${isHome ? 'bg-deep-navy' : 'bg-mahalak-gradient'}`}
       style={{ zIndex: MODAL_Z_INDEX }}
       dir="rtl"
       role="dialog"
       aria-modal="true"
       aria-label={title}
     >
-      <header className="shrink-0 flex items-center justify-between gap-3 px-4 py-4 border-b border-white/10 bg-[#0B1320]/95 backdrop-blur-sm">
+      {isHome && <WelcomeScreenBackground lite />}
+
+      <header
+        className={`shrink-0 relative z-10 flex items-center justify-between gap-3 px-4 py-4 border-b ${
+          isHome
+            ? 'border-white/10 bg-[#0B1320]/80 backdrop-blur-md shadow-sm'
+            : 'border-white/10 bg-[#0B1320]/95 backdrop-blur-sm'
+        }`}
+      >
         <button
           type="button"
           onClick={onClose}
-          className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-vibrant-purple text-white font-black text-xs hover:bg-violet transition-colors shrink-0"
+          className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl font-black text-xs transition-all shrink-0 active:scale-95 ${
+            isHome
+              ? 'welcome-btn-pulse text-white border border-white/30 shadow-brand-glow hover:opacity-95'
+              : 'bg-vibrant-purple text-white hover:bg-violet'
+          }`}
         >
           <ChevronRight size={16} />
           رجوع للتطبيق
         </button>
 
         <div className="flex items-center gap-2 min-w-0 flex-1 justify-center">
-          <div className="p-2 bg-violet/20 text-violet rounded-xl shrink-0">
+          <div
+            className={`p-2 rounded-xl shrink-0 ${
+              isHome
+                ? 'bg-white/15 border border-white/20 text-white'
+                : 'bg-violet/20 text-violet'
+            }`}
+          >
             <Icon size={18} />
           </div>
-          <h2 className="font-black text-white text-sm truncate">{title}</h2>
+          <h2 className="font-black text-white text-sm truncate font-tajawal">{title}</h2>
         </div>
 
         <button
           type="button"
           onClick={onClose}
-          className="p-2.5 hover:bg-white/10 rounded-xl transition-all shrink-0"
+          className="p-2.5 hover:bg-white/10 rounded-xl transition-all shrink-0 active:scale-95"
           aria-label="إغلاق"
         >
           <X size={18} className="text-slate-300" />
@@ -104,10 +127,10 @@ export const LegalSheetModal: React.FC<LegalSheetModalProps> = ({
       </header>
 
       <main
-        className="flex-1 h-0 overflow-y-scroll overflow-x-hidden overscroll-y-contain"
+        className="relative z-10 flex-1 h-0 overflow-y-scroll overflow-x-hidden overscroll-y-contain"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
-        <div className="max-w-2xl mx-auto px-4 py-5 pb-12">
+        <div className={`max-w-2xl mx-auto px-4 py-5 pb-12 ${isHome ? 'animate-fade-in' : ''}`}>
           {children}
         </div>
       </main>

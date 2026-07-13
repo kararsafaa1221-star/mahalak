@@ -68,9 +68,13 @@ export function isStoreSubscriptionActive(s: Store): boolean {
 }
 
 /** Whether a store should appear in the customer app. */
-export function isStoreVisibleToCustomer(s: Store): boolean {
+export function isStoreVisibleToCustomer(
+  s: Store,
+  opts?: { blockedStoreIds?: string[] | null },
+): boolean {
   if (s.isBanned || s.status === 'suspended') return false;
   if (s.status !== 'active') return false;
+  if (opts?.blockedStoreIds?.includes(s.id)) return false;
   return isStoreSubscriptionActive(s);
 }
 

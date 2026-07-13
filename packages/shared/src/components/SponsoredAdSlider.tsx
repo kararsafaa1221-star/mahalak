@@ -44,7 +44,7 @@ export function SponsoredAdSlider({
   size = 'full',
   defaultTitle = 'اكتشف أفضل العروض في منطقتك!',
   defaultDesc = 'تسوّق الآن مع محلك',
-  badgeLabel = 'إعلان مميز ممول ✨',
+  badgeLabel,
 }: SponsoredAdSliderProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -113,7 +113,7 @@ export function SponsoredAdSlider({
 
   return (
     <div
-      className={`sponsored-ad-slider ${sizeClass} rounded-[2rem] shadow-2xl border-2 border-vibrant-purple/20 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 group hover:shadow-2xl hover:shadow-vibrant-purple/25/10 transition-all duration-300 ${className}`}
+      className={`sponsored-ad-slider ${sizeClass} rounded-[2rem] shadow-2xl border-[5px] border-[#7D3CFF] bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 group hover:shadow-2xl hover:shadow-vibrant-purple/25/10 transition-all duration-300 ${className}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}

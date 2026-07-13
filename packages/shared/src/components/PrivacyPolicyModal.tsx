@@ -10,7 +10,7 @@ interface PrivacyPolicyModalProps {
 
 export const PrivacyPolicyModal: React.FC<PrivacyPolicyModalProps> = ({ open, onClose }) => {
   return (
-    <LegalSheetModal open={open} onClose={onClose} title="سياسة الخصوصية" icon={FileText}>
+    <LegalSheetModal open={open} onClose={onClose} title="سياسة الخصوصية" icon={FileText} variant="home">
       <PrivacyPolicyContent compact showHeader />
     </LegalSheetModal>
   );

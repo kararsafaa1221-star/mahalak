@@ -35,8 +35,11 @@ export function getSponsoredAdBadge(ad: SponsoredAdItem, fallback?: string): str
     const badge = ad.badge.trim();
     return badge || null;
   }
-  const globalBadge = fallback?.trim();
-  if (globalBadge) return globalBadge;
+  // Explicit fallback (including empty string) overrides the default — empty hides the badge.
+  if (fallback !== undefined) {
+    const globalBadge = fallback.trim();
+    return globalBadge || null;
+  }
   return DEFAULT_SPONSORED_AD_BADGE;
 }
 

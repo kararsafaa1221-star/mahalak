@@ -107,7 +107,8 @@ service cloud.firestore {
 
     function customerSelfProfileUpdate() {
       return isCustomerSelf(customerId) && !incoming().diff(resource.data).affectedKeys().hasAny([
-        'points', 'tier', 'isBlocked', 'ordersCount', 'monthlyOrdersCount', 'authUid', 'password'
+        'points', 'tier', 'isBlocked', 'ordersCount', 'monthlyOrdersCount', 'authUid', 'password',
+        'blockedStoreIds'
       ]);
     }
 
@@ -116,7 +117,7 @@ service cloud.firestore {
     function customerStaffUpdateSafe() {
       return !incoming().diff(resource.data).affectedKeys().hasAny([
         'points', 'tier', 'isBlocked', 'monthlyOrdersCount', 'ordersCount',
-        'authUid', 'password'
+        'authUid', 'password', 'blockedStoreIds'
       ]);
     }
 
@@ -127,7 +128,7 @@ service cloud.firestore {
         'subscriptionStatus', 'subscriptionValidUntil',
         'subscriptionExpiry', 'subscriptionExpiryDate', 'subscriptionId',
         'autoSubscriptionDuration', 'autoSubscriptionDisabled', 'status',
-        'rating', 'totalReviews'
+        'rating', 'totalReviews', 'blockedCustomerIds'
       ]);
     }
 
@@ -195,14 +196,42 @@ service cloud.firestore {
           || (from == 'delivered' && (to == 'returned'  || to == 'replaced'));
     }
 
+    // Customer 30s cancel window — merchant cannot act until grace expires.
+    function merchantOrderGracePassed() {
+      return !resource.data.keys().hasAny(['customerGraceUntil'])
+        || request.time >= resource.data.customerGraceUntil;
+    }
+
+    // Customer may self-cancel only while the order is still pending (grace window enforced in UI).
+    function customerCancelPendingAllowed() {
+      let affectedKeys = incoming().diff(resource.data).affectedKeys();
+      return ownsCustomerId(resource.data.customerId)
+        && resource.data.get('status', '') == 'pending'
+        && incoming().get('status', '') == 'cancelled'
+        && affectedKeys.hasOnly(['status', 'updatedAt', 'rejectionReason']);
+    }
+
     function orderStatusTransitionAllowed() {
       let affectedKeys = incoming().diff(resource.data).affectedKeys();
       return (roleHasPageAccess('orders')
                 && rewardsFlagSafe(affectedKeys)
                 && orderStaffFieldsSafe())
           || (ownsStore(resource.data.storeId)
+                && merchantOrderGracePassed()
                 && affectedKeys.hasOnly(['status', 'updatedAt', 'rejectionReason', 'returnReason'])
-                && merchantStatusTransitionValid());
+                && merchantStatusTransitionValid())
+          || merchantInboxClearAllowed(affectedKeys)
+          || customerCancelPendingAllowed();
+    }
+
+    // Merchant may hide closed orders from their inbox UI only (no status/finance change).
+    function merchantInboxClearAllowed(affectedKeys) {
+      let st = resource.data.status;
+      return ownsStore(resource.data.storeId)
+        && merchantOrderGracePassed()
+        && affectedKeys.hasOnly(['merchantInboxCleared', 'merchantInboxClearedAt'])
+        && (st == 'delivered' || st == 'returned' || st == 'replaced' || st == 'rejected' || st == 'cancelled')
+        && incoming().get('merchantInboxCleared', false) == true;
     }
 
     match /admins/{adminId} {
@@ -346,7 +375,7 @@ service cloud.firestore {
       allow read: if notificationBelongsToUser() || roleHasPageAccess('broadcast');
       allow create: if canCreateNotification();
       allow update: if notificationBelongsToUser() || roleHasPageAccess('broadcast');
-      allow delete: if roleHasPageAccess('broadcast');
+      allow delete: if notificationBelongsToUser() || roleHasPageAccess('broadcast');
     }
 
     match /flash_sales/{saleId} {

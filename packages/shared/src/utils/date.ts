@@ -11,7 +11,7 @@ export function getTimestampMillis(dateValue: unknown): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-function parseToDate(dateValue: any): Date | null {
+export function parseToDate(dateValue: any): Date | null {
   if (!dateValue) return null;
   if (dateValue instanceof Date) return dateValue;
   if (typeof dateValue.toDate === 'function') {

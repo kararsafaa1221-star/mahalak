@@ -138,7 +138,7 @@ const WalletInner: React.FC<{ currentMerchant: Store }> = ({ currentMerchant }) 
     setIsSubmitting(true);
     try {
       await requestPayout(amount, preferredMethod, preferredDetails);
-      showToast('success', 'تم الإرسال', 'تم إرسال طلب السحب بنجاح. ستصلك الأموال خلال 5 دقائق تقريباً.');
+      showToast('success', 'تم الإرسال', 'تم إرسال طلب السحب بنجاح. ستتم المراجعة والتحويل من قبل الإدارة.');
       setShowWithdrawModal(false);
       setWithdrawAmount('');
     } catch (e) {
@@ -188,7 +188,7 @@ const WalletInner: React.FC<{ currentMerchant: Store }> = ({ currentMerchant }) 
             </p>
           )}
           <p className="text-[#fff700]/75 text-[10px] mt-2 font-semibold text-center leading-relaxed">
-            عند طلب سحب الأموال ستصلك خلال 5 دقائق، وإذا حصل تأخير تواصل مع الدعم الفني
+            عند طلب سحب الأموال سيتم مراجعة الطلب من الإدارة ثم التحويل، وإذا حصل تأخير تواصل مع الدعم الفني
           </p>
         </div>
       </div>
