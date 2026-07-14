@@ -1,5 +1,5 @@
 import React from 'react';
-import { Lock, Phone, User } from 'lucide-react';
+import { Lock, Phone, User, Loader2 } from 'lucide-react';
 import { LegalGlowCard } from './LegalGlowCard';
 
 interface MyInfoContentProps {
@@ -7,6 +7,7 @@ interface MyInfoContentProps {
   showHeader?: boolean;
   phone: string;
   name: string;
+  isSaving?: boolean;
   onNameChange: (value: string) => void;
   onSave: () => void;
 }
@@ -19,6 +20,7 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
   showHeader = true,
   phone,
   name,
+  isSaving = false,
   onNameChange,
   onSave,
 }) => {
@@ -80,6 +82,7 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
               onChange={(e) => onNameChange(e.target.value)}
               className={inputClass}
               placeholder="أدخل اسمك الكامل"
+              disabled={isSaving}
             />
           </div>
         </div>
@@ -88,9 +91,17 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
           <button
             type="button"
             onClick={onSave}
-            className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white rounded-2xl text-sm font-black shadow-brand-glow transition-all hover:opacity-95 active:scale-[0.98]"
+            disabled={isSaving}
+            className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white rounded-2xl text-sm font-black shadow-brand-glow transition-all hover:opacity-95 active:scale-[0.98] disabled:opacity-70 disabled:pointer-events-none flex items-center justify-center gap-2"
           >
-            حفظ التغييرات
+            {isSaving ? (
+              <>
+                <Loader2 size={16} className="animate-spin shrink-0" />
+                جاري الحفظ...
+              </>
+            ) : (
+              'حفظ التغييرات'
+            )}
           </button>
         </div>
       </LegalGlowCard>

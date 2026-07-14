@@ -5672,6 +5672,7 @@ export const AdminPanel: React.FC = () => {
                         label="صورة الإعلان"
                         aspectRatio="landscape"
                         showUrlOption={true}
+                        maxSizeMB={0}
                       />
 
                       <div>
@@ -5915,6 +5916,7 @@ export const AdminPanel: React.FC = () => {
                       label="صورة الإعلان"
                       aspectRatio="landscape"
                       showUrlOption={true}
+                      maxSizeMB={0}
                     />
 
                     <div>
@@ -6031,6 +6033,7 @@ export const AdminPanel: React.FC = () => {
                       label="صورة الإعلان"
                       aspectRatio="landscape"
                       showUrlOption={true}
+                      maxSizeMB={0}
                     />
 
                     <div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Phone, Shield } from 'lucide-react';
+import { Phone, Shield, Loader2 } from 'lucide-react';
 import { LegalGlowCard } from './LegalGlowCard';
 
 interface ChangePasswordContentProps {
@@ -9,6 +9,8 @@ interface ChangePasswordContentProps {
   pwStep: 1 | 2;
   otpPwCode: string;
   newPassword: string;
+  isSendingOtp?: boolean;
+  isUpdatingPassword?: boolean;
   onOtpChange: (value: string) => void;
   onNewPasswordChange: (value: string) => void;
   onSubmit: (e?: React.FormEvent) => void;
@@ -25,6 +27,8 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
   pwStep,
   otpPwCode,
   newPassword,
+  isSendingOtp = false,
+  isUpdatingPassword = false,
   onOtpChange,
   onNewPasswordChange,
   onSubmit,
@@ -83,9 +87,17 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
 
               <button
                 type="submit"
-                className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white font-black text-sm rounded-2xl shadow-brand-glow transition-all hover:opacity-95 active:scale-95"
+                disabled={isSendingOtp}
+                className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white font-black text-sm rounded-2xl shadow-brand-glow transition-all hover:opacity-95 active:scale-95 disabled:opacity-70 disabled:pointer-events-none flex items-center justify-center gap-2"
               >
-                إرسال رمز التحقق
+                {isSendingOtp ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin shrink-0" />
+                    جار ارسال رمز التحقق
+                  </>
+                ) : (
+                  'إرسال رمز التحقق'
+                )}
               </button>
             </div>
           </LegalGlowCard>
@@ -119,17 +131,33 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
               />
               <button
                 type="submit"
-                className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white font-black text-sm rounded-2xl shadow-brand-glow transition-all hover:opacity-95 active:scale-95"
+                disabled={isUpdatingPassword || isSendingOtp}
+                className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white font-black text-sm rounded-2xl shadow-brand-glow transition-all hover:opacity-95 active:scale-95 disabled:opacity-70 disabled:pointer-events-none flex items-center justify-center gap-2"
               >
-                تحديث كلمة المرور
+                {isUpdatingPassword ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin shrink-0" />
+                    جاري تحديث كلمة المرور...
+                  </>
+                ) : (
+                  'تحديث كلمة المرور'
+                )}
               </button>
               {onResendOtp && (
                 <button
                   type="button"
                   onClick={onResendOtp}
-                  className="w-full py-3 text-white/60 text-xs font-black hover:text-[#fff700] transition-colors"
+                  disabled={isSendingOtp || isUpdatingPassword}
+                  className="w-full py-3 text-white/60 text-xs font-black hover:text-[#fff700] transition-colors disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
                 >
-                  لم يصلك الرمز؟ أعد الإرسال
+                  {isSendingOtp ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin shrink-0" />
+                      جار ارسال رمز التحقق
+                    </>
+                  ) : (
+                    'لم يصلك الرمز؟ أعد الإرسال'
+                  )}
                 </button>
               )}
             </div>

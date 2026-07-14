@@ -10,6 +10,8 @@ interface ChangePasswordModalProps {
   pwStep: 1 | 2;
   otpPwCode: string;
   newPassword: string;
+  isSendingOtp?: boolean;
+  isUpdatingPassword?: boolean;
   onOtpChange: (value: string) => void;
   onNewPasswordChange: (value: string) => void;
   onSubmit: (e?: React.FormEvent) => void;
@@ -23,6 +25,8 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   pwStep,
   otpPwCode,
   newPassword,
+  isSendingOtp = false,
+  isUpdatingPassword = false,
   onOtpChange,
   onNewPasswordChange,
   onSubmit,
@@ -37,6 +41,8 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
         pwStep={pwStep}
         otpPwCode={otpPwCode}
         newPassword={newPassword}
+        isSendingOtp={isSendingOtp}
+        isUpdatingPassword={isUpdatingPassword}
         onOtpChange={onOtpChange}
         onNewPasswordChange={onNewPasswordChange}
         onSubmit={onSubmit}

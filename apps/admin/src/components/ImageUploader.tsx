@@ -129,9 +129,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       return;
     }
 
-    // التحقق من حجم الملف كعتبة عليا
+    // التحقق من حجم الملف كعتبة عليا (maxSizeMB <= 0 = بدون حد)
     const fileSizeMB = file.size / (1024 * 1024);
-    if (fileSizeMB > maxSizeMB) {
+    if (maxSizeMB > 0 && fileSizeMB > maxSizeMB) {
       setError(`حجم الصورة كبير جداً. الحد الأقصى المسموح به هو ${maxSizeMB} ميجابايت.`);
       setIsLoading(false);
       return;

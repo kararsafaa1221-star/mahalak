@@ -1,6 +1,15 @@
 import Swal from 'sweetalert2';
 
-export const showToast = (icon: 'success' | 'error' | 'warning' | 'info', title: string, text?: string) => {
+const TOAST_ICON_COLORS = {
+  success: '#34d399',
+  error: '#fb7185',
+  warning: '#fbbf24',
+  info: '#B18CFF',
+} as const;
+
+export type ToastIcon = keyof typeof TOAST_ICON_COLORS;
+
+export const showToast = (icon: ToastIcon, title: string, text?: string) => {
   return Swal.fire({
     icon,
     title,
@@ -8,27 +17,35 @@ export const showToast = (icon: 'success' | 'error' | 'warning' | 'info', title:
     toast: true,
     position: 'top',
     showConfirmButton: false,
-    timer: 3000,
+    timer: 3200,
     timerProgressBar: true,
     customClass: {
       // Stack above LegalSheetModal (10050) — see .swal2-mahalak-toast in index.css
       container: 'swal2-mahalak-toast',
-      popup: 'font-sans rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 mb-4 mx-4 md:mx-auto',
-      title: 'text-sm font-medium',
+      popup: `swal2-mahalak-toast-popup swal2-mahalak-toast--${icon}`,
+      title: 'swal2-mahalak-toast-title',
+      htmlContainer: 'swal2-mahalak-toast-text',
+      timerProgressBar: 'swal2-mahalak-toast-timer',
+      icon: 'swal2-mahalak-toast-icon',
     },
-    background: '#ffffff',
-    color: '#0f172a', // slate-900
-    iconColor: icon === 'success' ? '#10b981' : icon === 'error' ? '#ef4444' : icon === 'warning' ? '#f59e0b' : '#3b82f6',
+    background: 'transparent',
+    color: '#E8ECF4',
+    iconColor: TOAST_ICON_COLORS[icon],
     showClass: {
-      popup: 'swal2-noanimation',
+      popup: 'swal2-mahalak-toast-in',
     },
     hideClass: {
-      popup: '',
-    }
+      popup: 'swal2-mahalak-toast-out',
+    },
   });
 };
 
-export const showConfirm = async (title: string, text: string, confirmButtonText: string = 'تأكيد', cancelButtonText: string = 'إلغاء') => {
+export const showConfirm = async (
+  title: string,
+  text: string,
+  confirmButtonText: string = 'تأكيد',
+  cancelButtonText: string = 'إلغاء',
+) => {
   return Swal.fire({
     title,
     text,
@@ -36,49 +53,56 @@ export const showConfirm = async (title: string, text: string, confirmButtonText
     showCancelButton: true,
     confirmButtonText,
     cancelButtonText,
-    confirmButtonColor: '#10b981',
-    cancelButtonColor: '#ef4444',
+    confirmButtonColor: '#7B3DFF',
+    cancelButtonColor: '#fb7185',
     customClass: {
-      popup: 'font-sans rounded-3xl shadow-2xl border border-slate-100',
-      title: 'text-xl font-bold mt-2',
-      htmlContainer: 'text-slate-500 text-sm mt-2',
-      confirmButton: 'rounded-2xl px-8 py-3 font-semibold ml-2 bg-emerald-500 hover:bg-emerald-600 focus:ring-4 focus:ring-emerald-500/20 transition-all text-white',
-      cancelButton: 'rounded-2xl px-8 py-3 font-semibold bg-rose-50 hover:bg-rose-100 text-rose-500 focus:ring-4 focus:ring-rose-500/20 transition-all',
-      actions: 'w-full px-6 pb-6 flex justify-center gap-3'
+      container: 'swal2-mahalak-modal',
+      popup: 'swal2-mahalak-modal-popup',
+      title: 'swal2-mahalak-modal-title',
+      htmlContainer: 'swal2-mahalak-modal-text',
+      confirmButton: 'swal2-mahalak-btn swal2-mahalak-btn--confirm',
+      cancelButton: 'swal2-mahalak-btn swal2-mahalak-btn--cancel',
+      actions: 'swal2-mahalak-modal-actions',
+      icon: 'swal2-mahalak-modal-icon',
     },
     buttonsStyling: false,
-    background: '#ffffff',
-    color: '#0f172a',
+    background: 'transparent',
+    color: '#E8ECF4',
+    iconColor: '#fbbf24',
     showClass: {
-      popup: 'swal2-noanimation',
+      popup: 'swal2-mahalak-modal-in',
     },
     hideClass: {
-      popup: '',
-    }
+      popup: 'swal2-mahalak-modal-out',
+    },
   });
 };
-export const showModal = (icon: 'success' | 'error' | 'warning' | 'info', title: string, text?: string) => {
+
+export const showModal = (icon: ToastIcon, title: string, text?: string) => {
   return Swal.fire({
     icon,
     title,
     text,
     confirmButtonText: 'حسناً',
-    confirmButtonColor: '#10b981',
+    confirmButtonColor: '#7B3DFF',
     customClass: {
-      popup: 'font-sans rounded-3xl shadow-2xl border border-slate-100',
-      title: 'text-xl font-bold mt-2',
-      htmlContainer: 'text-slate-500 text-sm mt-2',
-      confirmButton: 'rounded-2xl px-8 py-3 font-semibold w-full mt-4 bg-emerald-500 hover:bg-emerald-600 focus:ring-4 focus:ring-emerald-500/20 transition-all',
-      actions: 'w-full px-6 pb-6'
+      container: 'swal2-mahalak-modal',
+      popup: 'swal2-mahalak-modal-popup',
+      title: 'swal2-mahalak-modal-title',
+      htmlContainer: 'swal2-mahalak-modal-text',
+      confirmButton: 'swal2-mahalak-btn swal2-mahalak-btn--confirm',
+      actions: 'swal2-mahalak-modal-actions',
+      icon: 'swal2-mahalak-modal-icon',
     },
     buttonsStyling: false,
-    background: '#ffffff',
-    color: '#0f172a',
+    background: 'transparent',
+    color: '#E8ECF4',
+    iconColor: TOAST_ICON_COLORS[icon],
     showClass: {
-      popup: 'swal2-noanimation',
+      popup: 'swal2-mahalak-modal-in',
     },
     hideClass: {
-      popup: '',
-    }
+      popup: 'swal2-mahalak-modal-out',
+    },
   });
 };

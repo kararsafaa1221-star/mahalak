@@ -12,6 +12,7 @@ interface SavedLocationsModalProps {
   onChange: (locations: CustomerSavedLocation[]) => void;
   provinces: Province[];
   onSave: () => void;
+  isSaving?: boolean;
 }
 
 export const SavedLocationsModal: React.FC<SavedLocationsModalProps> = ({
@@ -21,6 +22,7 @@ export const SavedLocationsModal: React.FC<SavedLocationsModalProps> = ({
   onChange,
   provinces,
   onSave,
+  isSaving = false,
 }) => {
   return (
     <LegalSheetModal
@@ -69,9 +71,10 @@ export const SavedLocationsModal: React.FC<SavedLocationsModalProps> = ({
             <button
               type="button"
               onClick={onSave}
-              className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white rounded-2xl text-sm font-black shadow-brand-glow transition-all hover:opacity-95 active:scale-[0.98]"
+              disabled={isSaving}
+              className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white rounded-2xl text-sm font-black shadow-brand-glow transition-all hover:opacity-95 active:scale-[0.98] disabled:opacity-70 disabled:pointer-events-none"
             >
-              حفظ التغييرات
+              {isSaving ? 'جاري الحفظ...' : 'حفظ التغييرات'}
             </button>
           </div>
         </LegalGlowCard>

@@ -877,6 +877,17 @@ export const MerchantApp: React.FC = () => {
   const [pwStep, setPwStep] = useState(1);
   const [otpPwCode, setOtpPwCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [isSendingPwOtp, setIsSendingPwOtp] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [isDeletingProduct, setIsDeletingProduct] = useState(false);
+  const [isUpdatingProductStatus, setIsUpdatingProductStatus] = useState(false);
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+  const [isJoiningFlashSale, setIsJoiningFlashSale] = useState(false);
+  const [isConfirmingReplacement, setIsConfirmingReplacement] = useState(false);
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [isResendingOtp, setIsResendingOtp] = useState(false);
 
   // المنتجات
   const [prodModal, setProdModal] = useState<{
@@ -968,9 +979,10 @@ export const MerchantApp: React.FC = () => {
   };
 
   const handleBulkUpdate = async () => {
-    if (selectedProductIds.length === 0) return;
+    if (selectedProductIds.length === 0 || isBulkUpdating) return;
 
     const count = selectedProductIds.length;
+    setIsBulkUpdating(true);
     try {
       for (const id of selectedProductIds) {
         await updateProduct(id, bulkUpdateData);
@@ -981,6 +993,8 @@ export const MerchantApp: React.FC = () => {
       setBulkUpdateData({});
     } catch {
       alert("❌ فشل التحديث الجماعي");
+    } finally {
+      setIsBulkUpdating(false);
     }
   };
 
@@ -1201,15 +1215,15 @@ export const MerchantApp: React.FC = () => {
 
   const handleReturnOrder = (orderId: string) => {
     if (skipReturnConfirm) {
-      updateOrderStatus(orderId, "returned", "إرجاع من قبل التاجر");
+      void runOrderStatusUpdate(orderId, "returned", "إرجاع من قبل التاجر");
     } else {
       setReturnConfirmModal({ show: true, orderId });
     }
   };
 
   const handleConfirmReplacement = async () => {
-    if (!replacementProduct || !replacementModal.orderId) return;
-
+    if (!replacementProduct || !replacementModal.orderId || isConfirmingReplacement) return;
+    setIsConfirmingReplacement(true);
     try {
       const result = await replaceOrderItems(
         replacementModal.orderId,
@@ -1227,6 +1241,20 @@ export const MerchantApp: React.FC = () => {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "تعذر تحديث الطلب";
       showToast("error", "فشل الاستبدال", msg.includes("{") ? "تعذر تحديث الطلب. تحقق من صلاحياتك." : msg);
+    } finally {
+      setIsConfirmingReplacement(false);
+    }
+  };
+
+  const runOrderStatusUpdate = async (orderId: string, status: string, reason?: string) => {
+    if (updatingOrderId) return;
+    setUpdatingOrderId(orderId);
+    try {
+      await updateOrderStatus(orderId, status, reason);
+    } catch {
+      showToast("error", "فشل التحديث", "تعذر تحديث حالة الطلب. حاول مرة أخرى.");
+    } finally {
+      setUpdatingOrderId(null);
     }
   };
 
@@ -1568,6 +1596,7 @@ export const MerchantApp: React.FC = () => {
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAuthBusy) return;
     if (!forgotPhone.trim()) {
       setLoginError("يرجى إدخال رقم الهاتف");
       return;
@@ -1584,19 +1613,20 @@ export const MerchantApp: React.FC = () => {
       setLoginError("كلمة المرور الجديدة يجب أن لا تقل عن 8 حروف");
       return;
     }
-    const normalized = normalizeIraqiPhone(forgotPhone);
-    const found = stores.find(
-      (s) => normalizeIraqiPhone(s.phone) === normalized,
-    );
-    if (!found) {
-      setLoginError("الرقم غير مسجل");
-      return;
-    }
-    setOtpMode("forgot");
-    setOtpCode("");
-    setOtpTimer(60);
-    setCanResendOtp(false);
+    setIsAuthBusy(true);
     try {
+      const normalized = normalizeIraqiPhone(forgotPhone);
+      const found = stores.find(
+        (s) => normalizeIraqiPhone(s.phone) === normalized,
+      );
+      if (!found) {
+        setLoginError("الرقم غير مسجل");
+        return;
+      }
+      setOtpMode("forgot");
+      setOtpCode("");
+      setOtpTimer(60);
+      setCanResendOtp(false);
       const ok = await authService.requestOTP(normalized, "forgot");
       if (ok) {
         setView("otp");
@@ -1606,6 +1636,8 @@ export const MerchantApp: React.FC = () => {
       }
     } catch (err: any) {
       showModal("error", "خطأ في الاتصال", err.message || "فشل الإرسال. تأكد من الإنترنت.");
+    } finally {
+      setIsAuthBusy(false);
     }
   };
 
@@ -1683,8 +1715,8 @@ export const MerchantApp: React.FC = () => {
   };
 
   const handleResendOtp = async () => {
-    if (!canResendOtp) return;
-    
+    if (!canResendOtp || isResendingOtp) return;
+    setIsResendingOtp(true);
     setOtpTimer(60);
     setCanResendOtp(false);
     setOtpCode("");
@@ -1701,6 +1733,8 @@ export const MerchantApp: React.FC = () => {
       }
     } catch (err: any) {
       showModal("error", "خطأ في الاتصال", err.message);
+    } finally {
+      setIsResendingOtp(false);
     }
   };
 
@@ -1720,7 +1754,8 @@ export const MerchantApp: React.FC = () => {
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (pwStep === 1) {
-      if (!currentMerchant) return;
+      if (!currentMerchant || isSendingPwOtp) return;
+      setIsSendingPwOtp(true);
       try {
         const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
         if (ok) {
@@ -1731,6 +1766,8 @@ export const MerchantApp: React.FC = () => {
         }
       } catch (err: any) {
         showToast("error", "خطأ", err.message || "حاول مرة أخرى.");
+      } finally {
+        setIsSendingPwOtp(false);
       }
     } else {
       if (!otpPwCode || otpPwCode.length < 6) {
@@ -1741,17 +1778,22 @@ export const MerchantApp: React.FC = () => {
         alert("كلمة المرور الجديدة يجب أن لا تقل عن 8 رموز");
         return;
       }
-      if (!currentMerchant) return;
-      const result = await resetStorePasswordSecure(currentMerchant.phone, otpPwCode, newPassword);
-      if (!result.success) {
-        showModal("error", "تعذر تغيير كلمة المرور", result.error || "تحقق من رمز OTP وحاول مجدداً");
-        return;
+      if (!currentMerchant || isUpdatingPassword) return;
+      setIsUpdatingPassword(true);
+      try {
+        const result = await resetStorePasswordSecure(currentMerchant.phone, otpPwCode, newPassword);
+        if (!result.success) {
+          showModal("error", "تعذر تغيير كلمة المرور", result.error || "تحقق من رمز OTP وحاول مجدداً");
+          return;
+        }
+        setShowPasswordChange(false);
+        setPwStep(1);
+        setOtpPwCode("");
+        setNewPassword("");
+        setTimeout(() => alert("تم تغيير كلمة المرور بنجاح! ✅"), 100);
+      } finally {
+        setIsUpdatingPassword(false);
       }
-      setShowPasswordChange(false);
-      setPwStep(1);
-      setOtpPwCode("");
-      setNewPassword("");
-      setTimeout(() => alert("تم تغيير كلمة المرور بنجاح! ✅"), 100);
     }
   };
 
@@ -1783,10 +1825,12 @@ export const MerchantApp: React.FC = () => {
   };
 
   const handleSaveProfile = async () => {
+    if (isSavingProfile) return;
     if (profileForm.lat === undefined || profileForm.lng === undefined) {
       alert("يرجى تحديد موقعك على الخريطة أولاً 📍");
       return;
     }
+    setIsSavingProfile(true);
     try {
       const dbPayload = {
          ...profileForm,
@@ -1800,6 +1844,8 @@ export const MerchantApp: React.FC = () => {
       alert("تم حفظ التعديلات ✅");
     } catch (e: any) {
       alert(e.message || "حدث خطأ أثناء حفظ التعديلات.");
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -1931,6 +1977,7 @@ export const MerchantApp: React.FC = () => {
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingProduct) return;
     if (!prodName.trim()) {
       showToast("warning", "الاسم مطلوب", "يرجى إدخال اسم المنتج.");
       return;
@@ -1994,6 +2041,7 @@ export const MerchantApp: React.FC = () => {
       if (!prodBrand || prodBrand.trim() === "") data.brand = null;
     }
 
+    setIsSavingProduct(true);
     try {
       if (prodModal.mode === "edit" && prodModal.product) {
         await updateProduct(prodModal.product.id, data);
@@ -2026,6 +2074,8 @@ export const MerchantApp: React.FC = () => {
       setShowExtraInfo(false);
     } catch {
       showToast("error", "فشل الحفظ", "تعذّر حفظ المنتج. حاول مرة أخرى.");
+    } finally {
+      setIsSavingProduct(false);
     }
   };
 
@@ -2034,40 +2084,55 @@ export const MerchantApp: React.FC = () => {
   };
 
   const executeDeleteProduct = async () => {
-    if (!deleteConfirm.id) return;
+    if (!deleteConfirm.id || isDeletingProduct) return;
+    setIsDeletingProduct(true);
     try {
       await deleteProduct(deleteConfirm.id, "permanent");
       setDeleteConfirm({ show: false, id: "", name: "" });
       showToast("success", "تم الحذف", "تم حذف المنتج نهائياً.");
     } catch {
       showToast("error", "فشل الحذف", "تعذر حذف المنتج. حاول مرة أخرى.");
+    } finally {
+      setIsDeletingProduct(false);
     }
   };
 
   const handleArchiveProduct = async (id: string) => {
+    if (isUpdatingProductStatus) return;
+    setIsUpdatingProductStatus(true);
     try {
       await updateProduct(id, { status: "archived" });
       alert("✅ تم نقل المنتج إلى الأرشيف بنجاح!");
     } catch (e) {
       alert("❌ فشل نقل المنتج إلى الأرشيف");
+    } finally {
+      setIsUpdatingProductStatus(false);
     }
   };
 
   const handlePublishProduct = async (id: string) => {
+    if (isUpdatingProductStatus) return;
+    setIsUpdatingProductStatus(true);
     try {
       await updateProduct(id, { status: "published" });
       alert("✅ تم نشر المنتج على المتجر بنجاح!");
     } catch (e) {
       alert("❌ فشل نشر المنتج");
+    } finally {
+      setIsUpdatingProductStatus(false);
     }
   };
 
   const handleDraftProduct = async (id: string) => {
+    if (isUpdatingProductStatus) return;
+    setIsUpdatingProductStatus(true);
     try {
       await updateProduct(id, { status: "draft" });
       alert("✅ تم نقل المنتج إلى المسودة بنجاح!");
     } catch (e) {
       alert("❌ فشل نقل المنتج إلى المسودة");
+    } finally {
+      setIsUpdatingProductStatus(false);
     }
   };
 
@@ -5255,7 +5320,8 @@ export const MerchantApp: React.FC = () => {
                             {o.status === "pending" && (
                               <>
                                 <button 
-                                  onClick={() => updateOrderStatus(o.id, "accepted")} 
+                                  onClick={() => void runOrderStatusUpdate(o.id, "accepted")}
+                                  disabled={updatingOrderId === o.id} 
                                   className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-xl shadow-[0_4px_12px_rgba(153,82,255,0.25)] hover:shadow-[0_8px_20px_rgba(153,82,255,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                                 >
                                   <Check className="group-hover:scale-125 transition-transform duration-300 shrink-0" size={16} /> 
@@ -5272,7 +5338,8 @@ export const MerchantApp: React.FC = () => {
                             )}
                             {o.status === "accepted" && (
                               <button 
-                                onClick={() => updateOrderStatus(o.id, "shipped")} 
+                                onClick={() => void runOrderStatusUpdate(o.id, "shipped")}
+                                disabled={updatingOrderId === o.id} 
                                 className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl shadow-[0_4px_12px_rgba(245,158,11,0.25)] hover:shadow-[0_8px_20px_rgba(245,158,11,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                               >
                                 <Truck className="group-hover:translate-x-1 transition-transform duration-300 shrink-0" size={16} /> 
@@ -5282,7 +5349,8 @@ export const MerchantApp: React.FC = () => {
                             {o.status === "shipped" && (
                               <>
                                 <button 
-                                  onClick={() => updateOrderStatus(o.id, "delivered")} 
+                                  onClick={() => void runOrderStatusUpdate(o.id, "delivered")}
+                                  disabled={updatingOrderId === o.id} 
                                   className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-xl shadow-[0_4px_12px_rgba(16,185,129,0.25)] hover:shadow-[0_8px_20px_rgba(16,185,129,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                                 >
                                   <CheckCircle className="group-hover:scale-125 transition-transform duration-300 shrink-0" size={16} /> 
@@ -6114,10 +6182,11 @@ export const MerchantApp: React.FC = () => {
 
                     <button
                       onClick={handleSaveProfile}
-                      className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-lg flex items-center justify-center space-x-2 space-x-reverse"
+                      disabled={isSavingProfile}
+                      className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-lg flex items-center justify-center space-x-2 space-x-reverse disabled:opacity-70"
                     >
-                      <Check size={18} />
-                      <span>حفظ التعديلات</span>
+                      {isSavingProfile ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
+                      <span>{isSavingProfile ? 'جاري الحفظ...' : 'حفظ التعديلات'}</span>
                     </button>
                   </div>
                 )}
@@ -6270,6 +6339,7 @@ export const MerchantApp: React.FC = () => {
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  if (isJoiningFlashSale) return;
                   const matchedProduct = merchantProducts.find(
                     (p) => p.id === joinProductId,
                   );
@@ -6281,6 +6351,7 @@ export const MerchantApp: React.FC = () => {
                     return;
                   }
 
+                  setIsJoiningFlashSale(true);
                   try {
                     await requestJoinFlashSale({
                       flashSaleId: joinFlashSaleData.flashSaleId,
@@ -6295,6 +6366,8 @@ export const MerchantApp: React.FC = () => {
                     setJoinPromotionalPrice("");
                   } catch {
                     showToast("error", "فشل الطلب", "تعذر إرسال طلب المشاركة. حاول مرة أخرى.");
+                  } finally {
+                    setIsJoiningFlashSale(false);
                   }
                 }}
                 className="space-y-4"
@@ -6356,6 +6429,7 @@ export const MerchantApp: React.FC = () => {
                 <button
                   type="submit"
                   disabled={
+                    isJoiningFlashSale ||
                     !joinProductId ||
                     merchantProducts.length === 0 ||
                     !joinPromotionalPrice ||
@@ -6365,7 +6439,7 @@ export const MerchantApp: React.FC = () => {
                   }
                   className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed mt-2"
                 >
-                  إرسال الطلب للموافقة
+                  {isJoiningFlashSale ? 'جاري الإرسال...' : 'إرسال الطلب للموافقة'}
                 </button>
               </form>
             </div>
@@ -6400,9 +6474,10 @@ export const MerchantApp: React.FC = () => {
                   <div className="flex gap-3">
                     <button
                       onClick={executeDeleteProduct}
-                      className="flex-1 py-3 bg-red-600 text-white font-black rounded-2xl shadow-lg hover:bg-red-700 transition"
+                      disabled={isDeletingProduct}
+                      className="flex-1 py-3 bg-red-600 text-white font-black rounded-2xl shadow-lg hover:bg-red-700 transition disabled:opacity-70"
                     >
-                      نعم، احذف
+                      {isDeletingProduct ? 'جاري الحذف...' : 'نعم، احذف'}
                     </button>
                     <button
                       onClick={() =>
@@ -6877,16 +6952,18 @@ export const MerchantApp: React.FC = () => {
                   <button
                     type="submit"
                     onClick={() => setProdStatus("published")}
-                    className="w-full py-4 px-6 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black text-sm rounded-2xl shadow-lg shadow-slate-100 hover:shadow-xl hover:shadow-slate-200 transition-all flex items-center justify-center gap-2"
+                    disabled={isSavingProduct}
+                    className="w-full py-4 px-6 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black text-sm rounded-2xl shadow-lg shadow-slate-100 hover:shadow-xl hover:shadow-slate-200 transition-all flex items-center justify-center gap-2 disabled:opacity-70"
                   >
-                    <span>🚀 حفظ المنتج ونشره مباشرة</span>
+                    <span>{isSavingProduct ? 'جاري الحفظ...' : '🚀 حفظ المنتج ونشره مباشرة'}</span>
                   </button>
                   <button
                     type="submit"
                     onClick={() => setProdStatus("draft")}
-                    className="w-full py-4 px-6 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm rounded-2xl transition-all flex items-center justify-center gap-2"
+                    disabled={isSavingProduct}
+                    className="w-full py-4 px-6 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm rounded-2xl transition-all flex items-center justify-center gap-2 disabled:opacity-70"
                   >
-                    <span>💾 حفظ المنتج كمسودة مؤقتة</span>
+                    <span>{isSavingProduct ? 'جاري الحفظ...' : '💾 حفظ المنتج كمسودة مؤقتة'}</span>
                   </button>
                 </div>
               </form>
@@ -7014,9 +7091,10 @@ export const MerchantApp: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleBulkUpdate}
-                    className="flex-1 py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl shadow-xl shadow-slate-100 active:scale-95 transition-all cursor-pointer"
+                    disabled={isBulkUpdating}
+                    className="flex-1 py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl shadow-xl shadow-slate-100 active:scale-95 transition-all cursor-pointer disabled:opacity-70"
                   >
-                    تحديث المنتجات المختارة
+                    {isBulkUpdating ? 'جاري التحديث...' : 'تحديث المنتجات المختارة'}
                   </button>
                   <button
                     type="button"
@@ -7104,9 +7182,10 @@ export const MerchantApp: React.FC = () => {
                       <button
                         key={r}
                         onClick={() => {
-                          updateOrderStatus(actionModal.orderId, "rejected", r);
+                          void runOrderStatusUpdate(actionModal.orderId, "rejected", r);
                           setActionModal({ ...actionModal, show: false });
                         }}
+                        disabled={updatingOrderId === actionModal.orderId}
                         className="w-full p-3 bg-slate-50 hover:bg-rose-50 text-slate-600 hover:text-rose-600 rounded-2xl text-right font-black text-xs transition-all"
                       >
                         {r}
@@ -7128,14 +7207,15 @@ export const MerchantApp: React.FC = () => {
                       <button
                         key={r}
                         onClick={() => {
-                          updateOrderStatus(
+                          void runOrderStatusUpdate(
                             actionModal.orderId,
                             actionModal.type,
                             r,
                           );
                           setActionModal({ ...actionModal, show: false });
                         }}
-                        className="w-full p-3 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-vibrant-purple rounded-2xl text-right font-black text-[10px] transition-all border border-slate-50"
+                        disabled={updatingOrderId === actionModal.orderId}
+                        className="w-full p-3 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-vibrant-purple rounded-2xl text-right font-black text-[10px] transition-all border border-slate-50 disabled:opacity-60"
                       >
                         {r}
                       </button>
@@ -7152,9 +7232,9 @@ export const MerchantApp: React.FC = () => {
                     className="w-full bg-slate-50 border border-slate-100 p-3 rounded-2xl text-xs font-bold outline-none focus:ring-1 focus:ring-slate-500 min-h-[80px]"
                   />
                   <button
-                    disabled={!customReason.trim()}
+                    disabled={!customReason.trim() || updatingOrderId === actionModal.orderId}
                     onClick={() => {
-                      updateOrderStatus(
+                      void runOrderStatusUpdate(
                         actionModal.orderId,
                         actionModal.type,
                         customReason.trim(),
@@ -7164,7 +7244,7 @@ export const MerchantApp: React.FC = () => {
                     }}
                     className="w-full mt-3 py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-xl font-black text-xs disabled:opacity-50 shadow-lg shadow-slate-100"
                   >
-                    تأكيد الإجراء
+                    {updatingOrderId === actionModal.orderId ? 'جاري التحديث...' : 'تأكيد الإجراء'}
                   </button>
                 </div>
               </div>
@@ -7311,12 +7391,12 @@ export const MerchantApp: React.FC = () => {
 
               <div className="p-8 pt-0 mt-auto bg-slate-50/30">
                 <button
-                  disabled={!replacementProduct}
+                  disabled={!replacementProduct || isConfirmingReplacement}
                   onClick={handleConfirmReplacement}
                   className="w-full py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl font-black text-sm disabled:opacity-30 disabled:grayscale transition-all shadow-xl shadow-slate-100 flex items-center justify-center gap-3 active:scale-[0.98]"
                 >
-                  <RefreshCw size={18} />
-                  إرسال الطلب للتجهيز كاستبدال
+                  {isConfirmingReplacement ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                  {isConfirmingReplacement ? 'جاري الاستبدال...' : 'إرسال الطلب للتجهيز كاستبدال'}
                 </button>
                 <p className="text-[9px] text-center text-slate-400 mt-4 font-bold flex items-center justify-center gap-1">
                   <Shield size={10} />
@@ -7367,11 +7447,12 @@ export const MerchantApp: React.FC = () => {
                    >إلغاء</button>
                    <button
                      onClick={() => {
-                       updateOrderStatus(returnConfirmModal.orderId, "returned", "إرجاع من قبل التاجر");
+                       void runOrderStatusUpdate(returnConfirmModal.orderId, "returned", "إرجاع من قبل التاجر");
                        setReturnConfirmModal({ show: false, orderId: "" });
                      }}
-                     className="py-3.5 bg-rose-500 text-white rounded-2xl font-black text-xs shadow-lg shadow-rose-100 hover:bg-rose-600 active:scale-95 transition-all"
-                   >تأكيد الإرجاع</button>
+                     disabled={!!updatingOrderId}
+                     className="py-3.5 bg-rose-500 text-white rounded-2xl font-black text-xs shadow-lg shadow-rose-100 hover:bg-rose-600 active:scale-95 transition-all disabled:opacity-70"
+                   >{updatingOrderId ? 'جاري التحديث...' : 'تأكيد الإرجاع'}</button>
                 </div>
               </motion.div>
             </div>
@@ -8188,22 +8269,31 @@ export const MerchantApp: React.FC = () => {
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     onClick={async () => {
-                      const dbPayload = {
-                        ...profileForm,
-                        payoutMethods: {
-                          zainCashNumber: profileForm.zainCashNumber,
-                          mastercardNumber: profileForm.mastercardNumber,
-                        }
-                      };
-                      await updateStoreProfile(dbPayload);
-                      setIsProfileDirty(false);
-                      setShowUnsavedModal(false);
-                      handleTabChange(pendingTab);
-                      setPendingTab(null);
+                      if (isSavingProfile) return;
+                      setIsSavingProfile(true);
+                      try {
+                        const dbPayload = {
+                          ...profileForm,
+                          payoutMethods: {
+                            zainCashNumber: profileForm.zainCashNumber,
+                            mastercardNumber: profileForm.mastercardNumber,
+                          }
+                        };
+                        await updateStoreProfile(dbPayload);
+                        setIsProfileDirty(false);
+                        setShowUnsavedModal(false);
+                        handleTabChange(pendingTab);
+                        setPendingTab(null);
+                      } catch (e: any) {
+                        alert(e.message || "حدث خطأ أثناء حفظ التعديلات.");
+                      } finally {
+                        setIsSavingProfile(false);
+                      }
                     }}
-                    className="p-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl font-bold text-xs transition"
+                    disabled={isSavingProfile}
+                    className="p-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl font-bold text-xs transition disabled:opacity-70"
                   >
-                    حفظ ومغادرة
+                    {isSavingProfile ? 'جاري الحفظ...' : 'حفظ ومغادرة'}
                   </button>
                   <button
                     onClick={() => {
@@ -8480,16 +8570,21 @@ export const MerchantApp: React.FC = () => {
             setPwStep(1);
             setOtpPwCode("");
             setNewPassword("");
+            setIsSendingPwOtp(false);
+            setIsUpdatingPassword(false);
           }}
           phone={currentMerchant?.phone ?? ""}
           pwStep={pwStep as 1 | 2}
           otpPwCode={otpPwCode}
           newPassword={newPassword}
+          isSendingOtp={isSendingPwOtp}
+          isUpdatingPassword={isUpdatingPassword}
           onOtpChange={setOtpPwCode}
           onNewPasswordChange={setNewPassword}
           onSubmit={handleChangePassword}
           onResendOtp={async () => {
-            if (!currentMerchant) return;
+            if (!currentMerchant || isSendingPwOtp) return;
+            setIsSendingPwOtp(true);
             try {
               const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
               if (ok) {
@@ -8500,6 +8595,8 @@ export const MerchantApp: React.FC = () => {
               }
             } catch (err: any) {
               showToast("error", "خطأ", err.message || "حاول مرة أخرى.");
+            } finally {
+              setIsSendingPwOtp(false);
             }
           }}
         />
@@ -8954,15 +9051,19 @@ export const MerchantApp: React.FC = () => {
             <div className="flex flex-col items-center space-y-4">
               <button
                 type="button"
-                disabled={!canResendOtp}
+                disabled={!canResendOtp || isResendingOtp}
                 onClick={handleResendOtp}
                 className={`text-sm font-bold transition-colors ${
-                  canResendOtp 
+                  canResendOtp && !isResendingOtp
                     ? "text-violet hover:text-slate-700" 
                     : "text-slate-400 cursor-not-allowed"
                 }`}
               >
-                {canResendOtp ? "إعادة إرسال الرمز" : `إعادة الإرسال خلال ${otpTimer} ثانية`}
+                {isResendingOtp
+                  ? "جار ارسال رمز التحقق"
+                  : canResendOtp
+                    ? "إعادة إرسال الرمز"
+                    : `إعادة الإرسال خلال ${otpTimer} ثانية`}
               </button>
               
               <button
@@ -9033,9 +9134,19 @@ export const MerchantApp: React.FC = () => {
             </div>
             <button
               type="submit"
-              className="welcome-btn-pulse w-full py-4 bg-brand-horizontal text-white font-black rounded-2xl transition-all hover:opacity-95"
+              disabled={isAuthBusy}
+              className={`welcome-btn-pulse w-full py-4 text-white font-black rounded-2xl transition-all ${
+                isAuthBusy ? 'bg-gray-400 cursor-not-allowed' : 'bg-brand-horizontal hover:opacity-95'
+              }`}
             >
-              إرسال رمز OTP
+              {isAuthBusy ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Loader2 size={16} className="animate-spin" />
+                  جار ارسال رمز التحقق
+                </span>
+              ) : (
+                'إرسال رمز OTP'
+              )}
             </button>
             <button
               type="button"

@@ -8,6 +8,7 @@ interface MyInfoModalProps {
   onClose: () => void;
   phone: string;
   name: string;
+  isSaving?: boolean;
   onNameChange: (value: string) => void;
   onSave: () => void;
 }
@@ -17,6 +18,7 @@ export const MyInfoModal: React.FC<MyInfoModalProps> = ({
   onClose,
   phone,
   name,
+  isSaving = false,
   onNameChange,
   onSave,
 }) => {
@@ -27,6 +29,7 @@ export const MyInfoModal: React.FC<MyInfoModalProps> = ({
         showHeader
         phone={phone}
         name={name}
+        isSaving={isSaving}
         onNameChange={onNameChange}
         onSave={onSave}
       />

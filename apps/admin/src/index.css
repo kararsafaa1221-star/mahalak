@@ -369,3 +369,225 @@ input[type="number"] {
   border-width: 1px;
   border-style: solid;
 }
+
+/* ==========================================
+   Mahalak SweetAlert2 Toast / Modal (brand)
+   ========================================== */
+
+.swal2-mahalak-toast {
+  padding-top: max(0.75rem, env(safe-area-inset-top, 0px)) !important;
+  z-index: 100000 !important;
+}
+
+.swal2-mahalak-toast-popup {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.75rem !important;
+  width: min(92vw, 22rem) !important;
+  padding: 0.85rem 1rem !important;
+  border-radius: 1rem !important;
+  border: 1px solid rgba(177, 140, 255, 0.28) !important;
+  background:
+    linear-gradient(155deg, rgba(26, 29, 46, 0.94) 0%, rgba(11, 19, 32, 0.97) 100%) !important;
+  box-shadow:
+    0 0 0 1px rgba(123, 61, 255, 0.12),
+    0 0 24px -6px rgba(123, 61, 255, 0.45),
+    0 12px 32px -8px rgba(0, 0, 0, 0.55) !important;
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  color: #e8ecf4 !important;
+  overflow: hidden !important;
+}
+
+.swal2-mahalak-toast-popup::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    120% 80% at 100% 0%,
+    rgba(123, 61, 255, 0.22) 0%,
+    transparent 55%
+  );
+  pointer-events: none;
+}
+
+.swal2-mahalak-toast--success {
+  border-color: rgba(52, 211, 153, 0.35) !important;
+}
+.swal2-mahalak-toast--error {
+  border-color: rgba(251, 113, 133, 0.35) !important;
+}
+.swal2-mahalak-toast--warning {
+  border-color: rgba(251, 191, 36, 0.35) !important;
+}
+.swal2-mahalak-toast--info {
+  border-color: rgba(177, 140, 255, 0.4) !important;
+}
+
+.swal2-mahalak-toast-title {
+  color: #e8ecf4 !important;
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif !important;
+  font-size: 0.9rem !important;
+  font-weight: 700 !important;
+  line-height: 1.45 !important;
+  margin: 0 !important;
+  text-align: right !important;
+}
+
+.swal2-mahalak-toast-text {
+  color: rgba(232, 236, 244, 0.72) !important;
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif !important;
+  font-size: 0.8rem !important;
+  margin: 0.2rem 0 0 !important;
+  text-align: right !important;
+}
+
+.swal2-mahalak-toast-icon {
+  margin: 0 !important;
+  width: 2rem !important;
+  height: 2rem !important;
+  border-width: 0.15em !important;
+  flex-shrink: 0 !important;
+}
+
+.swal2-mahalak-toast-timer {
+  height: 3px !important;
+  background: linear-gradient(90deg, #7b3dff, #b18cff) !important;
+}
+
+.swal2-mahalak-toast--success .swal2-mahalak-toast-timer {
+  background: linear-gradient(90deg, #34d399, #6ee7b7) !important;
+}
+.swal2-mahalak-toast--error .swal2-mahalak-toast-timer {
+  background: linear-gradient(90deg, #fb7185, #fda4af) !important;
+}
+.swal2-mahalak-toast--warning .swal2-mahalak-toast-timer {
+  background: linear-gradient(90deg, #fbbf24, #fcd34d) !important;
+}
+
+@keyframes swal2-mahalak-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes swal2-mahalak-toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+.swal2-mahalak-toast-in {
+  animation: swal2-mahalak-toast-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both !important;
+}
+
+.swal2-mahalak-toast-out {
+  animation: swal2-mahalak-toast-out 0.2s ease-in both !important;
+}
+
+.swal2-mahalak-modal {
+  z-index: 100000 !important;
+}
+
+.swal2-mahalak-modal-popup {
+  width: min(92vw, 24rem) !important;
+  padding: 1.5rem 1.25rem 1.25rem !important;
+  border-radius: 1.25rem !important;
+  border: 1px solid rgba(177, 140, 255, 0.28) !important;
+  background:
+    linear-gradient(155deg, rgba(26, 29, 46, 0.96) 0%, rgba(11, 19, 32, 0.98) 100%) !important;
+  box-shadow:
+    0 0 0 1px rgba(123, 61, 255, 0.12),
+    0 0 40px -8px rgba(123, 61, 255, 0.5),
+    0 20px 48px -12px rgba(0, 0, 0, 0.65) !important;
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  color: #e8ecf4 !important;
+}
+
+.swal2-mahalak-modal-title {
+  color: #e8ecf4 !important;
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif !important;
+  font-size: 1.15rem !important;
+  font-weight: 800 !important;
+}
+
+.swal2-mahalak-modal-text {
+  color: rgba(232, 236, 244, 0.75) !important;
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif !important;
+}
+
+.swal2-mahalak-modal-actions {
+  margin-top: 1.25rem !important;
+  gap: 0.5rem !important;
+}
+
+.swal2-mahalak-btn {
+  border: none !important;
+  border-radius: 0.75rem !important;
+  padding: 0.65rem 1.25rem !important;
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 0.9rem !important;
+  cursor: pointer !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease !important;
+}
+
+.swal2-mahalak-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+
+.swal2-mahalak-btn--confirm {
+  background: linear-gradient(135deg, #7b3dff 0%, #9b6bff 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 0 18px -4px rgba(123, 61, 255, 0.65) !important;
+}
+
+.swal2-mahalak-btn--cancel {
+  background: rgba(251, 113, 133, 0.15) !important;
+  color: #fb7185 !important;
+  border: 1px solid rgba(251, 113, 133, 0.35) !important;
+}
+
+@keyframes swal2-mahalak-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes swal2-mahalak-modal-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.swal2-mahalak-modal-in {
+  animation: swal2-mahalak-modal-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both !important;
+}
+
+.swal2-mahalak-modal-out {
+  animation: swal2-mahalak-modal-out 0.18s ease-in both !important;
+}

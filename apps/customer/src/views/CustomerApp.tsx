@@ -958,6 +958,14 @@ export const CustomerApp: React.FC = () => {
   const [pwStep, setPwStep] = useState(1); // 1: رقم الهاتف, 2: OTP + كلمة مرور جديدة
   const [otpPwCode, setOtpPwCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [isSendingPwOtp, setIsSendingPwOtp] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isApplyingPromo, setIsApplyingPromo] = useState(false);
+  const [isTogglingFollow, setIsTogglingFollow] = useState(false);
+  const [isTogglingNotify, setIsTogglingNotify] = useState(false);
+  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
   useCustomerAndroidBack({
     isPopStateRef,
@@ -1164,6 +1172,7 @@ export const CustomerApp: React.FC = () => {
 
   // حفظ تعديلات البيانات الشخصية
   const handleSaveProfile = async (): Promise<boolean> => {
+    if (isSavingProfile) return false;
     const defaultLocation = getDefaultSavedLocation(savedLocations);
     if (!defaultLocation) {
       alert('يرجى إضافة موقع واحد على الأقل 📍');
@@ -1179,7 +1188,7 @@ export const CustomerApp: React.FC = () => {
     }
 
     const fullAddress = formatSavedLocationAddress(defaultLocation);
-
+    setIsSavingProfile(true);
     try {
       await updateCustomerProfile({
         id: currentCustomer?.id,
@@ -1198,6 +1207,8 @@ export const CustomerApp: React.FC = () => {
     } catch {
       alert('تعذر حفظ التعديلات. حاول مرة أخرى.');
       return false;
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -1222,7 +1233,8 @@ export const CustomerApp: React.FC = () => {
   const handleChangePassword = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (pwStep === 1) {
-      if (!currentCustomer) return;
+      if (!currentCustomer || isSendingPwOtp) return;
+      setIsSendingPwOtp(true);
       try {
         const ok = await authService.requestOTP(currentCustomer.phone, "forgot");
         if (ok) {
@@ -1233,6 +1245,8 @@ export const CustomerApp: React.FC = () => {
         }
       } catch (err: any) {
         showModal("error", "خطأ في الاتصال", err.message || "حاول مرة أخرى.");
+      } finally {
+        setIsSendingPwOtp(false);
       }
     } else {
       if (!otpPwCode || otpPwCode.length < 6) {
@@ -1243,7 +1257,8 @@ export const CustomerApp: React.FC = () => {
         showToast("warning", "كلمة المرور يجب أن لا تقل عن 8 حروف أو رموز");
         return;
       }
-      if (!currentCustomer) return;
+      if (!currentCustomer || isUpdatingPassword) return;
+      setIsUpdatingPassword(true);
       try {
         const result = await resetCustomerPasswordSecure(currentCustomer.phone, otpPwCode, newPassword);
         if (!result.success || !result.customer) {
@@ -1258,6 +1273,8 @@ export const CustomerApp: React.FC = () => {
         setTimeout(() => showToast('success', "تم التغيير", 'تم تغيير كلمة المرور بنجاح! ✅'), 400);
       } catch (err: any) {
         showModal("error", "خطأ في تغيير كلمة المرور", err.message || "حاول مرة أخرى.");
+      } finally {
+        setIsUpdatingPassword(false);
       }
     }
   };
@@ -1641,6 +1658,7 @@ export const CustomerApp: React.FC = () => {
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoadingAuth) return;
     if (!forgotPhone.trim()) {
       setLoginError('يرجى إدخال رقم الهاتف');
       return;
@@ -1658,29 +1676,30 @@ export const CustomerApp: React.FC = () => {
       setLoginError('كلمة المرور الجديدة يجب أن لا تقل عن 8 حروف أو رموز');
       return;
     }
-    const normalizedForgotPhone = normalizeIraqiPhone(forgotPhone);
-    const found =
-      customers.find(c => normalizeIraqiPhone(c.phone) === normalizedForgotPhone) ||
-      (await lookupCustomerByPhone(forgotPhone));
-    if (!found) {
-      setLoginError('رقم الهاتف غير مسجل.');
-      return;
-    }
-    setOtpMode('forgot');
-    setOtpCode('');
-    setView('otp');
-
+    setIsLoadingAuth(true);
     try {
+      const normalizedForgotPhone = normalizeIraqiPhone(forgotPhone);
+      const found =
+        customers.find(c => normalizeIraqiPhone(c.phone) === normalizedForgotPhone) ||
+        (await lookupCustomerByPhone(forgotPhone));
+      if (!found) {
+        setLoginError('رقم الهاتف غير مسجل.');
+        return;
+      }
+      setOtpMode('forgot');
+      setOtpCode('');
+      setView('otp');
+
       const success = await authService.requestOTP(normalizedForgotPhone, 'forgot');
-      setIsLoadingAuth(false);
       if (success) {
         showToast("success", "تم إرسال الرمز", "تم إرسال رمز التحقق إلى رقم هاتفك. تحقق من واتساب!");
       } else {
         showModal("error", "فشل الإرسال", "فشل إرسال رمز OTP. يرجى المحاولة لاحقاً");
       }
     } catch (err: any) {
-      setIsLoadingAuth(false);
       showModal("error", "خطأ في الاتصال", err.message || "فشل إرسال رمز التحقق. يرجى التأكد من اتصالك بالإنترنت أو المحاولة لاحقاً");
+    } finally {
+      setIsLoadingAuth(false);
     }
   };
 
@@ -2214,12 +2233,13 @@ export const CustomerApp: React.FC = () => {
     e.preventDefault();
     setPromoError('');
 
-    if (!promoInput.trim() || cart.length === 0 || !currentCustomer) return;
+    if (!promoInput.trim() || cart.length === 0 || !currentCustomer || isApplyingPromo) return;
 
     const storeIdsInCart = Object.keys(cartByStore);
     const promoProvince = activeOrderLocation?.province || currentCustomer.province;
     const totalCartPrice = cart.reduce((sum, item) => sum + (item.product.finalPrice * item.quantity), 0);
 
+    setIsApplyingPromo(true);
     try {
       const result = await validatePromoCode({
         code: promoInput,
@@ -2242,6 +2262,8 @@ export const CustomerApp: React.FC = () => {
       setPromoInput('');
     } catch (err: unknown) {
       setPromoError(err instanceof Error ? err.message : 'تعذر التحقق من الكود. حاول مرة أخرى.');
+    } finally {
+      setIsApplyingPromo(false);
     }
   };
 
@@ -2795,14 +2817,21 @@ export const CustomerApp: React.FC = () => {
                     <span>قيّم المتجر</span>
                   </button>
                   <button 
-                    onClick={() => {
+                    onClick={async () => {
                       if (!currentCustomer) {
                         alert('يرجى تسجيل الدخول لمتابعة المتجر');
                         return;
                       }
-                      toggleFollowStore(currentCustomer.id, selectedStore.id);
+                      if (isTogglingFollow) return;
+                      setIsTogglingFollow(true);
+                      try {
+                        await toggleFollowStore(currentCustomer.id, selectedStore.id);
+                      } finally {
+                        setIsTogglingFollow(false);
+                      }
                     }}
-                    className={`flex items-center justify-center gap-1 px-3.5 py-1.5 rounded-xl font-bold text-[9.5px] transition-all active:scale-95 border font-tajawal ${
+                    disabled={isTogglingFollow}
+                    className={`flex items-center justify-center gap-1 px-3.5 py-1.5 rounded-xl font-bold text-[9.5px] transition-all active:scale-95 border font-tajawal disabled:opacity-60 ${
                       selectedStoreTheme.enabled ? '' : 'welcome-btn-pulse'
                     } ${
                       isFollowing 
@@ -2821,18 +2850,25 @@ export const CustomerApp: React.FC = () => {
                           : undefined
                     }
                   >
-                    {isFollowing ? <Heart size={11} fill="currentColor" /> : <Plus size={11} />}
-                    <span>{isFollowing ? 'متابع' : 'متابعة'}</span>
+                    {isTogglingFollow ? <Loader2 size={11} className="animate-spin" /> : (isFollowing ? <Heart size={11} fill="currentColor" /> : <Plus size={11} />)}
+                    <span>{isTogglingFollow ? 'جاري...' : (isFollowing ? 'متابع' : 'متابعة')}</span>
                   </button>
                   
                   <button 
-                    onClick={() => {
+                    onClick={async () => {
                       if (!currentCustomer) {
                         alert('يرجى تسجيل الدخول لتفعيل الإشعارات');
                         return;
                       }
-                      toggleStoreNotification(currentCustomer.id, selectedStore.id);
+                      if (isTogglingNotify) return;
+                      setIsTogglingNotify(true);
+                      try {
+                        await toggleStoreNotification(currentCustomer.id, selectedStore.id);
+                      } finally {
+                        setIsTogglingNotify(false);
+                      }
                     }}
+                    disabled={isTogglingNotify}
                     className={`p-1.5 rounded-xl border transition-all active:scale-95 shadow-2xs ${
                       selectedStoreTheme.enabled || isNotifOn ? '' : 'welcome-btn-pulse'
                     } ${
@@ -5897,7 +5933,13 @@ export const CustomerApp: React.FC = () => {
                             className="flex-1 border border-white/20 bg-white/10 p-1.5 rounded-lg text-[10px] text-center text-white placeholder:text-white/50 focus:ring-1 focus:ring-vibrant-purple focus:outline-none font-mono uppercase backdrop-blur-md"
                             style={{ direction: 'ltr', color: 'white' }}
                           />
-                          <button type="submit" className="welcome-btn-pulse px-3 py-1.5 hover:opacity-90 text-white font-bold text-[10px] rounded-lg transition shrink-0 border border-white/30">تطبيق</button>
+                          <button
+                            type="submit"
+                            disabled={isApplyingPromo}
+                            className="welcome-btn-pulse px-3 py-1.5 hover:opacity-90 text-white font-bold text-[10px] rounded-lg transition shrink-0 border border-white/30 disabled:opacity-60"
+                          >
+                            {isApplyingPromo ? 'جاري...' : 'تطبيق'}
+                          </button>
                         </div>
                         {promoError && <p className="text-[8.5px] text-rose-300 font-semibold">{promoError}</p>}
                       </form>
@@ -6463,11 +6505,12 @@ export const CustomerApp: React.FC = () => {
 
                   <button 
                     onClick={async () => {
-                      if (!currentCustomer || !showRateModal) return;
+                      if (!currentCustomer || !showRateModal || isSubmittingReview) return;
                       if (ratingValue < 1) {
                         alert('يرجى اختيار تقييم بالنجوم أولاً');
                         return;
                       }
+                      setIsSubmittingReview(true);
                       try {
                         if (showRateModal.type === 'store') {
                           await submitStoreReview({
@@ -6493,11 +6536,21 @@ export const CustomerApp: React.FC = () => {
                         setReviewMessage('');
                       } catch (err: any) {
                         alert(err?.message || 'تعذر إرسال التقييم، حاول مجدداً');
+                      } finally {
+                        setIsSubmittingReview(false);
                       }
                     }}
-                    className="welcome-btn-pulse w-full bg-transparent border border-white/30 text-white font-black py-4 rounded-2xl shadow-xl"
+                    disabled={isSubmittingReview}
+                    className="welcome-btn-pulse w-full bg-transparent border border-white/30 text-white font-black py-4 rounded-2xl shadow-xl disabled:opacity-70 flex items-center justify-center gap-2"
                   >
-                    إرسال التقييم
+                    {isSubmittingReview ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        جاري الإرسال...
+                      </>
+                    ) : (
+                      'إرسال التقييم'
+                    )}
                   </button>
                 </div>
               </motion.div>
@@ -6684,9 +6737,10 @@ export const CustomerApp: React.FC = () => {
                 <div className="relative z-10 p-6 border-t border-white/15 bg-white/5 backdrop-blur-md flex flex-col gap-3">
                   <button 
                     onClick={() => handleConfirmUnsaved(true)}
-                    className="welcome-btn-pulse w-full py-4 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/30 text-white rounded-2xl font-black text-sm shadow-lg hover:opacity-95 transition-all active:scale-[0.98]"
+                    disabled={isSavingProfile}
+                    className="welcome-btn-pulse w-full py-4 bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] border border-white/30 text-white rounded-2xl font-black text-sm shadow-lg hover:opacity-95 transition-all active:scale-[0.98] disabled:opacity-70"
                   >
-                    نعم، حفظ التغييرات
+                    {isSavingProfile ? 'جاري الحفظ...' : 'نعم، حفظ التغييرات'}
                   </button>
                   <button 
                     onClick={() => handleConfirmUnsaved(false)}
@@ -6795,18 +6849,29 @@ export const CustomerApp: React.FC = () => {
                         e.preventDefault();
                         e.stopPropagation();
                         const orderId = orderToCancel?.id;
-                        if (!orderId) return;
+                        if (!orderId || isCancellingOrder) return;
+                        setIsCancellingOrder(true);
                         try {
                           await updateOrderStatus(orderId, 'cancelled', 'ألغاه الزبون خلال مهلة الإلغاء');
                           setOrderToCancel(null);
                         } catch (err) {
                           console.error(err);
                           alert('تعذر إلغاء الطلب حالياً، حاول مرة أخرى.');
+                        } finally {
+                          setIsCancellingOrder(false);
                         }
                       }}
-                      className="relative z-20 welcome-btn-pulse w-full py-4 bg-gradient-to-r from-rose-500 to-[#0B1320] border border-white/30 text-white rounded-2xl font-black text-sm shadow-lg hover:opacity-95 transition-all active:scale-[0.98] cursor-pointer pointer-events-auto"
+                      disabled={isCancellingOrder}
+                      className="relative z-20 welcome-btn-pulse w-full py-4 bg-gradient-to-r from-rose-500 to-[#0B1320] border border-white/30 text-white rounded-2xl font-black text-sm shadow-lg hover:opacity-95 transition-all active:scale-[0.98] cursor-pointer pointer-events-auto disabled:opacity-70 flex items-center justify-center gap-2"
                     >
-                      نعم، إلغاء الطلب
+                      {isCancellingOrder ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          جاري الإلغاء...
+                        </>
+                      ) : (
+                        'نعم، إلغاء الطلب'
+                      )}
                     </button>
                     <button 
                       type="button"
@@ -6834,6 +6899,7 @@ export const CustomerApp: React.FC = () => {
           onClose={() => setShowMyInfo(false)}
           phone={currentCustomer?.phone ?? ''}
           name={profileForm.name}
+          isSaving={isSavingProfile}
           onNameChange={(value) => setProfileForm((prev) => ({ ...prev, name: value }))}
           onSave={handleSaveProfile}
         />
@@ -6844,6 +6910,7 @@ export const CustomerApp: React.FC = () => {
           onChange={setSavedLocations}
           provinces={provinces}
           onSave={handleSaveProfile}
+          isSaving={isSavingProfile}
         />
         <ChangePasswordModal
           open={showPasswordChange}
@@ -6852,16 +6919,21 @@ export const CustomerApp: React.FC = () => {
             setPwStep(1);
             setOtpPwCode('');
             setNewPassword('');
+            setIsSendingPwOtp(false);
+            setIsUpdatingPassword(false);
           }}
           phone={currentCustomer?.phone ?? ''}
           pwStep={pwStep as 1 | 2}
           otpPwCode={otpPwCode}
           newPassword={newPassword}
+          isSendingOtp={isSendingPwOtp}
+          isUpdatingPassword={isUpdatingPassword}
           onOtpChange={setOtpPwCode}
           onNewPasswordChange={setNewPassword}
           onSubmit={handleChangePassword}
           onResendOtp={async () => {
-            if (!currentCustomer) return;
+            if (!currentCustomer || isSendingPwOtp) return;
+            setIsSendingPwOtp(true);
             try {
               const ok = await authService.requestOTP(currentCustomer.phone, 'forgot');
               if (ok) {
@@ -6872,6 +6944,8 @@ export const CustomerApp: React.FC = () => {
               }
             } catch (err: any) {
               showModal('error', 'خطأ في الاتصال', err.message || 'حاول مرة أخرى.');
+            } finally {
+              setIsSendingPwOtp(false);
             }
           }}
         />
@@ -7037,9 +7111,19 @@ export const CustomerApp: React.FC = () => {
             </div>
             <button
               type="submit"
-              className="welcome-btn-pulse w-full py-4 bg-brand-horizontal text-white font-black rounded-2xl transition-all hover:opacity-95"
+              disabled={isLoadingAuth}
+              className={`welcome-btn-pulse w-full py-4 text-white font-black rounded-2xl transition-all ${
+                isLoadingAuth ? 'bg-gray-400 cursor-not-allowed' : 'bg-brand-horizontal hover:opacity-95'
+              }`}
             >
-              إرسال رمز OTP
+              {isLoadingAuth ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Loader2 size={16} className="animate-spin" />
+                  جار ارسال رمز التحقق
+                </span>
+              ) : (
+                'إرسال رمز OTP'
+              )}
             </button>
             <div className="text-center pt-2">
               <button
