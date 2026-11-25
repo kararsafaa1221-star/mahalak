@@ -1,5 +1,5 @@
 /** مدة إمهال إلغاء الزبون قبل وصول الطلب للتاجر (مطابقة للخلفية). */
-export const CUSTOMER_ORDER_CANCEL_GRACE_MS = 30_000;
+export const CUSTOMER_ORDER_CANCEL_GRACE_MS = 15_000;
 
 function toMillis(value: unknown): number | null {
   if (value == null) return null;
@@ -23,8 +23,10 @@ function toMillis(value: unknown): number | null {
   return null;
 }
 
+export { toMillis as orderTimestampToMillis };
+
 /**
- * طلبات جديدة تُنشأ مع merchantNotified:false حتى تنتهي نافذة الـ 30 ثانية.
+ * طلبات جديدة تُنشأ مع merchantNotified:false حتى تنتهي نافذة الـ 15 ثانية.
  * الطلبات القديمة بدون الحقل تبقى ظاهرة للتاجر.
  */
 export function isOrderVisibleToMerchant(order: {

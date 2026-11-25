@@ -1,5 +1,11 @@
 import type { FirebaseApp } from 'firebase/app';
-import { initializeFirestore, type Firestore } from 'firebase/firestore';
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentSingleTabManager,
+  type Firestore,
+} from 'firebase/firestore';
 import firebaseConfigJson from '../../../../config/firebase.config.json';
 
 /** Canonical Firebase project — do not change without updating Firebase Console. */
@@ -88,13 +94,37 @@ export function buildMahalakFirebaseOptions(): MahalakFirebaseOptions {
   };
 }
 
-const FIRESTORE_SETTINGS = { experimentalAutoDetectLongPolling: true } as const;
+/** Long-polling + disk cache for weak mobile networks / brief offline gaps. */
+function buildFirestoreSettings() {
+  try {
+    return {
+      experimentalAutoDetectLongPolling: true,
+      localCache: persistentLocalCache({
+        tabManager: persistentSingleTabManager({ forceOwnership: true }),
+      }),
+    } as const;
+  } catch {
+    return { experimentalAutoDetectLongPolling: true } as const;
+  }
+}
 
 /** Connect to the mahalak-0 Firestore database (named "default" in firebase.json). */
 export function initMahalakFirestore(app: FirebaseApp): Firestore {
   const { firestoreDatabaseId } = buildMahalakFirebaseOptions();
-  if (!firestoreDatabaseId || firestoreDatabaseId === '(default)') {
-    return initializeFirestore(app, FIRESTORE_SETTINGS);
+  const databaseId =
+    !firestoreDatabaseId || firestoreDatabaseId === '(default)'
+      ? undefined
+      : firestoreDatabaseId;
+
+  try {
+    const settings = buildFirestoreSettings();
+    return databaseId
+      ? initializeFirestore(app, settings, databaseId)
+      : initializeFirestore(app, settings);
+  } catch (error) {
+    // HMR / dual imports may already have initialized Firestore for this app.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/already been called/i.test(message)) throw error;
+    return databaseId ? getFirestore(app, databaseId) : getFirestore(app);
   }
-  return initializeFirestore(app, FIRESTORE_SETTINGS, firestoreDatabaseId);
 }

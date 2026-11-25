@@ -15,9 +15,20 @@ const {
   calcRedemptionDiscount,
   isValidRedemptionPoints,
   calcOrderDeliveryPoints,
-  buildOrderDeliveryRewardMessage,
   getOrderPointsEligibleAmount,
 } = require("./loyaltySettings");
+const {
+  getSpinWheelSettings,
+  pickWeightedOption,
+  baghdadDateKey,
+} = require("./spinWheelSettings");
+const {
+  buildNotificationFromSettings,
+  getNotificationTemplatesMap,
+  buildNotificationContent,
+  buildNotificationDeliveryFields,
+  notificationDeliveryFields,
+} = require("./notificationTemplates");
 
 setGlobalOptions({
   region: "us-central1",
@@ -50,12 +61,9 @@ const OTP_COLLECTION = "otp_tokens";
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_ATTEMPTS_COLLECTION = "otp_attempts";
 const OTP_REQUEST_WINDOW_MS = 60 * 1000;
-const OTP_MAX_REQUESTS_PER_WINDOW = 3;
+const OTP_MAX_REQUESTS_PER_WINDOW = 1;
 const OTP_VERIFY_WINDOW_MS = 10 * 60 * 1000;
 const OTP_MAX_VERIFY_ATTEMPTS = 10;
-// Stricter daily cap per phone — prevents sustained SMS abuse against one number.
-const OTP_DAILY_CAP_PER_PHONE = 8;
-const OTP_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Per-IP cap — slows down bulk cross-number flooding from one source.
 const OTP_IP_MAX_PER_MINUTE = 8;
 const OTP_IP_WINDOW_MS = 60 * 1000;
@@ -292,23 +300,15 @@ exports.otpRequest = onRequest({ cors: false, secrets: WASENDER_SECRETS }, async
   const code = String(Math.floor(100000 + Math.random() * 900000));
   const expiresAt = Date.now() + OTP_TTL_MS;
 
-  // Layer 1: per-phone short-window cap (3 per minute — existing)
+  // Per-phone cooldown: one OTP request every 60 seconds.
   try {
     await assertOtpRateLimit(`req_${key}`, OTP_REQUEST_WINDOW_MS, OTP_MAX_REQUESTS_PER_WINDOW);
   } catch {
-    res.status(429).json({ success: false, error: "Too many OTP requests. Please wait and try again." });
+    res.status(429).json({ success: false, error: "انتظر 60 ثانية قبل طلب رمز جديد." });
     return;
   }
 
-  // Layer 2: per-phone daily cap — prevents sustained abuse against one number
-  try {
-    await assertOtpRateLimit(`day_${key}`, OTP_DAILY_WINDOW_MS, OTP_DAILY_CAP_PER_PHONE);
-  } catch {
-    res.status(429).json({ success: false, error: "الحد اليومي لرسائل التحقق لهذا الرقم تجاوز. حاول غداً." });
-    return;
-  }
-
-  // Layer 3: per-IP cap — throttles cross-number flooding from a single source
+  // Per-IP cap — throttles cross-number flooding from a single source
   const ip = String(
     req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown"
   ).split(",")[0].trim();
@@ -404,21 +404,26 @@ const ALL_DASHBOARD_PERMISSIONS = [
   "overview",
   "stores",
   "customers",
+  "blockedAccounts",
   "orders",
   "products",
   "rechargeCodes",
+  "loyaltyWallet",
   "promoCodes",
   "subscriptions",
   "payouts",
+  "accounts",
   "flashSales",
   "reviews",
   "broadcast",
+  "notificationTemplates",
   "whatsapp",
   "heatmap",
   "database",
   "ads",
-  "settings",
   "activityLogs",
+  "adminManagement",
+  "settings",
 ];
 
 async function fetchAdminDoc(uid) {
@@ -426,7 +431,9 @@ async function fetchAdminDoc(uid) {
   if (!snap.exists) return null;
   const data = snap.data() || {};
   if (data.status === "suspended" || data.isSuspended === true) return null;
-  if (!DASHBOARD_ADMIN_ROLES.has(data.role)) return null;
+  // Accepts the 5 built-in roles as well as any custom role id (settings/global.customRoles)
+  // — actual access is still governed entirely by resolveEffectivePermissions below.
+  if (typeof data.role !== "string" || !data.role) return null;
   return data;
 }
 
@@ -727,7 +734,7 @@ function resolveNotificationChannelId(data) {
     !data.type ||
     String(data.title || "").includes("تحديث حالة المتجر");
 
-  if (isFromAdmin) return "admin_broadcasts_sound";
+  if (isFromAdmin) return soundEnabled ? "admin_broadcasts_sound" : "admin_broadcasts_silent";
 
   if (data.role === "customer") {
     if (data.type === "order") {
@@ -750,7 +757,7 @@ function resolveNotificationChannelId(data) {
     return soundEnabled ? "merchant_orders_sound" : "merchant_activity_silent";
   }
 
-  return "admin_broadcasts_sound";
+  return soundEnabled ? "admin_broadcasts_sound" : "admin_broadcasts_silent";
 }
 
 const MAHALAK_PUSH_ICON_URL =
@@ -841,8 +848,16 @@ exports.onPromoCodeCreated = onDocumentCreated(
     if (String(promoId).startsWith("virtual-")) return;
     if (data.status && data.status !== "active") return;
 
-    const { code, message } = formatPromoDiscountMessage(data);
+    const { code, message: discountMessage } = formatPromoDiscountMessage(data);
     if (!code) return;
+
+    const discountLabel = discountMessage.replace(`${code} — خصم `, "");
+    const storedTemplates = await getNotificationTemplatesMap(db);
+    const pushContent = buildNotificationContent(storedTemplates, "customer.promoCreatedPush", {
+      code,
+      discountLabel,
+    });
+    if (!pushContent) return;
 
     let credentials;
     try {
@@ -855,8 +870,8 @@ exports.onPromoCodeCreated = onDocumentCreated(
       await postOneSignalNotification(
         buildOneSignalBroadcastPayload({
           appId: credentials.appId,
-          title: "كود خصم جديد",
-          message,
+          title: pushContent.title,
+          message: pushContent.message,
           channelId: "customer_promos_sound",
           data: {
             type: "promo",
@@ -1063,6 +1078,79 @@ async function deleteAuthUserSafe(uid) {
   }
 }
 
+/**
+ * Remove a customer from every store_audience/{storeId}/members/{customerId} doc.
+ * Uses follow/notify/block hints + orders so orphans do not linger in merchant UI.
+ */
+async function removeCustomerFromAllStoreAudiences(customerId, hintStoreIds = []) {
+  const id = String(customerId || "").trim();
+  if (!id) return;
+
+  const storeIds = new Set(
+    (Array.isArray(hintStoreIds) ? hintStoreIds : [])
+      .map((sid) => String(sid || "").trim())
+      .filter(Boolean),
+  );
+
+  try {
+    const orderSnaps = await db
+      .collection("orders")
+      .where("customerId", "==", id)
+      .select("storeId")
+      .limit(1000)
+      .get();
+    orderSnaps.docs.forEach((docSnap) => {
+      const sid = String((docSnap.data() || {}).storeId || "").trim();
+      if (sid) storeIds.add(sid);
+    });
+  } catch (err) {
+    console.warn("[removeCustomerFromAllStoreAudiences] orders lookup:", err?.message || err);
+  }
+
+  const deletes = [...storeIds].map((storeId) =>
+    db
+      .collection("store_audience")
+      .doc(storeId)
+      .collection("members")
+      .doc(id)
+      .delete()
+      .catch(() => {}),
+  );
+  await Promise.all(deletes);
+}
+
+/** Drop audience members whose customer is missing or soft-deleted. */
+async function purgeDeletedStoreAudienceMembers(storeId) {
+  const sid = String(storeId || "").trim();
+  if (!sid) return;
+
+  const membersSnap = await db
+    .collection("store_audience")
+    .doc(sid)
+    .collection("members")
+    .limit(500)
+    .get();
+  if (membersSnap.empty) return;
+
+  const memberIds = membersSnap.docs.map((d) => d.id);
+  for (let i = 0; i < memberIds.length; i += 30) {
+    const chunk = memberIds.slice(i, i + 30);
+    const refs = chunk.map((cid) => db.collection("customers").doc(cid));
+    const snaps = await db.getAll(...refs);
+    const batch = db.batch();
+    let ops = 0;
+    snaps.forEach((custSnap, idx) => {
+      const memberId = chunk[idx];
+      const memberRef = db.collection("store_audience").doc(sid).collection("members").doc(memberId);
+      if (!custSnap.exists || custSnap.data()?.isDeleted === true) {
+        batch.delete(memberRef);
+        ops += 1;
+      }
+    });
+    if (ops > 0) await batch.commit();
+  }
+}
+
 async function scrubCustomerAccount(customerId, authUid) {
   const customerRef = db.collection("customers").doc(String(customerId));
   const snap = await customerRef.get();
@@ -1073,9 +1161,30 @@ async function scrubCustomerAccount(customerId, authUid) {
     throw new HttpsError("failed-precondition", "Account already deleted");
   }
 
-  const phoneKey = snap.data()?.phone
-    ? canonicalIraqiPhone(normalizePhone(snap.data().phone))
+  const data = snap.data() || {};
+  const phoneKey = data.phone
+    ? canonicalIraqiPhone(normalizePhone(data.phone))
     : "";
+
+  const hintStoreIds = [
+    ...(Array.isArray(data.followedStores) ? data.followedStores : []),
+    ...(Array.isArray(data.storeNotifications) ? data.storeNotifications : []),
+    ...(Array.isArray(data.blockedStoreIds) ? data.blockedStoreIds : []),
+  ];
+
+  // Remove from merchant audience mirrors before scrubbing profile fields.
+  await removeCustomerFromAllStoreAudiences(customerId, hintStoreIds);
+
+  // Clear store-scoped blocks pointing at this customer.
+  await Promise.all(
+    [...new Set((data.blockedStoreIds || []).map(String).filter(Boolean))].map((storeId) =>
+      db
+        .collection("stores")
+        .doc(storeId)
+        .update({ blockedCustomerIds: FieldValue.arrayRemove(String(customerId)) })
+        .catch(() => {}),
+    ),
+  );
 
   await customerRef.update({
     name: "مستخدم محذوف",
@@ -1086,6 +1195,7 @@ async function scrubCustomerAccount(customerId, authUid) {
     points: 0,
     followedStores: [],
     storeNotifications: [],
+    blockedStoreIds: [],
     fcmToken: FieldValue.delete(),
     authUid: FieldValue.delete(),
     password: FieldValue.delete(),
@@ -1247,34 +1357,61 @@ async function fetchAdminDocRaw(uid) {
   return snap.data() || null;
 }
 
+/**
+ * Gate is permission-driven (not a hardcoded role list) so it always matches
+ * the client's actual page-access model, including any per-employee custom
+ * permissions[] grant of the "adminManagement" page.
+ */
 async function assertAdminManagementAccess(uid) {
   const adminDoc = await fetchAdminDocRaw(uid);
-  if (!adminDoc || !["owner", "supervisor"].includes(adminDoc.role)) {
+  if (!adminDoc || typeof adminDoc.role !== "string" || !adminDoc.role) {
     throw new HttpsError("permission-denied", "Admin management access required");
   }
   if (adminDoc.status === "suspended" || adminDoc.isSuspended === true) {
     throw new HttpsError("permission-denied", "Account suspended");
   }
+  if (!hasAdminPermission(adminDoc, "adminManagement")) {
+    throw new HttpsError("permission-denied", "Admin management access required");
+  }
   return adminDoc;
 }
 
-function assertCanModifyAdminTarget(callerDoc, callerUid, targetUid, targetDoc) {
-  if (callerDoc.role === "owner") return;
+/**
+ * Owner accounts are fully protected — no one, including another owner or the
+ * owner themself, may modify an existing owner's admin record through this
+ * path. Beyond that, only the owner may modify another staff member's
+ * credentials at all (mirrors canModifyAdminRecord on the client — having
+ * adminManagement page access alone is not enough to edit other accounts).
+ */
+function assertCanModifyAdminTarget(callerDoc, targetDoc) {
   if (targetDoc?.role === "owner") {
     throw new HttpsError("permission-denied", "Cannot modify owner account");
   }
-  if (targetUid === callerUid) {
-    throw new HttpsError("permission-denied", "Cannot modify your own account");
-  }
+  if (callerDoc.role === "owner") return;
+  throw new HttpsError("permission-denied", "Only the owner can modify other staff accounts");
 }
 
+/**
+ * Mirrors resolveEffectivePermissions: owner always gets every page; any
+ * other role uses its explicit permissions[] selection when non-empty
+ * (per-employee custom page access, set from the Admin Management UI),
+ * otherwise falls back to the role's own full-access default (admin) or
+ * empty set (supervisor/accountant/support).
+ */
 function resolvePermissionsForRole(role, permissions) {
-  if (role === "owner" || role === "admin") {
-    return ALL_DASHBOARD_PERMISSIONS;
-  }
-  return Array.isArray(permissions)
-    ? permissions.filter((p) => typeof p === "string" && ALL_DASHBOARD_PERMISSIONS.includes(p))
-    : [];
+  return resolveEffectivePermissions({ role, permissions });
+}
+
+/**
+ * Nobody with adminManagement access can grant another employee a page they
+ * don't themself have access to — owner is exempt (always full access).
+ * Applied to the *final* resolved permission list so it also covers the
+ * role's own default set, not just an explicit permissions[] override.
+ */
+function capPermissionsToCaller(effectivePermissions, callerDoc) {
+  if (callerDoc.role === "owner") return effectivePermissions;
+  const callerPermissions = resolveEffectivePermissions(callerDoc);
+  return effectivePermissions.filter((p) => callerPermissions.includes(p));
 }
 
 /** Secure admin account creation — owner/supervisor only; Auth user created server-side. */
@@ -1284,12 +1421,15 @@ exports.createUserAccount = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reque
   }
 
   const callerDoc = await assertAdminManagementAccess(request.auth.uid);
-  const { email, password, name, phone, province, area, role, permissions } = request.data || {};
+  const {
+    email, password, name, phone, province, area, role, permissions,
+    photoUrl, isTimeRestricted, workStartTime, workEndTime,
+  } = request.data || {};
 
   if (!email || !password || !role) {
     throw new HttpsError("invalid-argument", "email, password, and role are required");
   }
-  if (!DASHBOARD_ADMIN_ROLES.has(role)) {
+  if (typeof role !== "string" || !role.trim()) {
     throw new HttpsError("invalid-argument", "Invalid admin role");
   }
   if (role === "owner" && callerDoc.role !== "owner") {
@@ -1306,6 +1446,9 @@ exports.createUserAccount = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reque
       displayName: name ? String(name).trim() : undefined,
     });
 
+    // Time restriction never applies to the owner — ignore it silently for that role.
+    const timeRestricted = role !== "owner" && isTimeRestricted === true;
+
     await db.collection("admins").doc(userRecord.uid).set({
       email: String(email).trim().toLowerCase(),
       name: name ? String(name).trim() : "",
@@ -1313,9 +1456,13 @@ exports.createUserAccount = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reque
       province: province ? String(province).trim() : "",
       area: area ? String(area).trim() : "",
       role,
-      permissions: resolvePermissionsForRole(role, permissions),
+      permissions: capPermissionsToCaller(resolvePermissionsForRole(role, permissions), callerDoc),
       status: "active",
       isSuspended: false,
+      photoUrl: typeof photoUrl === "string" ? photoUrl : "",
+      isTimeRestricted: timeRestricted,
+      workStartTime: timeRestricted && typeof workStartTime === "string" ? workStartTime : "",
+      workEndTime: timeRestricted && typeof workEndTime === "string" ? workEndTime : "",
       createdAt: FieldValue.serverTimestamp(),
       createdBy: request.auth.uid,
     });
@@ -1347,7 +1494,7 @@ exports.updateUserAccount = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reque
   if (!targetDoc) {
     throw new HttpsError("not-found", "Admin account not found");
   }
-  assertCanModifyAdminTarget(callerDoc, request.auth.uid, uid, targetDoc);
+  assertCanModifyAdminTarget(callerDoc, targetDoc);
 
   const authUpdate = {};
   if (email) authUpdate.email = String(email).trim().toLowerCase();
@@ -1407,6 +1554,82 @@ exports.deleteUserAccountSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async 
   }
 
   throw new HttpsError("invalid-argument", "accountType must be 'customer' or 'merchant'");
+});
+
+/**
+ * Admin: permanently delete a customer and scrub all merchant audience mirrors.
+ * Client SDK cannot write store_audience members (rules: write false).
+ */
+exports.adminDeleteCustomerSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  await assertDashboardPermission(request.auth.uid, request.auth.token, "customers");
+
+  const customerId = String(request.data?.customerId || "").trim();
+  if (!customerId) {
+    throw new HttpsError("invalid-argument", "customerId is required");
+  }
+
+  const customerRef = db.collection("customers").doc(customerId);
+  const snap = await customerRef.get();
+  if (!snap.exists) {
+    // Still try to clear audience orphans for this id
+    await removeCustomerFromAllStoreAudiences(customerId, []);
+    return { success: true, alreadyGone: true };
+  }
+
+  const data = snap.data() || {};
+  const phoneKey = data.phone ? canonicalIraqiPhone(normalizePhone(data.phone)) : "";
+  const hintStoreIds = [
+    ...(Array.isArray(data.followedStores) ? data.followedStores : []),
+    ...(Array.isArray(data.storeNotifications) ? data.storeNotifications : []),
+    ...(Array.isArray(data.blockedStoreIds) ? data.blockedStoreIds : []),
+  ];
+
+  await removeCustomerFromAllStoreAudiences(customerId, hintStoreIds);
+
+  await Promise.all(
+    [...new Set((data.blockedStoreIds || []).map(String).filter(Boolean))].map((storeId) =>
+      db
+        .collection("stores")
+        .doc(storeId)
+        .update({ blockedCustomerIds: FieldValue.arrayRemove(customerId) })
+        .catch(() => {}),
+    ),
+  );
+
+  // Related docs (best-effort, batched by collection)
+  const relatedQueries = [
+    db.collection("orders").where("customerId", "==", customerId).limit(500).get(),
+    db.collection("store_reviews").where("customerId", "==", customerId).limit(500).get(),
+    db.collection("notifications").where("userId", "==", customerId).limit(500).get(),
+    db.collection("promo_codes").where("ownerCustomerId", "==", customerId).limit(200).get(),
+  ];
+  const [ordersSnap, reviewsSnap, notifsSnap, promosSnap] = await Promise.all(relatedQueries);
+  const toDelete = [
+    ...ordersSnap.docs,
+    ...reviewsSnap.docs,
+    ...notifsSnap.docs,
+    ...promosSnap.docs,
+  ];
+  for (let i = 0; i < toDelete.length; i += 400) {
+    const batch = db.batch();
+    toDelete.slice(i, i + 400).forEach((docSnap) => batch.delete(docSnap.ref));
+    await batch.commit();
+  }
+
+  const authUid = typeof data.authUid === "string" ? data.authUid : "";
+  await db.collection(AUTH_SECRETS_COLLECTION).doc(`customer_${customerId}`).delete().catch(() => {});
+  if (phoneKey) {
+    await db.collection(UNIQUE_PHONES_COLLECTION).doc(phoneKey).delete().catch(() => {});
+  }
+  await customerRef.delete();
+  if (authUid) {
+    await deleteAuthUserSafe(authUid);
+  }
+
+  return { success: true };
 });
 
 /** Delete admin Auth user + Firestore doc — owner only, cannot delete owner role. */
@@ -1749,6 +1972,9 @@ exports.onOrderDelivered = onDocumentUpdated(
         applied: false,
         customerId: null,
         totalPoints: 0,
+        tierChanged: false,
+        newTierLabel: "",
+        tierBonus: 0,
       };
 
       await db.runTransaction(async (tx) => {
@@ -1800,20 +2026,56 @@ exports.onOrderDelivered = onDocumentUpdated(
         rewardMeta.applied = true;
         rewardMeta.customerId = customerId || null;
         rewardMeta.totalPoints = totalPoints;
+        if (customerId && custSnap?.exists) {
+          const changed = periodState.tier !== newTier;
+          rewardMeta.tierChanged = changed;
+          if (changed) {
+            rewardMeta.newTierLabel = loyalty.tiers.find((t) => t.key === newTier)?.labelAr || newTier;
+            rewardMeta.tierBonus = tierBonus;
+          }
+        }
       });
 
       if (rewardMeta.applied && rewardMeta.customerId && rewardMeta.totalPoints > 0) {
-        await db.collection("notifications").add({
-          userId: rewardMeta.customerId,
-          role: "customer",
-          type: "system",
-          title: "🎁 تم شحن محفظة نقاطك!",
-          message: buildOrderDeliveryRewardMessage(rewardMeta.totalPoints),
-          targetId: orderId,
-          read: false,
-          sound: true,
-          createdAt: FieldValue.serverTimestamp(),
+        const rewardContent = await buildNotificationFromSettings(
+          db,
+          "customer.loyaltyOrderReward",
+          { points: rewardMeta.totalPoints },
+        );
+        if (rewardContent) {
+          await db.collection("notifications").add({
+            userId: rewardMeta.customerId,
+            role: "customer",
+            type: "system",
+            title: rewardContent.title,
+            message: rewardContent.message,
+            targetId: orderId,
+            read: false,
+            sound: true,
+            createdAt: FieldValue.serverTimestamp(),
+            ...(await buildNotificationDeliveryFields(db, "customer.loyaltyOrderReward")),
+          });
+        }
+      }
+
+      if (rewardMeta.applied && rewardMeta.customerId && rewardMeta.tierChanged) {
+        const tierContent = await buildNotificationFromSettings(db, "customer.tierUpgrade", {
+          tierLabel: rewardMeta.newTierLabel,
+          bonusPoints: rewardMeta.tierBonus,
         });
+        if (tierContent) {
+          await db.collection("notifications").add({
+            userId: rewardMeta.customerId,
+            role: "customer",
+            type: "system",
+            title: tierContent.title,
+            message: tierContent.message,
+            targetId: orderId,
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+            ...(await buildNotificationDeliveryFields(db, "customer.tierUpgrade")),
+          });
+        }
       }
     } catch (error) {
       console.error("[onOrderDelivered]", error.message);
@@ -2113,9 +2375,35 @@ exports.onStoreReviewCreated = onDocumentCreated(
 
     const customerId = String(data.customerId);
     const loyalty = await getLoyaltySettings(db);
-    const rewardPoints = loyalty.storeReviewRewardPoints;
+    const rewardPoints = Number(loyalty.storeReviewRewardPoints || 0);
+    if (rewardPoints <= 0) return;
 
     try {
+      if (loyalty.reviewRewardOnFirstOnly) {
+        const priorSnap = await db
+          .collection("store_reviews")
+          .where("customerId", "==", customerId)
+          .limit(2)
+          .get();
+        const hasPriorReview = priorSnap.docs.some((d) => d.id !== reviewId);
+        if (hasPriorReview) {
+          await db.collection("store_reviews").doc(reviewId).set(
+            {
+              pointsAwarded: false,
+              pointsSkippedReason: "first_review_only",
+              pointsCheckedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+          await db.collection("customers").doc(customerId).set(
+            { loyaltyStoreReviewRewarded: true },
+            { merge: true },
+          );
+          return;
+        }
+      }
+
+      let awarded = false;
       await db.runTransaction(async (tx) => {
         const reviewRef = db.collection("store_reviews").doc(reviewId);
         const reviewSnap = await tx.get(reviewRef);
@@ -2131,17 +2419,196 @@ exports.onStoreReviewCreated = onDocumentCreated(
           return;
         }
 
+        const customerData = customerSnap.data() || {};
+        if (loyalty.reviewRewardOnFirstOnly && customerData.loyaltyStoreReviewRewarded === true) {
+          tx.update(reviewRef, {
+            pointsAwarded: false,
+            pointsSkippedReason: "first_review_only",
+            pointsCheckedAt: FieldValue.serverTimestamp(),
+          });
+          return;
+        }
+
         tx.update(customerRef, {
           points: FieldValue.increment(rewardPoints),
+          loyaltyStoreReviewRewarded: true,
+          loyaltyStoreReviewRewardedAt: FieldValue.serverTimestamp(),
         });
         tx.update(reviewRef, {
           pointsAwarded: true,
           pointsAwardedAmount: rewardPoints,
           pointsAwardedAt: FieldValue.serverTimestamp(),
         });
+        awarded = true;
       });
+
+      if (awarded) {
+        const rewardContent = await buildNotificationFromSettings(db, "customer.storeReviewReward", {
+          points: rewardPoints,
+        });
+        if (rewardContent) {
+          await db.collection("notifications").add({
+            userId: customerId,
+            role: "customer",
+            type: "system",
+            title: rewardContent.title,
+            message: rewardContent.message,
+            targetId: reviewId,
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+            ...(await buildNotificationDeliveryFields(db, "customer.storeReviewReward")),
+          });
+        }
+      }
     } catch (error) {
       console.error("[onStoreReviewCreated]", error?.message || error);
+    }
+  },
+);
+
+/** Reward reviewer with loyalty points for reviewing a product (server-side only). */
+exports.onProductReviewCreated = onDocumentCreated(
+  { document: "product_reviews/{reviewId}", database: "default" },
+  async (event) => {
+    const reviewId = event.params.reviewId;
+    const data = event.data?.data();
+    if (!data?.customerId) {
+      console.warn("[onProductReviewCreated] missing customerId for review", reviewId);
+      return;
+    }
+
+    const customerId = String(data.customerId);
+    const productId = String(data.productId || "");
+    const storeId = String(data.storeId || "");
+    const rating = Number(data.rating) || 0;
+
+    try {
+      if (productId) {
+        const reviewsSnap = await db
+          .collection("product_reviews")
+          .where("productId", "==", productId)
+          .get();
+        const ratings = reviewsSnap.docs
+          .map((d) => Number(d.data().rating))
+          .filter((r) => r >= 1 && r <= 5);
+        if (ratings.length > 0) {
+          const averageRating =
+            Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10;
+          await db.collection("products").doc(productId).set({ rating: averageRating }, { merge: true });
+        }
+      }
+
+      if (storeId && rating >= 1) {
+        const merchantContent = await buildNotificationFromSettings(db, "merchant.productReview", {
+          rating,
+          productId,
+        });
+        if (merchantContent) {
+          await db.collection("notifications").add({
+            userId: storeId,
+            role: "merchant",
+            type: "product",
+            title: merchantContent.title,
+            message: merchantContent.message,
+            targetId: productId,
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+            ...(await buildNotificationDeliveryFields(db, "merchant.productReview")),
+          });
+        }
+      }
+    } catch (error) {
+      console.error("[onProductReviewCreated] post-review hooks:", error?.message || error);
+    }
+
+    const loyalty = await getLoyaltySettings(db);
+    const rewardPoints = Number(loyalty.productReviewRewardPoints || 0);
+    if (rewardPoints <= 0) return;
+
+    try {
+      if (loyalty.reviewRewardOnFirstOnly) {
+        const priorSnap = await db
+          .collection("product_reviews")
+          .where("customerId", "==", customerId)
+          .limit(2)
+          .get();
+        const hasPriorReview = priorSnap.docs.some((d) => d.id !== reviewId);
+        if (hasPriorReview) {
+          await db.collection("product_reviews").doc(reviewId).set(
+            {
+              pointsAwarded: false,
+              pointsSkippedReason: "first_review_only",
+              pointsCheckedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+          await db.collection("customers").doc(customerId).set(
+            { loyaltyProductReviewRewarded: true },
+            { merge: true },
+          );
+          return;
+        }
+      }
+
+      let awarded = false;
+      await db.runTransaction(async (tx) => {
+        const reviewRef = db.collection("product_reviews").doc(reviewId);
+        const reviewSnap = await tx.get(reviewRef);
+        if (!reviewSnap.exists) return;
+
+        const reviewData = reviewSnap.data() || {};
+        if (reviewData.pointsAwarded === true) return;
+
+        const customerRef = db.collection("customers").doc(customerId);
+        const customerSnap = await tx.get(customerRef);
+        if (!customerSnap.exists) {
+          console.warn("[onProductReviewCreated] customer not found:", customerId);
+          return;
+        }
+
+        const customerData = customerSnap.data() || {};
+        if (loyalty.reviewRewardOnFirstOnly && customerData.loyaltyProductReviewRewarded === true) {
+          tx.update(reviewRef, {
+            pointsAwarded: false,
+            pointsSkippedReason: "first_review_only",
+            pointsCheckedAt: FieldValue.serverTimestamp(),
+          });
+          return;
+        }
+
+        tx.update(customerRef, {
+          points: FieldValue.increment(rewardPoints),
+          loyaltyProductReviewRewarded: true,
+          loyaltyProductReviewRewardedAt: FieldValue.serverTimestamp(),
+        });
+        tx.update(reviewRef, {
+          pointsAwarded: true,
+          pointsAwardedAmount: rewardPoints,
+          pointsAwardedAt: FieldValue.serverTimestamp(),
+        });
+        awarded = true;
+      });
+
+      if (awarded) {
+        const rewardContent = await buildNotificationFromSettings(db, "customer.productReviewReward", {
+          points: rewardPoints,
+        });
+        if (rewardContent) {
+          await db.collection("notifications").add({
+            userId: customerId,
+            role: "customer",
+            type: "system",
+            title: rewardContent.title,
+            message: rewardContent.message,
+            targetId: reviewId,
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+            ...(await buildNotificationDeliveryFields(db, "customer.productReviewReward")),
+          });
+        }
+      }
+    } catch (error) {
+      console.error("[onProductReviewCreated]", error?.message || error);
     }
   },
 );
@@ -2351,6 +2818,23 @@ exports.onCustomerCreated = onDocumentCreated(
         console.error("[onCustomerCreated] customerNumber:", error?.message || error);
       }
     }
+
+    const currentPoints = Number(data?.points || 0);
+    if (currentPoints === 0 && !data?.signupBonusApplied) {
+      try {
+        const loyalty = await getLoyaltySettings(db);
+        const bonus = Number(loyalty.signupBonusPoints || 0);
+        if (bonus > 0) {
+          await snap.ref.update({
+            points: bonus,
+            signupBonusApplied: true,
+            signupBonusAppliedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (error) {
+        console.error("[onCustomerCreated] signupBonus:", error?.message || error);
+      }
+    }
   },
 );
 
@@ -2380,13 +2864,17 @@ exports.listDashboardCustomers = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (
     // users collection may not exist
   }
 
-  return Array.from(byId.values()).map((customer) => {
-    const { password, ...safe } = customer;
-    return safe;
-  });
+  return Array.from(byId.values())
+    .filter((customer) => customer?.isDeleted !== true)
+    .map((customer) => {
+      const { password, ...safe } = customer;
+      return safe;
+    });
 });
 
 /** Admin: share-reward audit for customer points investigation. */
+const SHARE_REWARDS_COLLECTION = "share_rewards";
+
 exports.getCustomerShareRewardsAudit = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Authentication required");
@@ -2399,13 +2887,22 @@ exports.getCustomerShareRewardsAudit = onCall({ cors: ALLOWED_CALLABLE_CORS }, a
   }
 
   const loyalty = await getLoyaltySettings(db);
+  const rewardPoints = Number(loyalty.shareRewardPoints || 0);
+  const cooldownHours = Number(loyalty.shareRewardCooldownHours || 24);
+
+  const currentRef = db.collection(SHARE_REWARDS_COLLECTION).doc(customerId);
+  const currentSnap = await currentRef.get();
+  const currentData = currentSnap.exists ? currentSnap.data() || {} : {};
+  const awardCount = Number(currentData.awardCount || 0);
+  const lastAwardAt = currentData.lastAwardAt || null;
+
   const prefix = `${customerId}_`;
-  const snap = await db.collection(SHARE_REWARDS_COLLECTION)
+  const legacySnap = await db.collection(SHARE_REWARDS_COLLECTION)
     .where(FieldPath.documentId(), ">=", prefix)
     .where(FieldPath.documentId(), "<=", `${prefix}\uf8ff`)
     .get();
 
-  const days = snap.docs
+  const days = legacySnap.docs
     .map((docSnap) => {
       const data = docSnap.data() || {};
       const count = Number(data.count) || 0;
@@ -2413,14 +2910,22 @@ exports.getCustomerShareRewardsAudit = onCall({ cors: ALLOWED_CALLABLE_CORS }, a
       return {
         date,
         count,
-        points: count * (loyalty.shareRewardPoints || 0),
+        points: count * rewardPoints,
       };
     })
     .filter((row) => row.count > 0)
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  const totalPoints = days.reduce((sum, row) => sum + row.points, 0);
-  return { days, totalPoints };
+  const legacyPoints = days.reduce((sum, row) => sum + row.points, 0);
+  const currentPoints = awardCount * rewardPoints;
+  return {
+    days,
+    totalPoints: Math.max(legacyPoints, currentPoints),
+    awardCount,
+    lastAwardAt,
+    cooldownHours,
+    shareRewardPoints: rewardPoints,
+  };
 });
 
 /** Reset customer password after OTP verification (server-side). */
@@ -2526,6 +3031,22 @@ exports.resetStorePasswordSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async
   return { success: true, storeId: docSnap.id };
 });
 
+function toClientIsoDate(value) {
+  if (!value) return null;
+  if (typeof value.toDate === "function") {
+    try {
+      return value.toDate().toISOString();
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === "object" && typeof value.seconds === "number") {
+    return new Date(value.seconds * 1000).toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 function sanitizePromoForClient(data, id) {
   return {
     id: id || data.id,
@@ -2538,9 +3059,9 @@ function sanitizePromoForClient(data, id) {
     sponsor: data.sponsor,
     source: data.source,
     status: data.status,
-    expirationDate: data.expirationDate,
-    expiresAt: data.expiresAt,
-    createdAt: data.createdAt,
+    expirationDate: toClientIsoDate(data.expirationDate) || data.expirationDate || null,
+    expiresAt: toClientIsoDate(data.expiresAt) || data.expiresAt || null,
+    createdAt: toClientIsoDate(data.createdAt) || data.createdAt || null,
     ownerCustomerId: data.ownerCustomerId,
     merchantId: data.merchantId,
     objectId: data.objectId,
@@ -2550,6 +3071,7 @@ function sanitizePromoForClient(data, id) {
     maxUses: data.maxUses ?? 0,
     maxGlobalUses: data.maxGlobalUses ?? data.maxUses ?? 0,
     maxUsesPerUser: data.maxUsesPerUser ?? 0,
+    validityDays: data.validityDays ?? 0,
   };
 }
 
@@ -2770,9 +3292,7 @@ exports.listCustomerWalletPromos = onCall({ cors: ALLOWED_CALLABLE_CORS }, async
   return { promos: Array.from(promosById.values()) };
 });
 
-const SHARE_REWARDS_COLLECTION = "share_rewards";
-
-/** Award loyalty points server-side with rate limits. */
+/** Award loyalty points server-side — unlimited shares, reward once per cooldown window. */
 exports.awardCustomerPoints = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Authentication required");
@@ -2795,20 +3315,52 @@ exports.awardCustomerPoints = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (req
     );
   }
 
-  const today = new Date().toISOString().slice(0, 10);
-  const rewardRef = db.collection(SHARE_REWARDS_COLLECTION).doc(`${customerId}_${today}`);
+  const cooldownHours = Math.max(1, Number(loyalty.shareRewardCooldownHours) || 24);
+  const cooldownMs = cooldownHours * 60 * 60 * 1000;
+  const rewardRef = db.collection(SHARE_REWARDS_COLLECTION).doc(String(customerId));
+  const awardPoints = Number(loyalty.shareRewardPoints) || 0;
+  if (awardPoints <= 0) {
+    return { pointsAwarded: 0, skipped: true, reason: "disabled" };
+  }
+
+  let pointsAwarded = 0;
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(rewardRef);
-    const count = snap.exists ? Number(snap.data()?.count || 0) : 0;
-    if (count >= loyalty.shareDailyLimit) {
-      throw new HttpsError("resource-exhausted", "Daily share reward limit reached");
+    const data = snap.exists ? snap.data() || {} : {};
+    const lastAwardAt = data.lastAwardAt;
+    const lastMs =
+      lastAwardAt && typeof lastAwardAt.toMillis === "function"
+        ? lastAwardAt.toMillis()
+        : lastAwardAt
+          ? new Date(lastAwardAt).getTime()
+          : 0;
+    if (Number.isFinite(lastMs) && lastMs > 0 && Date.now() - lastMs < cooldownMs) {
+      return;
     }
-    tx.set(rewardRef, { count: count + 1, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+
+    const prevCount = Number(data.awardCount || 0);
+    tx.set(
+      rewardRef,
+      {
+        customerId: String(customerId),
+        awardCount: prevCount + 1,
+        lastAwardAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        cooldownHours,
+      },
+      { merge: true },
+    );
     tx.update(db.collection("customers").doc(customerId), {
-      points: FieldValue.increment(loyalty.shareRewardPoints),
+      points: FieldValue.increment(awardPoints),
     });
+    pointsAwarded = awardPoints;
   });
-  return { pointsAwarded: loyalty.shareRewardPoints };
+
+  return {
+    pointsAwarded,
+    skipped: pointsAwarded === 0,
+    cooldownHours,
+  };
 });
 
 /** Convert loyalty points to promo code (server-side transaction). */
@@ -2826,11 +3378,19 @@ exports.convertPointsToPromoSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, asy
     throw new HttpsError("permission-denied", "Cannot convert points for this customer");
   }
 
-  const discount = calcRedemptionDiscount(required, loyalty);
+    const discount = calcRedemptionDiscount(required, loyalty);
   const newCode = `LP-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
   const promoId = `promo_${Date.now()}`;
   const customerRef = db.collection("customers").doc(customerId);
   const promoRef = db.collection("promo_codes").doc(promoId);
+  const validityDays = Math.max(
+    0,
+    Math.min(3650, Math.round(Number(loyalty.redemptionPromoValidityDays) || 0)),
+  );
+  const expires = validityDays > 0 ? new Date() : null;
+  if (expires) {
+    expires.setDate(expires.getDate() + validityDays);
+  }
 
   await db.runTransaction(async (tx) => {
     const custSnap = await tx.get(customerRef);
@@ -2855,7 +3415,7 @@ exports.convertPointsToPromoSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, asy
       points: FieldValue.increment(-required),
       lastPointsRedemptionAt: FieldValue.serverTimestamp(),
     });
-    tx.set(promoRef, {
+    const promoDoc = {
       id: promoId,
       storeId: "ALL_STORES",
       code: newCode,
@@ -2863,15 +3423,205 @@ exports.convertPointsToPromoSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, asy
       discountValue: discount,
       amount: discount,
       maxUses: 1,
+      maxGlobalUses: 1,
       usedCount: 0,
+      currentGlobalUses: 0,
       status: "active",
       source: "points",
       ownerCustomerId: customerId,
+      validityDays,
       createdAt: FieldValue.serverTimestamp(),
+    };
+    if (expires) {
+      promoDoc.expiresAt = Timestamp.fromDate(expires);
+      promoDoc.expirationDate = expires.toISOString();
+    }
+    tx.set(promoRef, promoDoc);
+  });
+
+  return {
+    success: true,
+    code: newCode,
+    discount,
+    expiresAt: expires ? expires.toISOString() : null,
+    maxUses: 1,
+    validityDays,
+  };
+});
+
+exports.spinLuckyWheel = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  const { customerId } = request.data || {};
+  if (!customerId || typeof customerId !== "string") {
+    throw new HttpsError("invalid-argument", "customerId required");
+  }
+  if (!(await customerAuthOwnsId(customerId, request.auth.uid))) {
+    throw new HttpsError("permission-denied", "Cannot spin for this customer");
+  }
+
+  const settings = await getSpinWheelSettings(db);
+  if (!settings.enabled) {
+    throw new HttpsError("failed-precondition", "عجلة الحظ غير مفعّلة حالياً");
+  }
+
+  const randomBytes = crypto.randomBytes(4);
+  const random01 = randomBytes.readUInt32BE(0) / 0x100000000;
+  const won = pickWeightedOption(settings.options, random01);
+  if (!won) {
+    throw new HttpsError("failed-precondition", "لا توجد خيارات مفعّلة على العجلة");
+  }
+
+  const costPoints = Math.max(0, Number(settings.costPoints) || 0);
+  const dailyLimit = Math.max(0, Number(settings.dailyLimit) || 0);
+  const resetPeriodHours = Math.max(1, Math.min(168, Math.round(Number(settings.resetPeriodHours) || 24)));
+  const periodMs = resetPeriodHours * 60 * 60 * 1000;
+  const todayKey = baghdadDateKey();
+  const customerRef = db.collection("customers").doc(customerId);
+  const historyRef = db.collection("spin_wheel_history").doc();
+
+  let promoCode = null;
+  let pointsAwarded = 0;
+  let newPointsBalance = 0;
+  let spinsUsedToday = 0;
+  let periodStartedAtMs = 0;
+  let periodEndsAtMs = 0;
+
+  await db.runTransaction(async (tx) => {
+    const custSnap = await tx.get(customerRef);
+    if (!custSnap.exists) throw new HttpsError("not-found", "Customer not found");
+    const custData = custSnap.data() || {};
+    const currentPoints = Number(custData.points || 0);
+    const nowMs = Date.now();
+
+    let periodStart = 0;
+    if (custData.spinWheelPeriodStartedAt) {
+      periodStart =
+        typeof custData.spinWheelPeriodStartedAt.toMillis === "function"
+          ? custData.spinWheelPeriodStartedAt.toMillis()
+          : Number(custData.spinWheelPeriodStartedAt) || 0;
+    }
+
+    let dayCount = Number(custData.spinWheelDailyCount || 0);
+    const periodActive = periodStart > 0 && nowMs - periodStart < periodMs;
+    if (!periodActive) {
+      // New window (or migrate off calendar-day tracking).
+      periodStart = nowMs;
+      dayCount = 0;
+    }
+
+    if (dailyLimit > 0 && dayCount >= dailyLimit) {
+      const endsAt = periodStart + periodMs;
+      throw new HttpsError(
+        "resource-exhausted",
+        "استنفدت محاولات التدوير. انتظر حتى انتهاء العدّاد.",
+        { periodEndsAt: endsAt, resetPeriodHours },
+      );
+    }
+
+    if (costPoints > 0 && currentPoints < costPoints) {
+      throw new HttpsError("failed-precondition", "نقاطك غير كافية لتدوير العجلة");
+    }
+
+    const lastSpinAt = custData.spinWheelLastSpinAt;
+    if (lastSpinAt) {
+      const lastMs =
+        typeof lastSpinAt.toMillis === "function"
+          ? lastSpinAt.toMillis()
+          : new Date(lastSpinAt).getTime();
+      if (Number.isFinite(lastMs) && Date.now() - lastMs < 2500) {
+        throw new HttpsError("failed-precondition", "الرجاء الانتظار قليلاً قبل تدوير آخر");
+      }
+    }
+
+    spinsUsedToday = dayCount + 1;
+    periodStartedAtMs = periodStart;
+    periodEndsAtMs = periodStart + periodMs;
+    let pointsDelta = -costPoints;
+
+    if (won.prizeType === "points") {
+      pointsAwarded = Math.max(0, Math.round(Number(won.points) || 0));
+      pointsDelta += pointsAwarded;
+    }
+
+    newPointsBalance = Math.max(0, currentPoints + pointsDelta);
+
+    const customerUpdate = {
+      points: newPointsBalance,
+      spinWheelDailyDate: todayKey,
+      spinWheelDailyCount: spinsUsedToday,
+      spinWheelPeriodStartedAt: periodStart,
+      spinWheelLastSpinAt: FieldValue.serverTimestamp(),
+      spinWheelLastPrizeId: won.id,
+    };
+
+    tx.update(customerRef, customerUpdate);
+
+    if (won.prizeType === "promo_amount" || won.prizeType === "promo_percent") {
+      const discountValue = Math.max(0, Number(won.discountValue) || 0);
+      if (discountValue > 0) {
+        const newCode = `SW-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+        const promoId = `promo_sw_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        const promoRef = db.collection("promo_codes").doc(promoId);
+        const validityDays = Math.max(0, Math.round(Number(won.promoValidityDays) || 0));
+        const promoDoc = {
+          id: promoId,
+          storeId: "ALL_STORES",
+          code: newCode,
+          discountType: won.prizeType === "promo_percent" ? "percent" : "amount",
+          discountValue,
+          amount: won.prizeType === "promo_amount" ? discountValue : 0,
+          maxUses: 1,
+          usedCount: 0,
+          status: "active",
+          source: "spin_wheel",
+          ownerCustomerId: customerId,
+          createdAt: FieldValue.serverTimestamp(),
+        };
+        if (validityDays > 0) {
+          const expires = new Date();
+          expires.setDate(expires.getDate() + validityDays);
+          promoDoc.expiresAt = Timestamp.fromDate(expires);
+        }
+        tx.set(promoRef, promoDoc);
+        promoCode = newCode;
+      }
+    }
+
+    tx.set(historyRef, {
+      id: historyRef.id,
+      customerId,
+      optionId: won.id,
+      optionLabel: won.label,
+      prizeType: won.prizeType,
+      pointsAwarded,
+      costPoints,
+      promoCode: promoCode || null,
+      externalDetails: won.prizeType === "external" ? String(won.externalDetails || "").trim() || null : null,
+      createdAt: FieldValue.serverTimestamp(),
+      dayKey: todayKey,
+      periodStartedAt: periodStart,
     });
   });
 
-  return { success: true, code: newCode, discount };
+  return {
+    success: true,
+    optionId: won.id,
+    optionLabel: won.label,
+    prizeType: won.prizeType,
+    pointsAwarded,
+    costPoints,
+    promoCode,
+    externalDetails: won.prizeType === "external" ? String(won.externalDetails || "").trim() || null : null,
+    pointsBalance: newPointsBalance,
+    spinsUsedToday,
+    dailyLimit,
+    resetPeriodHours,
+    periodStartedAt: periodStartedAtMs,
+    periodEndsAt: periodEndsAtMs,
+    spinsRemaining: dailyLimit > 0 ? Math.max(0, dailyLimit - spinsUsedToday) : null,
+  };
 });
 
 function productFinalPrice(product) {
@@ -3042,6 +3792,7 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
   const {
     storeId,
     storeName,
+    storeUsername,
     customerId,
     customerName,
     customerPhone,
@@ -3056,20 +3807,32 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
   if (!storeId || !customerId || !Array.isArray(items) || items.length === 0) {
     throw new HttpsError("invalid-argument", "Invalid order payload");
   }
-  if (!(await customerAuthOwnsId(customerId, request.auth.uid))) {
-    throw new HttpsError("permission-denied", "Cannot place order for this customer");
+
+  const productIds = items.map((item) => item.productId || item.id).filter(Boolean);
+  if (productIds.length === 0) {
+    throw new HttpsError("invalid-argument", "No valid products in order");
   }
 
-  const storeSnap = await db.collection("stores").doc(storeId).get();
+  // Parallelize the first round of Firestore reads (store + customer + products).
+  const [storeSnap, customerSnap, ...productSnaps] = await Promise.all([
+    db.collection("stores").doc(storeId).get(),
+    db.collection("customers").doc(customerId).get(),
+    ...productIds.map((id) => db.collection("products").doc(id).get()),
+  ]);
+
   if (!storeSnap.exists || storeSnap.data()?.isBanned) {
     throw new HttpsError("failed-precondition", "Store unavailable");
   }
 
-  const customerSnap = await db.collection("customers").doc(customerId).get();
   if (!customerSnap.exists) {
     throw new HttpsError("not-found", "Customer not found");
   }
   const customerData = customerSnap.data() || {};
+  const ownsCustomer =
+    customerId === request.auth.uid || customerData.authUid === request.auth.uid;
+  if (!ownsCustomer) {
+    throw new HttpsError("permission-denied", "Cannot place order for this customer");
+  }
   if (customerData.isBlocked) {
     throw new HttpsError("permission-denied", "Customer account is blocked");
   }
@@ -3080,15 +3843,7 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
     throw new HttpsError("permission-denied", "You are blocked from this store");
   }
 
-  // Batch-fetch all products in a single round-trip instead of N sequential reads.
-  const productIds = items.map(item => item.productId || item.id).filter(Boolean);
-  if (productIds.length === 0) {
-    throw new HttpsError("invalid-argument", "No valid products in order");
-  }
-  const productSnaps = await Promise.all(
-    productIds.map(id => db.collection("products").doc(id).get())
-  );
-  const productSnapMap = new Map(productSnaps.map(s => [s.id, s]));
+  const productSnapMap = new Map(productSnaps.map((s) => [s.id, s]));
 
   let subtotal = 0;
   const normalizedItems = [];
@@ -3125,46 +3880,29 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
 
   const storeData = storeSnap.data() || {};
   const delivery = getStoreDeliveryPrice(storeData, customerProvince);
-  const { discount, promoRef } = await resolveValidatedPromoDiscount({
-    promoCode,
-    storeId,
-    customerId,
-    customerProvince,
-    subtotal,
-  });
-  const total = Math.max(0, subtotal + delivery - discount);
   const orderId = `ord_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const orderCounterRef = db.collection("counters").doc("orders");
 
-  // One-time (or migration from per-store): seed a GLOBAL order counter and
-  // backfill orderNumber across ALL stores so numbers stay platform-wide.
-  const counterSnap = await orderCounterRef.get();
+  const [{ discount, promoRef }, counterSnap] = await Promise.all([
+    resolveValidatedPromoDiscount({
+      promoCode,
+      storeId,
+      customerId,
+      customerProvince,
+      subtotal,
+    }),
+    orderCounterRef.get(),
+  ]);
+  const total = Math.max(0, subtotal + delivery - discount);
+
+  // Ensure global counter marker exists. Never scan/backfill the entire
+  // `orders` collection on the checkout hot path — that caused multi-second
+  // (or minute-long) delays when confirming an order.
   const counterData = counterSnap.exists ? counterSnap.data() || {} : {};
   if (counterData.version !== "global-v1") {
-    const existingOrders = await db.collection("orders").get();
-    const orderMillis = (d) => {
-      const t = d.data()?.createdAt;
-      if (t && typeof t.toMillis === "function") return t.toMillis();
-      if (t && typeof t.seconds === "number") return t.seconds * 1000;
-      if (t) return new Date(t).getTime() || 0;
-      return 0;
-    };
-    const sorted = [...existingOrders.docs].sort((a, b) => {
-      const diff = orderMillis(a) - orderMillis(b);
-      return diff !== 0 ? diff : a.id.localeCompare(b.id);
-    });
-    const CHUNK = 400;
-    for (let i = 0; i < sorted.length; i += CHUNK) {
-      const batch = db.batch();
-      const slice = sorted.slice(i, i + CHUNK);
-      slice.forEach((d, localIdx) => {
-        batch.update(d.ref, { orderNumber: i + localIdx + 1 });
-      });
-      await batch.commit();
-    }
     await orderCounterRef.set(
       {
-        lastNumber: sorted.length,
+        lastNumber: Number(counterData.lastNumber) || 0,
         version: "global-v1",
         updatedAt: FieldValue.serverTimestamp(),
       },
@@ -3263,6 +4001,7 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       id: orderId,
       storeId,
       storeName: storeName || storeTxnData.shopName || "",
+      storeUsername: storeUsername || storeTxnData.username || "",
       customerId,
       customerName: customerName || "",
       customerPhone: customerPhone || "",
@@ -3280,8 +4019,8 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       status: "pending",
       orderNumber: nextOrderNumber,
       createdAt: FieldValue.serverTimestamp(),
-      // Hold from merchant for 30s so the customer can cancel before the store is notified.
-      customerGraceUntil: Timestamp.fromMillis(Date.now() + 30000),
+      // Hold from merchant for 15s so the customer can cancel before the store is notified.
+      customerGraceUntil: Timestamp.fromMillis(Date.now() + 15000),
       merchantNotified: false,
     });
   });
@@ -3292,7 +4031,7 @@ exports.placeOrderSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
 });
 
 /**
- * After the customer 30s cancel window, reveal the order to the merchant and send notification.
+ * After the customer 15s cancel window, reveal the order to the merchant and send notification.
  * If the customer cancelled during the window, do nothing.
  */
 exports.onOrderCreatedNotifyMerchantAfterGrace = onDocumentCreated(
@@ -3306,7 +4045,7 @@ exports.onOrderCreatedNotifyMerchantAfterGrace = onDocumentCreated(
     // (they already used immediate notify in older placeOrderSecure).
     if (data.merchantNotified !== false) return;
 
-    let waitMs = 30000;
+    let waitMs = 15000;
     const graceUntil = data.customerGraceUntil;
     if (graceUntil && typeof graceUntil.toMillis === "function") {
       waitMs = Math.max(0, graceUntil.toMillis() - Date.now());
@@ -3332,15 +4071,120 @@ exports.onOrderCreatedNotifyMerchantAfterGrace = onDocumentCreated(
 
     const orderLabel =
       latest.orderNumber != null ? `#${latest.orderNumber}` : fresh.id;
+    const orderContent = await buildNotificationFromSettings(db, "merchant.newOrder", {
+      orderLabel,
+      customerName: latest.customerName || "زبون",
+    });
+    if (orderContent) {
+      await db.collection("notifications").add({
+        userId: latest.storeId,
+        role: "merchant",
+        type: "order",
+        templateKey: "merchant.newOrder",
+        title: orderContent.title,
+        message: orderContent.message,
+        targetId: fresh.id,
+        read: false,
+        createdAt: FieldValue.serverTimestamp(),
+        ...(await buildNotificationDeliveryFields(db, "merchant.newOrder")),
+      });
+    }
+  },
+);
+
+/**
+ * Customer skips the cancel grace window and releases the order to the merchant immediately.
+ * Returns as soon as the order flag is updated; merchant push is sent by
+ * onOrderGraceSkippedNotify so the customer UI is not blocked.
+ */
+exports.releaseOrderToMerchantSecure = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
+  }
+  const orderId = String(request.data?.orderId || "").trim();
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "orderId is required");
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+  const snap = await orderRef.get();
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "Order not found");
+  }
+  const data = snap.data() || {};
+  const customerId = String(data.customerId || "");
+  // Skip extra customer doc read when the Auth uid is the customer document id.
+  if (customerId !== request.auth.uid) {
+    if (!(await customerAuthOwnsId(customerId, request.auth.uid))) {
+      throw new HttpsError("permission-denied", "Cannot release this order");
+    }
+  }
+  if (data.status !== "pending") {
+    throw new HttpsError("failed-precondition", "Order is no longer pending");
+  }
+  if (data.merchantNotified === true) {
+    return { success: true, alreadyReleased: true };
+  }
+
+  let releasedNow = false;
+  await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(orderRef);
+    if (!fresh.exists) {
+      throw new HttpsError("not-found", "Order not found");
+    }
+    const latest = fresh.data() || {};
+    if (latest.status !== "pending") {
+      throw new HttpsError("failed-precondition", "Order is no longer pending");
+    }
+    if (latest.merchantNotified === true) {
+      return;
+    }
+    tx.update(orderRef, {
+      merchantNotified: true,
+      merchantNotifiedAt: FieldValue.serverTimestamp(),
+      customerGraceUntil: FieldValue.serverTimestamp(),
+      customerGraceSkipped: true,
+    });
+    releasedNow = true;
+  });
+
+  return { success: true, alreadyReleased: !releasedNow };
+});
+
+/**
+ * When the customer skips the 15s cancel window, notify the merchant in the background.
+ */
+exports.onOrderGraceSkippedNotify = onDocumentUpdated(
+  { document: "orders/{orderId}", database: "default" },
+  async (event) => {
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    if (before.customerGraceSkipped === true) return;
+    if (after.customerGraceSkipped !== true) return;
+    if (after.merchantNotified !== true) return;
+    if (after.status !== "pending") return;
+
+    const orderId = event.params.orderId;
+    const orderLabel =
+      after.orderNumber != null ? `#${after.orderNumber}` : orderId;
+    const stored = await getNotificationTemplatesMap(db);
+    const orderContent = buildNotificationContent(stored, "merchant.newOrder", {
+      orderLabel,
+      customerName: after.customerName || "زبون",
+    });
+    if (!orderContent) return;
+
     await db.collection("notifications").add({
-      userId: latest.storeId,
+      userId: after.storeId,
       role: "merchant",
       type: "order",
-      title: "طلب جديد",
-      message: `لديك طلب جديد برقم ${orderLabel} من ${latest.customerName || "زبون"}`,
-      targetId: fresh.id,
+      templateKey: "merchant.newOrder",
+      title: orderContent.title,
+      message: orderContent.message,
+      targetId: orderId,
       read: false,
       createdAt: FieldValue.serverTimestamp(),
+      ...notificationDeliveryFields(stored, "merchant.newOrder"),
     });
   },
 );
@@ -3378,12 +4222,24 @@ function sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds = []) {
   };
 }
 
-async function syncStoreAudienceMember(storeId, customerId, customerData) {
+async function syncStoreAudienceMember(storeId, customerId, customerData, options = {}) {
   const followed = (customerData.followedStores || []).includes(storeId);
   const notifications = (customerData.storeNotifications || []).includes(storeId);
   const blocked = Boolean(customerData.isBlocked) || Boolean(customerData.blocked);
   const ref = db.collection("store_audience").doc(storeId).collection("members").doc(customerId);
-  if (followed || notifications || blocked) {
+
+  // احتفظ بعلامة ordered إن وُجدت مسبقاً حتى لا يختفي زبائن الطلبات السابقة من المرآة
+  let ordered = Boolean(options.ordered);
+  if (!ordered) {
+    try {
+      const existing = await ref.get();
+      ordered = Boolean(existing.exists && existing.data()?.ordered);
+    } catch {
+      ordered = false;
+    }
+  }
+
+  if (followed || notifications || blocked || ordered) {
     await ref.set(
       {
         customerId,
@@ -3394,6 +4250,7 @@ async function syncStoreAudienceMember(storeId, customerId, customerData) {
         followed,
         notifications,
         blocked,
+        ordered,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
@@ -3459,16 +4316,23 @@ exports.toggleStoreEngagement = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (r
   await syncStoreAudienceMember(storeId, customerId, updatedCustomer);
 
   if (action === "follow" && !wasFollowing) {
-    await db.collection("notifications").add({
-      userId: storeId,
-      role: "merchant",
-      type: "social",
-      title: "متابع جديد!",
-      message: `${updatedCustomer.name || "زبون"} قام بمتابعة متجرك.`,
-      read: false,
-      sound: false,
-      createdAt: FieldValue.serverTimestamp(),
+    const followContent = await buildNotificationFromSettings(db, "merchant.newFollower", {
+      customerName: updatedCustomer.name || "زبون",
     });
+    if (followContent) {
+      await db.collection("notifications").add({
+        userId: storeId,
+        role: "merchant",
+        type: "social",
+        templateKey: "merchant.newFollower",
+        targetId: customerId,
+        title: followContent.title,
+        message: followContent.message,
+        read: false,
+        createdAt: FieldValue.serverTimestamp(),
+        ...(await buildNotificationDeliveryFields(db, "merchant.newFollower")),
+      });
+    }
   }
 
   return { followedStores, storeNotifications };
@@ -3500,11 +4364,16 @@ exports.getStoreAudience = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
     ]);
 
     const byId = new Map();
-    followersSnap.docs.forEach((docSnap) => byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds)));
+    const addAudienceCustomer = (docSnap) => {
+      if (!docSnap?.exists) return;
+      const raw = docSnap.data() || {};
+      if (raw.isDeleted === true) return;
+      byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds));
+    };
+
+    followersSnap.docs.forEach((docSnap) => addAudienceCustomer(docSnap));
     notifSnap.docs.forEach((docSnap) => {
-      if (!byId.has(docSnap.id)) {
-        byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds));
-      }
+      if (!byId.has(docSnap.id)) addAudienceCustomer(docSnap);
     });
 
     const orderedCustomerIds = [
@@ -3513,17 +4382,16 @@ exports.getStoreAudience = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
           .map((docSnap) => String((docSnap.data() || {}).customerId || ""))
           .filter(Boolean),
       ),
-    ].filter((id) => !byId.has(id)).slice(0, 200);
+    ];
+    const orderedSet = new Set(orderedCustomerIds);
 
-    for (let i = 0; i < orderedCustomerIds.length; i += 30) {
-      const chunk = orderedCustomerIds.slice(i, i + 30);
+    const missingOrderedIds = orderedCustomerIds.filter((id) => !byId.has(id)).slice(0, 200);
+
+    for (let i = 0; i < missingOrderedIds.length; i += 30) {
+      const chunk = missingOrderedIds.slice(i, i + 30);
       const refs = chunk.map((id) => db.collection("customers").doc(id));
       const snaps = await db.getAll(...refs);
-      snaps.forEach((docSnap) => {
-        if (docSnap.exists) {
-          byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds));
-        }
-      });
+      snaps.forEach((docSnap) => addAudienceCustomer(docSnap));
     }
 
     // Include customers blocked by the store even if they have no follow/order history
@@ -3532,16 +4400,19 @@ exports.getStoreAudience = onCall({ cors: ALLOWED_CALLABLE_CORS }, async (reques
       if (chunk.length === 0) continue;
       const refs = chunk.map((id) => db.collection("customers").doc(id));
       const snaps = await db.getAll(...refs);
-      snaps.forEach((docSnap) => {
-        if (docSnap.exists) {
-          byId.set(docSnap.id, sanitizeStoreAudienceCustomer(docSnap, storeBlockedIds));
-        }
-      });
+      snaps.forEach((docSnap) => addAudienceCustomer(docSnap));
     }
+
+    // Remove soft-deleted / missing customers left in the audience mirror
+    await purgeDeletedStoreAudienceMembers(storeId);
 
     const customers = Array.from(byId.values());
     await Promise.all(
-      customers.map((customer) => syncStoreAudienceMember(storeId, customer.id, customer)),
+      customers.map((customer) =>
+        syncStoreAudienceMember(storeId, customer.id, customer, {
+          ordered: orderedSet.has(customer.id),
+        }),
+      ),
     );
 
     return { customers };
@@ -3620,6 +4491,27 @@ exports.setCustomerPlatformBlock = onCall({ cors: ALLOWED_CALLABLE_CORS }, async
   const snap = await customerRef.get();
   if (!snap.exists) throw new HttpsError("not-found", "Customer not found");
   await customerRef.update({ isBlocked: blocked, updatedAt: FieldValue.serverTimestamp() });
+
+  if (blocked) {
+    try {
+      const suspendContent = await buildNotificationFromSettings(db, "customer.accountSuspended", {});
+      if (suspendContent) {
+        await db.collection("notifications").add({
+          userId: customerId,
+          role: "customer",
+          type: "system",
+          title: suspendContent.title,
+          message: suspendContent.message,
+          read: false,
+          createdAt: FieldValue.serverTimestamp(),
+          ...(await buildNotificationDeliveryFields(db, "customer.accountSuspended")),
+        });
+      }
+    } catch (error) {
+      console.error("[setCustomerPlatformBlock] notification error:", error.message);
+    }
+  }
+
   return { success: true, customerId, blocked };
 });
 
@@ -3747,7 +4639,7 @@ exports.sendMerchantFollowerNotifications = onCall({ cors: ALLOWED_CALLABLE_CORS
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Authentication required");
   }
-  const { storeId, title, message, type } = request.data || {};
+  const { storeId, title, message, type, templateKey } = request.data || {};
   if (!storeId || !title || !message) {
     throw new HttpsError("invalid-argument", "storeId, title and message are required");
   }
@@ -3771,6 +4663,10 @@ exports.sendMerchantFollowerNotifications = onCall({ cors: ALLOWED_CALLABLE_CORS
     ]),
   ].slice(0, 500);
 
+  const delivery = templateKey
+    ? await buildNotificationDeliveryFields(db, templateKey)
+    : { sound: true };
+
   const batch = db.batch();
   followerIds.forEach((customerId) => {
     const ref = db.collection("notifications").doc();
@@ -3782,8 +4678,8 @@ exports.sendMerchantFollowerNotifications = onCall({ cors: ALLOWED_CALLABLE_CORS
       message,
       senderStoreId: storeId,
       read: false,
-      sound: true,
       createdAt: FieldValue.serverTimestamp(),
+      ...delivery,
     });
   });
   await batch.commit();
@@ -3863,19 +4759,28 @@ exports.sendMerchantCustomerGift = onCall({ cors: ALLOWED_CALLABLE_CORS }, async
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    const notifRef = db.collection("notifications").doc();
     const valueLabel = type === "amount" ? `${value.toLocaleString("en-US")} د.ع` : `${value}%`;
+    const giftPromoContent = await buildNotificationFromSettings(db, "customer.merchantGiftPromo", {
+      shopName,
+      valueLabel,
+      code,
+      days,
+    });
+    if (!giftPromoContent) {
+      return { success: true, promoCode: code, notificationId: null };
+    }
+    const notifRef = db.collection("notifications").doc();
     await notifRef.set({
       userId: normalizedCustomerId,
       role: "customer",
-      title: "هدية خاصة من المتجر! 🎁🎟️",
-      message: `أرسل لك متجر ${shopName} كود خصم خاص بقيمة ${valueLabel}! الرمز: ${code} (صالح للاستخدام لمرة واحدة خلال ${days} أيام).`,
+      title: giftPromoContent.title,
+      message: giftPromoContent.message,
       type: "promo",
       targetId: promoId,
       senderStoreId: normalizedStoreId,
       read: false,
-      sound: true,
       createdAt: FieldValue.serverTimestamp(),
+      ...(await buildNotificationDeliveryFields(db, "customer.merchantGiftPromo")),
     });
 
     return { success: true, promoCode: code, notificationId: notifRef.id };
@@ -3897,18 +4802,26 @@ exports.sendMerchantCustomerGift = onCall({ cors: ALLOWED_CALLABLE_CORS }, async
     }
 
     const productName = String(productData.name || "منتج");
+    const giftProductContent = await buildNotificationFromSettings(
+      db,
+      "customer.merchantGiftProduct",
+      { shopName, productName },
+    );
+    if (!giftProductContent) {
+      return { success: true, productName, notificationId: null };
+    }
     const notifRef = db.collection("notifications").doc();
     await notifRef.set({
       userId: normalizedCustomerId,
       role: "customer",
-      title: "لقد تلقيت هديّة منتج! 🎁🎉",
-      message: `مبروك! لقد أهداك متجر ${shopName} منتج: "${productName}" مجاناً كرمز تقدير لولائك! تواصل مع المتجر لتنسيق الاستلام.`,
+      title: giftProductContent.title,
+      message: giftProductContent.message,
       type: "product",
       targetId: normalizedProductId,
       senderStoreId: normalizedStoreId,
       read: false,
-      sound: true,
       createdAt: FieldValue.serverTimestamp(),
+      ...(await buildNotificationDeliveryFields(db, "customer.merchantGiftProduct")),
     });
 
     return { success: true, productName, notificationId: notifRef.id };
@@ -4054,6 +4967,134 @@ exports.migrateStoreSensitiveData = onCall({ cors: ALLOWED_CALLABLE_CORS }, asyn
     publicSynced,
   };
 });
+
+/**
+ * Daily scheduled job — reliable server-side reminders for subscription expiry
+ * (7/3/1 days + expired) and verification-badge expiry. Dedupes per store via
+ * subscriptionReminderStage/subscriptionReminderStageFor and verificationReminderStage
+ * so each stage is only ever notified once, even if the function reruns.
+ * Runs alongside (does not replace) the existing client-side reminder in MerchantApp.
+ */
+exports.checkDailyReminders = onSchedule(
+  { schedule: "10 0 * * *", timeZone: "UTC", region: "us-central1" },
+  async () => {
+    const now = new Date();
+    const storesSnap = await db.collection("stores").get();
+
+    let batch = db.batch();
+    let ops = 0;
+    let subReminders = 0;
+    let verifyExpirations = 0;
+
+    const commitIfNeeded = async () => {
+      if (ops >= 400) {
+        await batch.commit();
+        batch = db.batch();
+        ops = 0;
+      }
+    };
+
+    for (const storeDoc of storesSnap.docs) {
+      const store = storeDoc.data() || {};
+      const storeId = storeDoc.id;
+
+      // --- Subscription expiry reminders (7 / 3 / 1 days + expired) ---
+      if (store.subscriptionStatus && store.subscriptionStatus !== "none" && store.subscriptionValidUntil) {
+        const expiry = new Date(store.subscriptionValidUntil);
+        if (!Number.isNaN(expiry.getTime())) {
+          const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          let stage = null;
+          if (diffDays <= 0) stage = "expired";
+          else if (diffDays === 1) stage = "1day";
+          else if (diffDays === 3) stage = "3days";
+          else if (diffDays === 7) stage = "7days";
+
+          if (stage) {
+            const alreadySent =
+              store.subscriptionReminderStage === stage &&
+              store.subscriptionReminderStageFor === store.subscriptionValidUntil;
+            if (!alreadySent) {
+              const subKey = `merchant.subscription.${stage}`;
+              const content = await buildNotificationFromSettings(db, subKey, {
+                ownerName: store.ownerName || "",
+                shopName: store.shopName || "",
+                expiryDate: store.subscriptionExpiry || store.subscriptionExpiryDate || store.subscriptionValidUntil || "",
+                diffDays,
+              });
+              if (content) {
+                const notifRef = db.collection("notifications").doc();
+                batch.set(notifRef, {
+                  userId: storeId,
+                  role: "merchant",
+                  type: "subscription",
+                  templateKey: subKey,
+                  title: content.title,
+                  message: content.message,
+                  read: false,
+                  createdAt: FieldValue.serverTimestamp(),
+                  ...(await buildNotificationDeliveryFields(db, subKey)),
+                });
+                ops += 1;
+              }
+              batch.update(storeDoc.ref, {
+                subscriptionReminderStage: stage,
+                subscriptionReminderStageFor: store.subscriptionValidUntil,
+              });
+              ops += 1;
+              subReminders += 1;
+              await commitIfNeeded();
+            }
+          }
+        }
+      }
+
+      // --- Verification badge expiry ---
+      if (
+        store.isVerified === true &&
+        store.verificationType !== "lifetime" &&
+        store.verificationExpiresAt &&
+        store.verificationReminderStage !== "expired"
+      ) {
+        const verifyExpiry = new Date(store.verificationExpiresAt);
+        if (!Number.isNaN(verifyExpiry.getTime()) && verifyExpiry.getTime() <= now.getTime()) {
+          const content = await buildNotificationFromSettings(db, "merchant.verificationExpired", {
+            shopName: store.shopName || "",
+          });
+          if (content) {
+            const notifRef = db.collection("notifications").doc();
+            batch.set(notifRef, {
+              userId: storeId,
+              role: "merchant",
+              type: "system",
+              templateKey: "merchant.verificationExpired",
+              title: content.title,
+              message: content.message,
+              read: false,
+              createdAt: FieldValue.serverTimestamp(),
+              ...(await buildNotificationDeliveryFields(db, "merchant.verificationExpired")),
+            });
+            ops += 1;
+          }
+          batch.update(storeDoc.ref, {
+            isVerified: false,
+            verificationReminderStage: "expired",
+          });
+          ops += 1;
+          verifyExpirations += 1;
+          await commitIfNeeded();
+        }
+      }
+    }
+
+    if (ops > 0) {
+      await batch.commit();
+    }
+
+    console.log(
+      `[checkDailyReminders] subscription reminders: ${subReminders}, verification expirations: ${verifyExpirations}`,
+    );
+  },
+);
 
 /**
  * Daily scheduled job — scans all active promo_codes and marks any whose

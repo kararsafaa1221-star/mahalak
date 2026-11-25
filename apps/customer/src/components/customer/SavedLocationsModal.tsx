@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { MapPin } from 'lucide-react';
 import { LegalSheetModal } from '@shared/components/LegalSheetModal';
 import { LegalGlowCard } from '@shared/components/LegalGlowCard';
@@ -24,11 +25,12 @@ export const SavedLocationsModal: React.FC<SavedLocationsModalProps> = ({
   onSave,
   isSaving = false,
 }) => {
+  const { t } = useTranslation();
   return (
     <LegalSheetModal
       open={open}
       onClose={onClose}
-      title="مواقع التوصيل المحفوظة"
+      title={t('locations.title')}
       icon={MapPin}
       variant="home"
     >
@@ -40,11 +42,11 @@ export const SavedLocationsModal: React.FC<SavedLocationsModalProps> = ({
             <div className="welcome-icon-pulse mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-[#fff700] bg-brand-horizontal border border-white shadow-brand-glow-lg">
               <MapPin size={28} />
             </div>
-            <h1 className="font-black text-[#fff700] mb-1.5 text-lg">مواقع التوصيل المحفوظة</h1>
+            <h1 className="font-black text-[#fff700] mb-1.5 text-lg">{t('locations.title')}</h1>
             <p className="text-[10px] sm:text-xs font-bold text-purple-100">
               {locations.length > 0
-                ? `${locations.length} موقع محفوظ — البيت، العمل، وأماكن أخرى`
-                : 'أضف مواقع البيت والعمل وغيرها لسرعة الطلب'}
+                ? t('locations.savedHeader', { count: locations.length })
+                : t('locations.savedHeaderEmpty')}
             </p>
           </div>
         </header>
@@ -55,7 +57,7 @@ export const SavedLocationsModal: React.FC<SavedLocationsModalProps> = ({
               <MapPin size={16} />
             </div>
             <h2 className="font-black text-[#fff700] text-sm sm:text-base leading-relaxed pt-0.5">
-              إدارة عناوينك
+              {t('locations.manageTitle')}
             </h2>
           </div>
 
@@ -74,7 +76,7 @@ export const SavedLocationsModal: React.FC<SavedLocationsModalProps> = ({
               disabled={isSaving}
               className="welcome-btn-pulse w-full py-4 bg-brand-horizontal border border-white/30 text-white rounded-2xl text-sm font-black shadow-brand-glow transition-all hover:opacity-95 active:scale-[0.98] disabled:opacity-70 disabled:pointer-events-none"
             >
-              {isSaving ? 'جاري الحفظ...' : 'حفظ التغييرات'}
+              {isSaving ? t('locations.saving') : t('locations.save')}
             </button>
           </div>
         </LegalGlowCard>

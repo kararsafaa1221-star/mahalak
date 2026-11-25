@@ -16,8 +16,19 @@ export function computeCoverDimensions(
   return { width: viewWidth, height: viewWidth / imgRatio };
 }
 
+/** Caps decoded dimensions so huge camera photos (e.g. 48MP) don't blow up memory. */
+const NORMALIZE_MAX_DIMENSION = 2000;
+
+function capDimensions(width: number, height: number, maxDimension: number): { width: number; height: number } {
+  if (width <= maxDimension && height <= maxDimension) return { width, height };
+  const ratio = Math.min(maxDimension / width, maxDimension / height);
+  return { width: Math.round(width * ratio), height: Math.round(height * ratio) };
+}
+
 /**
  * Normalizes EXIF orientation (common on mobile photos) so preview matches export.
+ * Also downsizes very large photos so decoding/encoding stays fast and memory-safe,
+ * independent of the original file size.
  */
 export async function normalizeImageForEditing(
   file: File,
@@ -25,18 +36,22 @@ export async function normalizeImageForEditing(
   if (typeof createImageBitmap !== 'undefined') {
     try {
       const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-      const canvas = document.createElement('canvas');
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('No canvas context');
-      ctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
-      return {
-        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
-        width: canvas.width,
-        height: canvas.height,
-      };
+      try {
+        const { width, height } = capDimensions(bitmap.width, bitmap.height, NORMALIZE_MAX_DIMENSION);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('No canvas context');
+        ctx.drawImage(bitmap, 0, 0, width, height);
+        return {
+          dataUrl: canvas.toDataURL('image/jpeg', 0.9),
+          width: canvas.width,
+          height: canvas.height,
+        };
+      } finally {
+        bitmap.close();
+      }
     } catch {
       // fall through to legacy path
     }
@@ -48,7 +63,21 @@ export async function normalizeImageForEditing(
       const dataUrl = e.target?.result as string;
       const img = new window.Image();
       img.onload = () => {
-        resolve({ dataUrl, width: img.width, height: img.height });
+        const { width, height } = capDimensions(img.width, img.height, NORMALIZE_MAX_DIMENSION);
+        if (width === img.width && height === img.height) {
+          resolve({ dataUrl, width, height });
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve({ dataUrl, width: img.width, height: img.height });
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.9), width, height });
       };
       img.onerror = () => reject(new Error('Failed to read image dimensions'));
       img.src = dataUrl;

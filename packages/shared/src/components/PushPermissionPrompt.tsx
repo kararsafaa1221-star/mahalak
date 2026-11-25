@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { MapPin } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { App } from '@capacitor/app';
 import { isOneSignalConfigured } from '@shared/lib/onesignalConfig';
 import { requestNotificationPermission } from '@shared/lib/pushNotifications';
@@ -32,6 +33,7 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
   onComplete,
   onLocationGranted,
 }) => {
+  const { t } = useTranslation();
   const [step, setStep] = useState<Step | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const stepRef = useRef<Step | null>(null);
@@ -176,18 +178,19 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
   if (!step) return null;
 
   if (step === 'location') {
-    const locationBody = userType === 'merchant'
-      ? 'يرجى السماح بالوصول لموقعك لتحديد موقع متجرك على الخريطة وتسهيل التوصيل للزبائن.'
-      : 'يرجى السماح بالوصول لموقعك لعرض المتاجر الأقرب إليك وحساب مسافات التوصيل بدقة.';
+    const locationBody =
+      userType === 'merchant'
+        ? t('push.location.bodyMerchant')
+        : t('push.location.bodyCustomer');
     return (
       <PermissionModal
         icon={<MapPin size={32} className="text-[#E9DAFF] animate-bounce" />}
         iconBg="bg-white/10"
-        title="تفعيل الموقع الجغرافي"
+        title={t('push.location.title')}
         body={locationBody}
-        primaryLabel={isBusy ? 'جاري الطلب...' : 'حسناً، تفعيل الموقع'}
+        primaryLabel={isBusy ? t('push.requesting') : t('push.location.allow')}
         onPrimary={handleLocationEnable}
-        secondaryLabel="ليس الآن"
+        secondaryLabel={t('push.location.later')}
         onSecondary={handleLocationSkip}
         primaryDisabled={isBusy}
       />
@@ -195,18 +198,19 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
   }
 
   if (step === 'location-denied') {
-    const deniedBody = userType === 'merchant'
-      ? 'يمكنك المتابعة بدون الموقع. لاحقاً فعّله من إعدادات الهاتف إذا أردت تحديث موقع المتجر على الخريطة.'
-      : 'يمكنك المتابعة بدون الموقع. لاحقاً فعّله من إعدادات المتصفح أو الهاتف إذا أردت عرض المتاجر الأقرب إليك.';
+    const deniedBody =
+      userType === 'merchant'
+        ? t('push.location.denied.bodyMerchant')
+        : t('push.location.denied.bodyCustomer');
     return (
       <PermissionModal
         icon={<MapPin size={32} className="text-amber-300" />}
         iconBg="bg-white/10"
-        title="لم يُفعَّل الموقع"
+        title={t('push.location.denied.title')}
         body={deniedBody}
-        primaryLabel="متابعة"
+        primaryLabel={t('auth.continue')}
         onPrimary={goToNotificationsStep}
-        secondaryLabel="إعادة المحاولة"
+        secondaryLabel={t('common.retry')}
         onSecondary={() => setStep('location')}
       />
     );
@@ -215,12 +219,12 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
   const notificationContent =
     userType === 'customer'
       ? {
-          title: 'لا تفوتك التحديثات! 🔔',
-          body: 'فعل الإشعارات حتى يصلك إشعار فوري عند تغيّر حالة طلبك، وتكون أول من يعلم بالعروض والخصومات.',
+          title: t('push.customer.title'),
+          body: t('push.customer.body'),
         }
       : {
-          title: 'تابع مبيعاتك أول بأول! 📈',
-          body: 'فعّل الإشعارات لتصلك تنبيهات فورية عند دخول طلب جديد أو أي نشاط في متجرك.',
+          title: t('push.merchant.title'),
+          body: t('push.merchant.body'),
         };
 
   if (step === 'notifications') {
@@ -239,9 +243,9 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
         iconBg="bg-white/10"
         title={notificationContent.title}
         body={notificationContent.body}
-        primaryLabel={isBusy ? 'جاري الطلب...' : 'تفعيل الآن'}
+        primaryLabel={isBusy ? t('push.requesting') : t('push.enableNow')}
         onPrimary={handleNotificationEnable}
-        secondaryLabel="ليس الآن"
+        secondaryLabel={t('push.later')}
         onSecondary={handleNotificationSkip}
         primaryDisabled={isBusy}
       />
@@ -261,9 +265,9 @@ export const PushPermissionPrompt: React.FC<PushPermissionPromptProps> = ({
         </svg>
       }
       iconBg="bg-white/10"
-      title="لم تُفعَّل الإشعارات"
-      body="يمكنك المتابعة بدون إشعارات. لتفعيلها لاحقاً، افتح إعدادات المتصفح أو الهاتف واسمح بالإشعارات لتطبيق محلك."
-      primaryLabel="حسناً"
+      title={t('push.denied.title')}
+      body={t('push.denied.body')}
+      primaryLabel={t('common.ok')}
       onPrimary={finish}
     />
   );
@@ -315,7 +319,7 @@ function PermissionModal({
       <div className="absolute inset-0 bg-deep-navy/75 backdrop-blur-md" aria-hidden />
 
       <div className="relative z-[1] flex h-full w-full items-center justify-center p-4 pointer-events-none">
-        <div className="pointer-events-auto relative w-full max-w-sm overflow-hidden rounded-[2rem] welcome-card-glow welcome-card-border-glow bg-deep-navy border border-white/30 shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-300">
+        <div className="pointer-events-auto relative w-full max-w-sm overflow-hidden rounded-[2rem] merchant-glass-sheet welcome-card-glow welcome-card-border-glow shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-300 text-white">
           <div className="welcome-card-shimmer space-y-4 p-8 text-center bg-white/5 backdrop-blur-md border-b border-white/15">
             <div className="welcome-icon-pulse mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-white/10">
               {icon}

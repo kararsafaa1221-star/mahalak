@@ -82,11 +82,21 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
     >;
     return {
       ...settings,
-      earnRules: settings.earnRules.map((rule) =>
-        rule.type === 'order_completed'
-          ? { ...rule, pointsPer1000Iqd: settings.pointsPer1000Iqd }
-          : rule,
-      ),
+      earnRules: settings.earnRules.map((rule) => {
+        if (rule.type === 'order_completed') {
+          return { ...rule, pointsPer1000Iqd: settings.pointsPer1000Iqd };
+        }
+        if (rule.type === 'share_app') {
+          return { ...rule, cooldownHours: settings.shareRewardCooldownHours, points: settings.shareRewardPoints };
+        }
+        if (rule.type === 'store_review') {
+          return { ...rule, points: settings.storeReviewRewardPoints };
+        }
+        if (rule.type === 'product_review') {
+          return { ...rule, points: settings.productReviewRewardPoints };
+        }
+        return rule;
+      }),
       tierUpgradeBonuses: {
         silverToGold: byKey.Gold ?? 0,
         goldToPlatinum: byKey.Platinum ?? 0,
@@ -255,23 +265,76 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
             {[
               { key: 'signupBonusPoints', label: 'مكافأة التسجيل' },
               { key: 'shareRewardPoints', label: 'مكافأة مشاركة التطبيق' },
-              { key: 'shareDailyLimit', label: 'حد المشاركة اليومي' },
+              {
+                key: 'shareRewardCooldownHours',
+                label: 'فترة مكافأة المشاركة (ساعات)',
+                hint: 'المشاركة بلا حد — النقاط تُمنح مرة واحدة كل هذه الساعات (افتراضي 24)',
+              },
               { key: 'storeReviewRewardPoints', label: 'مكافأة تقييم المتجر' },
               { key: 'productReviewRewardPoints', label: 'مكافأة تقييم المنتج' },
               { key: 'redemptionBasePoints', label: 'نقاط أساس الاستبدال' },
               { key: 'redemptionBaseDiscountIqd', label: 'خصم أساس الاستبدال (د.ع)' },
-            ].map(({ key, label }) => (
+              {
+                key: 'redemptionPromoValidityDays',
+                label: 'صلاحية كود الاستبدال (أيام)',
+                hint: '0 = بدون تاريخ انتهاء',
+              },
+            ].map(({ key, label, hint }) => (
               <label key={key} className="block">
                 <span className="text-[10px] font-bold text-slate-500 mb-1 block">{label}</span>
                 <input
                   type="number"
+                  min={key === 'shareRewardCooldownHours' ? 1 : 0}
+                  max={
+                    key === 'redemptionPromoValidityDays'
+                      ? 3650
+                      : key === 'shareRewardCooldownHours'
+                        ? 8760
+                        : undefined
+                  }
                   className={smallInputClass}
                   value={form[key as keyof LoyaltySettings] as number}
-                  onChange={(e) => setForm((prev) => ({ ...prev, [key]: Number(e.target.value) || 0 }))}
+                  onChange={(e) => {
+                    const raw = Number(e.target.value) || 0;
+                    let next = raw;
+                    if (key === 'redemptionPromoValidityDays') {
+                      next = Math.max(0, Math.min(3650, Math.round(raw)));
+                    } else if (key === 'shareRewardCooldownHours') {
+                      next = Math.max(1, Math.min(8760, Math.round(raw || 24)));
+                    }
+                    setForm((prev) => ({
+                      ...prev,
+                      [key]: next,
+                      ...(key === 'shareRewardCooldownHours'
+                        ? {
+                            earnRules: prev.earnRules.map((rule) =>
+                              rule.type === 'share_app' ? { ...rule, cooldownHours: next } : rule,
+                            ),
+                          }
+                        : {}),
+                    }));
+                  }}
                 />
+                {hint ? (
+                  <span className="text-[9px] font-bold text-slate-400 mt-1 block">{hint}</span>
+                ) : null}
               </label>
             ))}
           </div>
+          <label className="mt-3 flex items-start gap-2 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.reviewRewardOnFirstOnly}
+              onChange={(e) => setForm((prev) => ({ ...prev, reviewRewardOnFirstOnly: e.target.checked }))}
+            />
+            <span>
+              <span className="text-[11px] font-black text-slate-800 block">مكافأة التقييم لأول مرة فقط</span>
+              <span className="text-[9px] font-bold text-slate-500 block mt-0.5">
+                الزبون يقيّم كل متجر/منتج مرة واحدة فقط (بلا حد لعدد المتاجر أو المنتجات المختلفة). النقاط تُمنح فقط على أول تقييم متجر وأول تقييم منتج في حياته إن فُعّل هذا الخيار.
+              </span>
+            </span>
+          </label>
         </div>
 
         {/* المستويات */}
@@ -403,7 +466,14 @@ export const LoyaltyWalletSettings: React.FC<Props> = ({ adminSettings, updateAd
                     </p>
                   )}
                   {rule.type === 'share_app' && (
-                    <input type="number" className={smallInputClass} value={rule.dailyLimit ?? form.shareDailyLimit} onChange={(e) => updateEarnRule(rule.id, { dailyLimit: Number(e.target.value) || 0 })} placeholder="حد يومي" />
+                    <p className="col-span-3 text-[9px] font-bold text-slate-500 bg-white border border-slate-100 rounded-lg px-2.5 py-2">
+                      المشاركة بلا حد. فترة المكافأة: كل {form.shareRewardCooldownHours} ساعة (من إعدادات النقاط الأساسية أعلاه).
+                    </p>
+                  )}
+                  {(rule.type === 'store_review' || rule.type === 'product_review') && (
+                    <p className="col-span-3 text-[9px] font-bold text-slate-500 bg-white border border-slate-100 rounded-lg px-2.5 py-2">
+                      تقييم واحد لكل متجر/منتج. {form.reviewRewardOnFirstOnly ? 'المكافأة لأول تقييم من هذا النوع فقط.' : 'المكافأة على كل تقييم جديد (لكل هدف مرة واحدة).'}
+                    </p>
                   )}
                 </div>
               </div>

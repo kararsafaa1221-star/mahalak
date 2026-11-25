@@ -33,10 +33,11 @@ const ProductImageInner: React.FC<ProductImageProps> = ({
   const [error, setError] = useState(!src);
 
   const sizeClasses = {
-    sm: 'w-[100px] h-[100px] min-w-[100px] min-h-[100px] max-w-[100px] max-h-[100px]',
-    md: 'w-[150px] h-[150px] min-w-[150px] min-h-[150px] max-w-[150px] max-h-[150px]',
-    lg: 'w-[200px] h-[200px] min-w-[200px] min-h-[200px] max-w-[200px] max-h-[200px]',
-    custom: 'w-full h-full',
+    sm: 'w-[min(100px,28vw)] h-[min(100px,28vw)] min-w-[72px] min-h-[72px] max-w-[100px] max-h-[100px]',
+    md: 'w-[min(150px,40vw)] h-[min(150px,40vw)] min-w-[96px] min-h-[96px] max-w-[150px] max-h-[150px]',
+    lg: 'w-[min(200px,55vw)] h-[min(200px,55vw)] min-w-[120px] min-h-[120px] max-w-[200px] max-h-[200px]',
+    // الأبعاد تأتي من className عند الاستدعاء — لا تفرض w-full فتتجاوز الحجم المطلوب
+    custom: '',
   };
 
   const selectedSizeClass = sizeClasses[size] || sizeClasses.custom;
@@ -130,8 +131,17 @@ const ProductImageInner: React.FC<ProductImageProps> = ({
           referrerPolicy="no-referrer"
           loading={priority ? 'eager' : 'lazy'}
           decoding={priority ? 'sync' : 'async'}
+          sizes={
+            size === 'sm'
+              ? '100px'
+              : size === 'md'
+                ? '150px'
+                : size === 'lg'
+                  ? '200px'
+                  : undefined
+          }
           {...(priority ? { fetchPriority: 'high' as const } : {})}
-          className={`w-full h-full ${objectFit === 'contain' ? 'object-contain' : 'object-cover'} ${
+          className={`w-full h-full ${objectFit === 'contain' ? 'object-contain' : 'object-cover'} transition-opacity duration-200 ${
             showSpinner ? 'opacity-0' : 'opacity-100'
           } ${imageClassName}`}
           onLoad={() => {

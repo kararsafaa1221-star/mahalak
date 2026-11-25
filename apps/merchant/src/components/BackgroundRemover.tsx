@@ -1,9 +1,11 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import Webcam from 'react-webcam';
 import { Camera, X, Image as ImageIcon, Sparkles, RefreshCw, Check, Upload, Palette, ShieldAlert, Move, ZoomIn, ZoomOut, Crosshair } from 'lucide-react';
 import {
   extractFocusedRegion,
   getProgressLabel,
+  preloadBgRemovalModel,
   removeBackgroundOptimized,
   resetBgRemovalPreload,
 } from '@shared/utils/backgroundRemoval';
@@ -20,6 +22,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
   onClose,
   onSelectImage
 }) => {
+  const { t } = useTranslation();
   const [step, setStep] = useState<'source' | 'camera' | 'preview' | 'processing' | 'result'>('source');
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [processedUrl, setProcessedUrl] = useState<string | null>(null);
@@ -36,6 +39,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const removalRunIdRef = useRef(0);
 
   // Preview-step focus framing (before AI processing)
   const [previewZoom, setPreviewZoom] = useState<number>(1.15);
@@ -101,11 +105,16 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
     }
   };
 
-  // Preload AI model as soon as the modal opens so processing starts faster.
+  // Warm WASM + model while the merchant frames the shot (biggest wait cut).
   useEffect(() => {
     if (!isOpen) return;
-    resetBgRemovalPreload();
+    void preloadBgRemovalModel();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || (step !== 'camera' && step !== 'preview')) return;
+    void preloadBgRemovalModel();
+  }, [isOpen, step]);
 
   // Read image dimensions when a new capture is selected.
   useEffect(() => {
@@ -197,20 +206,20 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
         .catch((err) => {
           if (!isSubscribed) return;
           setHasPermission(false);
-          setErrorText('يرجى تفعيل صلاحية الوصول للكاميرا من إعدادات المتصفح أو الهاتف المحمول للتمكن من التقاط الصور للمنتجات مباشرة.');
+          setErrorText(t('merchant.products.bgRemover.errorCameraPermission'));
         });
     } else {
       setTimeout(() => {
         if (!isSubscribed) return;
         setHasPermission(false);
-        setErrorText('المتصفح الحالي أو بيئة العمل لا تدعم الوصول المباشر لكاميرا الويب.');
+        setErrorText(t('merchant.products.bgRemover.errorNoCameraApi'));
       }, 0);
     }
 
     return () => {
       isSubscribed = false;
     };
-  }, [step]);
+  }, [step, t]);
 
   // Function to retry permission request manually from the UI
   const requestPermissionManually = async () => {
@@ -225,7 +234,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
       setTimeout(() => setStep('camera'), 100);
     } catch (err: any) {
       setHasPermission(false);
-      setErrorText('فشل تفعيل صلاحية الكاميرا. يرجى تفعيل الإذن يدوياً من إعدادات المتصفح أو الهاتف المحمول.');
+      setErrorText(t('merchant.products.bgRemover.errorPermissionFailed'));
     }
   };
 
@@ -246,15 +255,15 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
           setStep('preview');
           setErrorText(null);
         } else {
-          setErrorText('الكاميرا ليست جاهزة بعد أو تم رفض إذن الوصول إليها. يرجى الانتظار أو تفعيل إذن الكاميرا من المتصفح.');
+          setErrorText(t('merchant.products.bgRemover.errorCaptureFailed'));
         }
       } catch (err: any) {
-        setErrorText('حدث خطأ أثناء محاولة التقاط الصورة: ' + (err.message || err));
+        setErrorText(t('merchant.products.bgRemover.errorCaptureError', { message: err.message || String(err) }));
       }
     } else {
-      setErrorText('لم يتم العثور على الكاميرا. يرجى التحقق من التوصيل والإذن.');
+      setErrorText(t('merchant.products.bgRemover.errorNoCameraFound'));
     }
-  }, [webcamRef]);
+  }, [webcamRef, t]);
 
   // Handle local file upload fallback
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -274,10 +283,11 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
   // The Magic Background Removal Function (Local Browser-Based)
   const runBackgroundRemoval = async () => {
     if (!capturedImage) return;
+    const runId = ++removalRunIdRef.current;
     setStep('processing');
     setErrorText(null);
     setProgressPct(0);
-    setProgressText('جاري تحضير الصورة وتركيز المنتج...');
+    setProgressText(t('merchant.products.bgRemover.progressPrepare'));
 
     try {
       const containerSize = previewContainerRef.current?.clientWidth || 320;
@@ -287,20 +297,38 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
         zoom: previewZoom,
         containerSize,
       });
+      if (runId !== removalRunIdRef.current) return;
 
-      setProgressText('جاري تحميل نموذج الذكاء الاصطناعي...');
-      resetBgRemovalPreload();
-      const outputBlob = await removeBackgroundOptimized(focusedBlob, (key, pct) => {
-        setProgressPct(pct);
-        setProgressText(`${getProgressLabel(key)}: ${pct}%`);
-      });
+      setProgressText(t('merchant.products.bgRemover.progressRemoving'));
+      try {
+        await preloadBgRemovalModel((key, pct) => {
+          if (runId !== removalRunIdRef.current) return;
+          setProgressPct(Math.min(pct, 7));
+          setProgressText(`${getProgressLabel(key)}: ${pct}%`);
+        });
+      } catch {
+        resetBgRemovalPreload();
+      }
+
+      const outputBlob = await removeBackgroundOptimized(
+        focusedBlob,
+        (key, pct) => {
+          if (runId !== removalRunIdRef.current) return;
+          setProgressPct(pct);
+          setProgressText(`${getProgressLabel(key)}: ${pct}%`);
+        },
+        { skipResize: true },
+      );
+      if (runId !== removalRunIdRef.current) return;
 
       const outputUrl = URL.createObjectURL(outputBlob);
       setProcessedBlob(outputBlob);
       setProcessedUrl(outputUrl);
       setStep('result');
-    } catch (err: any) {
-      setErrorText('عذراً، فشل تفريغ خلفية الصورة محلياً على المتصفح. يمكنك استخدام الصورة الأصلية كما هي.');
+    } catch (err: unknown) {
+      if (runId !== removalRunIdRef.current) return;
+      console.error('Background removal failed:', err);
+      setErrorText(t('merchant.products.bgRemover.errorRemovalFailed'));
       setStep('preview');
     }
   };
@@ -316,7 +344,8 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
       const canvas = document.createElement('canvas');
       
       // Calculate high-quality canvas size (C x C) to keep the original resolution aspect ratio safely
-      const C = Math.max(img.width, img.height);
+      const MAX_OUT = 800;
+      const C = Math.min(Math.max(img.width, img.height), MAX_OUT);
       canvas.width = C;
       canvas.height = C;
       
@@ -355,8 +384,11 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
         // Draw image centered safely
         ctx.drawImage(img, -baseW / 2, -baseH / 2, baseW, baseH);
 
-        // Convert canvas back to Base64 image
-        const finalDataUrl = canvas.toDataURL('image/png');
+        // Convert canvas back to Base64 image (JPEG unless transparent background)
+        const finalDataUrl =
+          bgType === 'transparent'
+            ? canvas.toDataURL('image/png')
+            : canvas.toDataURL('image/jpeg', 0.9);
         onSelectImage(finalDataUrl);
         onClose();
         resetAll();
@@ -384,20 +416,20 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
 
   return (
     <div className="fixed inset-0 bg-deep-navy/50 backdrop-blur-md z-[200] flex items-center justify-center p-4" dir="rtl">
-      <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]">
+      <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh] text-white">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-violet-50 to-white">
+        <div className="px-6 py-4 border-b border-white/15 flex items-center justify-between bg-white/5">
           <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-violet-600/10 flex items-center justify-center text-violet-600">
+            <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-[#fff700]">
               <Sparkles size={18} className="animate-pulse" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-slate-800">تفريغ ومعالجة خلفية الصورة مجاناً</h3>
-              <p className="text-[10px] text-slate-400 font-bold">معالجة فورية وتلقائية داخل جهازك دون استهلاك باقة الإنترنت</p>
+              <h3 className="text-sm font-black text-white">{t('merchant.products.bgRemover.title')}</h3>
+              <p className="text-[10px] text-white/55 font-bold">{t('merchant.products.bgRemover.subtitle')}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg transition text-slate-400 hover:text-slate-600">
+          <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg transition text-white/50 hover:text-white">
             <X size={18} />
           </button>
         </div>
@@ -415,7 +447,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
           {/* STEP 1: Select Image Source */}
           {step === 'source' && (
             <div className="space-y-4">
-              <p className="text-xs text-slate-500 font-bold text-center">اختر طريقة تزويد المنتج بالصورة للبدء بالمعالجة الفورية:</p>
+              <p className="text-xs text-slate-500 font-bold text-center">{t('merchant.products.bgRemover.sourceHint')}</p>
               
               <div className="grid grid-cols-2 gap-3">
                 <button 
@@ -426,8 +458,8 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   <div className="w-11 h-11 bg-emerald-600 rounded-full flex items-center justify-center text-white shadow-md group-hover:scale-110 transition">
                     <Camera size={20} />
                   </div>
-                  <span className="text-xs font-black text-slate-800">كاميرا الهاتف 📱</span>
-                  <span className="text-[9px] text-slate-400 font-bold">بواسطة الكاميرا الرسمية مباشرة</span>
+                  <span className="text-xs font-black text-slate-800">{t('merchant.products.bgRemover.phoneCamera')}</span>
+                  <span className="text-[9px] text-slate-400 font-bold">{t('merchant.products.bgRemover.phoneCameraHint')}</span>
                 </button>
 
                 <button 
@@ -438,8 +470,8 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   <div className="w-11 h-11 bg-slate-700 rounded-full flex items-center justify-center text-white shadow-md group-hover:scale-110 transition">
                     <Upload size={18} />
                   </div>
-                  <span className="text-xs font-black text-slate-800">الأستوديو / الملفات 📁</span>
-                  <span className="text-[9px] text-slate-400 font-bold">اختيار ملف جاهز من جهازك</span>
+                  <span className="text-xs font-black text-slate-800">{t('merchant.products.bgRemover.gallery')}</span>
+                  <span className="text-[9px] text-slate-400 font-bold">{t('merchant.products.bgRemover.galleryHint')}</span>
                 </button>
               </div>
 
@@ -468,8 +500,8 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
               {hasPermission === null && (
                 <div className="w-full max-w-sm aspect-square rounded-3xl bg-slate-50 border border-slate-100 flex flex-col items-center justify-center p-6 text-center space-y-4 shadow-inner">
                   <div className="w-12 h-12 border-4 border-violet-600 border-t-transparent rounded-full animate-spin"></div>
-                  <h5 className="text-xs font-black text-slate-800">جاري التحقق من صلاحيات الكاميرا...</h5>
-                  <p className="text-[10px] text-slate-400 font-bold leading-normal">يرجى الضغط على "السماح" (Allow) إذا ظهر لك طلب من المتصفح للوصول للكاميرا.</p>
+                  <h5 className="text-xs font-black text-slate-800">{t('merchant.products.bgRemover.checkingPermission')}</h5>
+                  <p className="text-[10px] text-slate-400 font-bold leading-normal">{t('merchant.products.bgRemover.allowCameraHint')}</p>
                 </div>
               )}
 
@@ -478,8 +510,8 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center">
                     <ShieldAlert size={24} />
                   </div>
-                  <h5 className="text-xs font-black text-slate-800">صلاحية الكاميرا مرفوضة أو غير مدعومة</h5>
-                  <p className="text-[10px] text-slate-500 font-bold leading-normal">لم نتمكن من الوصول لعدسة الكاميرا الحية بالمتصفح. يرجى تفعيل الإذن أو استخدام كاميرا الهاتف البديلة المدمجة.</p>
+                  <h5 className="text-xs font-black text-slate-800">{t('merchant.products.bgRemover.permissionDeniedTitle')}</h5>
+                  <p className="text-[10px] text-slate-500 font-bold leading-normal">{t('merchant.products.bgRemover.permissionDeniedHint')}</p>
                   
                   <div className="flex flex-col gap-2 w-full">
                     <button
@@ -488,7 +520,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                       className="py-2.5 px-5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-black rounded-xl transition shadow-sm flex items-center justify-center gap-1.5"
                     >
                       <RefreshCw size={14} />
-                      <span>إعادة محاولة الكاميرا الحية 🔄</span>
+                      <span>{t('merchant.products.bgRemover.retryLiveCamera')}</span>
                     </button>
 
                     <button
@@ -497,7 +529,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                       className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl transition shadow-sm flex items-center justify-center gap-1.5"
                     >
                       <Camera size={14} />
-                      <span>تشغيل كاميرا الهاتف البديلة 📸</span>
+                      <span>{t('merchant.products.bgRemover.usePhoneCamera')}</span>
                     </button>
                   </div>
                 </div>
@@ -508,12 +540,18 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   <Webcam
                     audio={false}
                     ref={webcamRef}
-                    screenshotFormat="image/png"
+                    screenshotFormat="image/jpeg"
+                    screenshotQuality={0.92}
+                    forceScreenshotSourceSize={false}
                     className="w-full h-full object-cover"
-                    videoConstraints={{ facingMode: 'environment' }}
-                    onUserMediaError={(err) => {
+                    videoConstraints={{
+                      facingMode: 'environment',
+                      width: { ideal: 1280 },
+                      height: { ideal: 1280 },
+                    }}
+                    onUserMediaError={() => {
                       setHasPermission(false);
-                      setErrorText('لم نتمكن من تشغيل الكاميرا. يرجى التأكد من السماح للتطبيق بالوصول للكاميرا في إعدادات متصفحك أو إعدادات بروفايل التطبيق.');
+                      setErrorText(t('merchant.products.bgRemover.errorWebcamStart'));
                     }}
                   />
                   <div className="absolute inset-0 border-2 border-vibrant-purple m-6 rounded-2xl opacity-40 border-dashed pointer-events-none"></div>
@@ -528,7 +566,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                     className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-2xl text-xs transition shadow-md hover:shadow-lg flex items-center justify-center gap-2"
                   >
                     <Camera size={16} />
-                    <span>التقاط الصورة الآن 📸</span>
+                    <span>{t('merchant.products.bgRemover.captureNow')}</span>
                   </button>
                 )}
                 <button 
@@ -539,7 +577,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   }}
                   className="px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl text-xs transition flex-1 text-center"
                 >
-                  رجوع للمصادر
+                  {t('merchant.products.bgRemover.backToSources')}
                 </button>
               </div>
             </div>
@@ -551,11 +589,11 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
               <div className="flex items-center gap-2 text-center">
                 <Crosshair size={14} className="text-violet-600 shrink-0" />
                 <h4 className="text-xs font-black text-slate-700">
-                  ركّز المنتج داخل الإطار قبل التفريغ
+                  {t('merchant.products.bgRemover.focusTitle')}
                 </h4>
               </div>
               <p className="text-[10px] text-slate-500 font-bold text-center leading-relaxed max-w-xs">
-                كبّر وحرّك الصورة حتى يملأ المنتج المربع — كلما كان أوضح داخل الإطار، كانت النتيجة أسرع وأدق
+                {t('merchant.products.bgRemover.focusHint')}
               </p>
 
               <div
@@ -585,7 +623,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                 />
                 <div className="absolute inset-4 border-2 border-dashed border-vibrant-purple rounded-xl pointer-events-none opacity-70" />
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-violet-600/90 text-white text-[9px] font-black px-2.5 py-1 rounded-full pointer-events-none">
-                  منطقة التركيز
+                  {t('merchant.products.bgRemover.focusZone')}
                 </div>
               </div>
 
@@ -593,7 +631,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-black text-slate-500 flex items-center gap-1">
                     <Move size={12} className="text-violet-500" />
-                    <span>تكبير وموضع المنتج:</span>
+                    <span>{t('merchant.products.bgRemover.zoomPosition')}</span>
                   </span>
                   <button
                     type="button"
@@ -604,7 +642,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                     }}
                     className="text-[10px] font-black text-violet-600 hover:text-violet-800 bg-violet-50 hover:bg-violet-100 px-2.5 py-1 rounded-lg transition"
                   >
-                    إعادة ضبط ↩
+                    {t('merchant.products.bgRemover.reset')}
                   </button>
                 </div>
                 <div className="flex items-center gap-3">
@@ -643,8 +681,8 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center text-white">
                     <Sparkles size={20} className="animate-spin-slow" />
                   </div>
-                  <span className="text-xs font-black">تفريغ الخلفية السحري</span>
-                  <span className="text-[9px] text-white/80 font-bold">إزالة الخلفية بالذكاء الاصطناعي</span>
+                  <span className="text-xs font-black">{t('merchant.products.bgRemover.magicRemove')}</span>
+                  <span className="text-[9px] text-white/80 font-bold">{t('merchant.products.bgRemover.magicRemoveHint')}</span>
                 </button>
 
                 <button
@@ -659,8 +697,8 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   <div className="w-10 h-10 bg-slate-200 text-slate-700 rounded-full flex items-center justify-center">
                     <Check size={20} />
                   </div>
-                  <span className="text-xs font-black text-slate-800">بقاء نفس الصورة كما هي</span>
-                  <span className="text-[9px] text-slate-400 font-bold">مواصلة مع الخلفية الطبيعية</span>
+                  <span className="text-xs font-black text-slate-800">{t('merchant.products.bgRemover.keepOriginal')}</span>
+                  <span className="text-[9px] text-slate-400 font-bold">{t('merchant.products.bgRemover.keepOriginalHint')}</span>
                 </button>
               </div>
 
@@ -670,7 +708,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                 className="mt-2 text-xs font-bold text-slate-400 hover:text-slate-600 flex items-center gap-1.5 transition"
               >
                 <RefreshCw size={12} />
-                <span>إعادة التصوير / الالتقاط</span>
+                <span>{t('merchant.products.bgRemover.retake')}</span>
               </button>
             </div>
           )}
@@ -679,25 +717,38 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
           {step === 'processing' && (
             <div className="py-12 flex flex-col items-center justify-center text-center space-y-6">
               <div className="relative">
-                <div className="w-16 h-16 border-4 border-violet-600 border-t-transparent rounded-full animate-spin"></div>
-                <div className="absolute inset-0 flex items-center justify-center text-violet-600 animate-pulse">
+                <div className="w-16 h-16 border-4 border-vibrant-purple border-t-transparent rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center text-[#fff700] animate-pulse">
                   <Sparkles size={24} />
                 </div>
               </div>
               <div className="space-y-2 max-w-sm w-full px-4">
-                <h4 className="text-sm font-black text-slate-800">جاري تفريغ خلفية الصورة محلياً...</h4>
-                <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                <h4 className="text-sm font-black text-white">{t('merchant.products.bgRemover.processingTitle')}</h4>
+                <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden border border-white/10">
                   <div
-                    className="bg-violet-600 h-2 rounded-full transition-all duration-300"
+                    className="bg-vibrant-purple h-2 rounded-full transition-all duration-300"
                     style={{ width: `${Math.max(progressPct, 2)}%` }}
                   />
                 </div>
-                <p className="text-xs text-slate-500 font-bold leading-relaxed">{progressText}</p>
-                <div className="p-3 bg-amber-50 rounded-2xl border border-amber-100">
-                  <p className="text-[9px] text-amber-700 font-bold leading-normal">
-                    ⏳ المرة الأولى قد تستغرق دقيقة لتحميل النموذج. بعدها تصبح المعالجة أسرع بكثير.
+                <p className="text-xs text-white/70 font-bold leading-relaxed">{progressText || t('merchant.products.bgRemover.preparing')}</p>
+                <div className="p-3 bg-white/5 rounded-2xl border border-white/15 text-right">
+                  <p className="text-[10px] text-white/75 font-bold leading-relaxed">
+                    {t('merchant.products.bgRemover.modelLoadHint')}
                   </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    removalRunIdRef.current += 1;
+                    setStep('preview');
+                    setProgressPct(0);
+                    setProgressText('');
+                    setErrorText(t('merchant.products.bgRemover.cancelled'));
+                  }}
+                  className="mt-2 text-xs font-black text-white/80 underline underline-offset-2 hover:text-white"
+                >
+                  {t('merchant.products.bgRemover.cancelAndBack')}
+                </button>
               </div>
             </div>
           )}
@@ -705,7 +756,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
           {/* STEP 5: Final Finished Result & Custom Background Setting */}
           {step === 'result' && processedUrl && (
             <div className="space-y-4">
-              <h4 className="text-xs font-black text-slate-700 text-center">رائع! تم تفريغ الخلفية بنجاح. اختر لون الخلفية المناسب:</h4>
+              <h4 className="text-xs font-black text-slate-700 text-center">{t('merchant.products.bgRemover.resultTitle')}</h4>
               
               {/* Processed Product Image Canvas Preview inside Chessboard background */}
               <div className="flex flex-col items-center space-y-3">
@@ -755,7 +806,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
 
                 {/* Info guidance */}
                 <p className="text-[10px] text-slate-500 font-bold text-center leading-normal">
-                  👈 حرك الصورة بالفأرة/بإصبعك داخل المربع لتعديل موضعها
+                  {t('merchant.products.bgRemover.dragHint')}
                 </p>
 
                 {/* Zoom / Size Controls & Sliders */}
@@ -763,7 +814,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black text-slate-500 flex items-center gap-1">
                       <Move size={12} className="text-violet-500 animate-pulse" />
-                      <span>حجم وموضع الصورة:</span>
+                      <span>{t('merchant.products.bgRemover.sizePosition')}</span>
                     </span>
                     <button
                       type="button"
@@ -774,7 +825,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                       }}
                       className="text-[10px] font-black text-violet-600 hover:text-violet-800 bg-violet-50 hover:bg-violet-100 px-2.5 py-1 rounded-lg transition"
                     >
-                      إعادة ضبط الموضع ↩
+                      {t('merchant.products.bgRemover.resetPosition')}
                     </button>
                   </div>
 
@@ -816,14 +867,14 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
 
               {/* Background Options selection toolbar */}
               <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                <span className="text-[10px] font-black text-slate-500 block">نوع الخلفية المطلوبة للمنتج:</span>
+                <span className="text-[10px] font-black text-slate-500 block">{t('merchant.products.bgRemover.bgTypeLabel')}</span>
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setBgType('transparent')}
                     className={`py-2 px-3 border rounded-xl text-center text-xs font-bold transition flex items-center justify-center gap-1.5 ${bgType === 'transparent' ? 'bg-vibrant-purple text-white border-transparent' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}`}
                   >
-                    <span>شفاف 🏁</span>
+                    <span>{t('merchant.products.bgRemover.bgTransparent')}</span>
                   </button>
 
                   <button
@@ -831,7 +882,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                     onClick={() => setBgType('white')}
                     className={`py-2 px-3 border rounded-xl text-center text-xs font-bold transition flex items-center justify-center gap-1.5 ${bgType === 'white' ? 'bg-vibrant-purple text-white border-transparent' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}`}
                   >
-                    <span>أبيض ناصع ⬜</span>
+                    <span>{t('merchant.products.bgRemover.bgWhite')}</span>
                   </button>
 
                   <button
@@ -840,7 +891,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                     className={`py-2 px-3 border rounded-xl text-center text-xs font-bold transition flex items-center justify-center gap-1.5 ${bgType === 'custom' ? 'bg-vibrant-purple text-white border-transparent' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}`}
                   >
                     <Palette size={14} />
-                    <span>لون مخصص 🎨</span>
+                    <span>{t('merchant.products.bgRemover.bgCustom')}</span>
                   </button>
                 </div>
 
@@ -848,7 +899,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                 {bgType === 'custom' && (
                   <div className="space-y-2 pt-2 border-t border-slate-200/50">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold text-slate-400">اختر لون براندك:</span>
+                      <span className="text-[10px] font-bold text-slate-400">{t('merchant.products.bgRemover.pickBrandColor')}</span>
                       <input 
                         type="color" 
                         value={customColor}
@@ -881,7 +932,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-2xl text-xs transition shadow-md hover:shadow-lg flex items-center justify-center gap-2"
                 >
                   <Check size={16} />
-                  <span>تطبيق واعتماد صورة المنتج ✅</span>
+                  <span>{t('merchant.products.bgRemover.applyImage')}</span>
                 </button>
                 
                 <button
@@ -889,7 +940,7 @@ export const BackgroundRemover: React.FC<BackgroundRemoverProps> = ({
                   onClick={resetAll}
                   className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl text-xs transition"
                 >
-                  إعادة المعالجة
+                  {t('merchant.products.bgRemover.reprocess')}
                 </button>
               </div>
             </div>

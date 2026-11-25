@@ -1,8 +1,8 @@
 import { useContext } from 'react';
-import { AppContext } from './AppContext';
+import { AppContextStore } from './AppContextStore';
 
 export const useApp = () => {
-  const context = useContext(AppContext);
+  const context = useContext(AppContextStore);
   if (!context) throw new Error('useApp error');
   return context;
 };

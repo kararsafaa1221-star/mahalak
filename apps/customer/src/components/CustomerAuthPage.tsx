@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { WelcomeAuthPage } from '@shared/components/WelcomeAuthPage';
 
 interface CustomerAuthPageProps {
@@ -6,8 +7,11 @@ interface CustomerAuthPageProps {
   contentKey?: string;
 }
 
-export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ children, contentKey }) => (
-  <WelcomeAuthPage contentKey={contentKey} ariaLabel="تسجيل دخول الزبون">
-    {children}
-  </WelcomeAuthPage>
-);
+export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ children, contentKey }) => {
+  const { t } = useTranslation();
+  return (
+    <WelcomeAuthPage contentKey={contentKey} ariaLabel={t('auth.customerLoginAria')}>
+      {children}
+    </WelcomeAuthPage>
+  );
+};

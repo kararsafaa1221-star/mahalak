@@ -31,9 +31,11 @@ const ACTION_LABELS_AR: Record<string, string> = {
   'store.update': 'تعديل بيانات متجر',
   'store.subscription_activate': 'تفعيل اشتراك متجر',
   'store.subscription_renew': 'تجديد اشتراك متجر',
+  'store.subscription_gift': 'إرسال اشتراك هدية',
   'store.subscription_decrease': 'تقليل مدة اشتراك متجر',
   'store.subscription_end': 'إنهاء اشتراك متجر',
   'store.verification_grant': 'توثيق متجر',
+  'store.verification_gift': 'إرسال توثيق هدية',
   'store.verification_revoke': 'إلغاء توثيق متجر',
   'store.auto_subscription_exempt': 'استثناء متجر من الاشتراك التلقائي',
   'store.auto_subscription_include': 'إلغاء استثناء متجر من الاشتراك التلقائي',
@@ -59,11 +61,15 @@ const ACTION_LABELS_AR: Record<string, string> = {
   'settings.update': 'تحديث الإعدادات',
   'settings.auto_subscription': 'تحديث إعدادات الاشتراك التلقائي',
   'settings.ads': 'تحديث إعدادات الإعلانات',
+  'settings.verification_benefits': 'تحديث مميزات التوثيق',
   'settings.featured_stores': 'تحديث المتاجر المميزة',
   'settings.nearby_stores': 'تحديث المتاجر القريبة',
   'settings.toggle': 'تغيير إعداد نظام',
+  'settings.role_labels_update': 'تعديل أسماء الأدوار',
+  'settings.custom_roles_update': 'تحديث الأدوار المخصصة',
   'subscription.price_update': 'تحديث سعر اشتراك',
   'broadcast.send': 'إرسال إشعار جماعي',
+  'broadcast.send_template': 'إرسال قالب جاهز',
   'flash_sale.create': 'إنشاء فعالية',
   'flash_sale.status_update': 'تحديث حالة فعالية',
   'flash_sale.dates_update': 'تحديث مواعيد فعالية',
@@ -119,7 +125,7 @@ const STATUS_LABELS_AR: Record<string, string> = {
   all: 'الكل',
 };
 
-const ROLE_LABELS_AR: Record<string, string> = {
+export const ROLE_LABELS_AR: Record<string, string> = {
   owner: 'مالك',
   admin: 'مدير',
   supervisor: 'مشرف',
@@ -211,12 +217,16 @@ export function buildDescriptionAr(actionKey: string, targetId?: string | null, 
       return meta?.description ?? (ref ? `تم تفعيل اشتراك المتجر «${ref}».` : 'تم تفعيل اشتراك متجر.');
     case 'store.subscription_renew':
       return meta?.description ?? (ref ? `تم تجديد اشتراك المتجر «${ref}».` : 'تم تجديد اشتراك متجر.');
+    case 'store.subscription_gift':
+      return meta?.description ?? (ref ? `تم إرسال اشتراك هدية للمتجر «${ref}».` : 'تم إرسال اشتراك هدية.');
     case 'store.subscription_decrease':
       return meta?.description ?? (ref ? `تم تقليل مدة اشتراك المتجر «${ref}».` : 'تم تقليل مدة اشتراك متجر.');
     case 'store.subscription_end':
       return meta?.description ?? (ref ? `تم إنهاء اشتراك المتجر «${ref}».` : 'تم إنهاء اشتراك متجر.');
     case 'store.verification_grant':
       return meta?.description ?? (ref ? `تم توثيق المتجر «${ref}».` : 'تم توثيق متجر.');
+    case 'store.verification_gift':
+      return meta?.description ?? (ref ? `تم إرسال توثيق هدية للمتجر «${ref}».` : 'تم إرسال توثيق هدية.');
     case 'store.verification_revoke':
       return meta?.description ?? (ref ? `تم إلغاء توثيق المتجر «${ref}».` : 'تم إلغاء توثيق متجر.');
     case 'store.auto_subscription_exempt':
@@ -268,9 +278,12 @@ export function buildDescriptionAr(actionKey: string, targetId?: string | null, 
       return meta?.description ?? 'تم تحديث الإعدادات العامة للتطبيق.';
     case 'settings.auto_subscription':
     case 'settings.ads':
+    case 'settings.verification_benefits':
     case 'settings.featured_stores':
     case 'settings.nearby_stores':
     case 'settings.toggle':
+    case 'settings.role_labels_update':
+    case 'settings.custom_roles_update':
       return meta?.description ?? getActionLabelAr(actionKey);
     case 'subscription.price_update':
       return ref

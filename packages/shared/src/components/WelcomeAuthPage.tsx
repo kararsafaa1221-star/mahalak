@@ -1,8 +1,10 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useTranslation } from 'react-i18next';
 import { WelcomeScreenBackground } from './WelcomeScreenBackground';
 import { WelcomeScreenLogo } from './WelcomeScreenLogo';
 import { welcomeSlideVariants } from './welcomeScreenMotion';
+import { LanguageSwitcher } from '../i18n/LanguageSwitcher';
 
 interface WelcomeAuthPageProps {
   children: React.ReactNode;
@@ -15,12 +17,18 @@ export const WelcomeAuthPage: React.FC<WelcomeAuthPageProps> = ({
   contentKey = 'auth',
   ariaLabel,
 }) => {
+  const { t } = useTranslation();
+
   return (
     <div
       className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 text-center relative overflow-x-hidden overflow-y-auto text-white bg-deep-navy"
       dir="rtl"
     >
       <WelcomeScreenBackground />
+
+      <div className="absolute top-4 left-4 z-20">
+        <LanguageSwitcher variant="compact" />
+      </div>
 
       <div className="relative z-10 w-full max-w-md flex flex-col items-center py-4 sm:py-6">
         <WelcomeScreenLogo step={1} />
@@ -46,7 +54,7 @@ export const WelcomeAuthPage: React.FC<WelcomeAuthPageProps> = ({
             transition={{ duration: 0.5, delay: 0.6 }}
             className="mt-6 text-center text-xs font-medium text-slate-500"
           >
-            صُنع بأيادي عراقية © 2026
+            {t('app.madeInIraq')}
           </motion.p>
         </div>
       </div>

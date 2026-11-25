@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Crown, MessageCircle, Store as StoreIcon } from 'lucide-react';
 import type { Store } from '@shared/types';
@@ -7,6 +8,10 @@ import {
   formatIqd,
   type MerchantRenewalPageResolved,
 } from '@shared/constants/merchantRenewalPlans';
+import {
+  localizeRenewalPlanBadge,
+  localizeRenewalPlanLabel,
+} from '@shared/i18n/localizeLabels';
 
 type Props = {
   store: Store;
@@ -23,6 +28,7 @@ export const MerchantSubscriptionPlans: React.FC<Props> = ({
   onClose,
   isRenewal = false,
 }) => {
+  const { t } = useTranslation();
   const title = isRenewal ? pageSettings.titleRenewal : pageSettings.titleActivation;
 
   const openWhatsAppForPlan = (planLabelAr: string) => {
@@ -54,15 +60,15 @@ export const MerchantSubscriptionPlans: React.FC<Props> = ({
           exit={{ y: 24, opacity: 0 }}
           transition={{ type: 'spring', damping: 30, stiffness: 400 }}
           onClick={(e) => e.stopPropagation()}
-          className="w-full sm:max-w-sm bg-white sm:rounded-2xl rounded-2xl shadow-2xl shadow-vibrant-purple/20 overflow-hidden border border-violet/15"
+          className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full sm:max-w-sm sm:rounded-2xl rounded-2xl shadow-2xl overflow-hidden text-white"
           dir="rtl"
         >
-          <div className="relative bg-gradient-to-l from-vibrant-purple to-deep-navy px-3 py-2.5 text-white">
+          <div className="relative px-3 py-2.5 text-white">
             <button
               type="button"
               onClick={onClose}
               className="absolute top-2 left-2 z-10 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
-              aria-label="إغلاق"
+              aria-label={t('merchant.subscription.close')}
             >
               <X size={16} />
             </button>
@@ -82,26 +88,35 @@ export const MerchantSubscriptionPlans: React.FC<Props> = ({
                   ) : (
                     <StoreIcon size={10} className="text-violet shrink-0" />
                   )}
-                  <span className="text-[9px] font-bold text-white/80 truncate">{store.shopName}</span>
+                  <span className="min-w-0 flex flex-col items-start">
+                    <span className="text-[9px] font-bold text-white/90 truncate max-w-full">{store.shopName}</span>
+                    {store.username ? (
+                      <span className="text-[8px] font-bold text-white/70 truncate max-w-full" dir="ltr">
+                        @{String(store.username).replace(/^@+/, '')}
+                      </span>
+                    ) : null}
+                  </span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="px-2.5 py-2 space-y-1.5 bg-slate-50/50">
+          <div className="px-2.5 py-2 space-y-1.5 bg-white/5">
             {pageSettings.plans.map((plan) => {
               const isFeatured = plan.highlight;
+              const planLabel = localizeRenewalPlanLabel(plan);
+              const planBadge = localizeRenewalPlanBadge(plan);
               return (
                 <div
                   key={plan.id}
                   className={[
-                    'relative flex items-center gap-2 rounded-xl px-2.5 py-2 bg-white transition-all',
+                    'relative flex items-center gap-2 rounded-xl px-2.5 py-2 bg-white/5 backdrop-blur-md transition-all',
                     isFeatured
-                      ? 'border-2 border-vibrant-purple/35 shadow-sm shadow-vibrant-purple/10'
-                      : 'border border-slate-100',
+                      ? 'border-2 border-[#fff700]/35 shadow-sm shadow-vibrant-purple/20'
+                      : 'border border-white/15',
                   ].join(' ')}
                 >
-                  {plan.badge && (
+                  {planBadge && (
                     <span
                       className={[
                         'absolute -top-1.5 right-2 text-[7px] font-black px-1.5 py-0.5 rounded-full leading-none',
@@ -110,20 +125,20 @@ export const MerchantSubscriptionPlans: React.FC<Props> = ({
                           : 'bg-vibrant-purple text-white',
                       ].join(' ')}
                     >
-                      {plan.badge}
+                      {planBadge}
                       {isFeatured ? ' 🔥' : ''}
                     </span>
                   )}
 
                   <div className="flex-1 min-w-0 text-right">
-                    <p className="text-[11px] font-black text-deep-navy leading-tight">{plan.labelAr}</p>
+                    <p className="text-[11px] font-black text-white leading-tight">{planLabel}</p>
                     <div className="flex items-center justify-end gap-2 mt-0.5 flex-wrap">
-                      <span className="text-[8px] font-bold text-vibrant-purple bg-vibrant-purple/8 px-1.5 py-0.5 rounded-md">
-                        {formatIqd(plan.dailyIqd)} د.ع/يوم
+                      <span className="text-[8px] font-bold text-[#fff700] bg-white/10 border border-white/15 px-1.5 py-0.5 rounded-md">
+                        {t('merchant.subscription.perDay', { amount: formatIqd(plan.dailyIqd) })}
                       </span>
-                      <span className="text-base font-black text-vibrant-purple tabular-nums leading-none">
+                      <span className="text-base font-black text-[#fff700] tabular-nums leading-none">
                         {formatIqd(plan.priceIqd)}
-                        <span className="text-[9px] font-bold text-slate-400 mr-0.5">د.ع</span>
+                        <span className="text-[9px] font-bold text-white/50 mr-0.5">{t('common.currency')}</span>
                       </span>
                     </div>
                   </div>
@@ -132,7 +147,7 @@ export const MerchantSubscriptionPlans: React.FC<Props> = ({
                     type="button"
                     onClick={() => openWhatsAppForPlan(plan.labelAr)}
                     className="shrink-0 flex flex-col items-center justify-center gap-0.5 bg-[#25D366] hover:bg-[#20BD5A] text-white rounded-lg px-2.5 py-2 transition-all active:scale-95 min-w-[52px]"
-                    title={isRenewal ? 'تجديد عبر واتساب' : 'تواصل مع الدعم'}
+                    title={isRenewal ? t('merchant.subscription.whatsAppRenew') : t('merchant.subscription.whatsAppSupport')}
                   >
                     <MessageCircle size={14} strokeWidth={2.5} />
                     <span className="text-[8px] font-black leading-none">{pageSettings.whatsappButtonLabel}</span>
@@ -142,7 +157,7 @@ export const MerchantSubscriptionPlans: React.FC<Props> = ({
             })}
           </div>
 
-          <p className="text-[8px] text-center text-slate-400 font-bold px-3 py-2 bg-white border-t border-slate-100 leading-snug">
+          <p className="text-[8px] text-center text-white/55 font-bold px-3 py-2 bg-white/5 border-t border-white/15 leading-snug">
             {pageSettings.footerNote}
           </p>
         </motion.div>

@@ -1,8 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback, useTransition, useRef } from 'react';
 import { useApp } from '../../context/useApp';
 import { useNavigate, useParams } from 'react-router-dom';
-import { auth } from '../../lib/firebase';
-import { signOut } from 'firebase/auth';
 import { StorageService } from '../../services/storageService';
 import { Store, Customer, Order, Product } from '../../types';
 import { STORE_CATEGORIES, STORE_BADGES } from '../../constants';
@@ -47,16 +45,31 @@ import { VerifiedBadge } from '../../components/VerifiedBadge';
 import { ActivityLogsPanel } from './ActivityLogsPanel';
 import { AdminManagement } from './AdminManagement';
 import { AdminSidebar } from '../../components/AdminSidebar';
+import { AdminBottomNav } from '../../components/AdminBottomNav';
 import { AutoSubscriptionSettingsCard, AutoSubscriptionSettingsModal } from '../../components/AutoSubscriptionSettings';
 import { LoyaltyWalletSettings } from '../../components/LoyaltyWalletSettings';
+import { SpinWheelSettingsCard } from '../../components/SpinWheelSettings';
+import { SpinWheelHistoryPanel } from '../../components/SpinWheelHistoryPanel';
 import { MerchantRenewalPageSettings } from '../../components/MerchantRenewalPageSettings';
+import { FlashSalesDisplaySettings } from '../../components/FlashSalesDisplaySettings';
+import { NotificationCenterPanel } from '../../components/NotificationCenterPanel';
 import { SubscriptionAccountsPanel } from '../../components/SubscriptionAccountsPanel';
 import {
   buildStoreActivationFromPlan,
+  buildStoreGiftActivationFromPlan,
   formatIqd,
   getSubscriptionPlanLabel,
   resolveAllSubscriptionPlans,
 } from '@shared/constants/merchantRenewalPlans';
+import { VerificationPricingSettingsCard } from '../../components/VerificationPricingSettings';
+import { VerificationBenefitsSettingsCard } from '../../components/VerificationBenefitsSettings';
+import {
+  buildVerificationGiftGrant,
+  buildVerificationPaidGrant,
+  formatVerificationIqd,
+  resolveAllVerificationPlans,
+} from '@shared/constants/verificationPricing';
+import { buildNotificationContent, notificationDeliveryFields } from '@shared/constants/notificationTemplates';
 import { AdminModal } from '../../components/AdminModal';
 import {
   DEFAULT_FALLBACK_TAB,
@@ -69,190 +82,6 @@ import {
 const notificationSound = new Audio(
   "https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3",
 );
-
-// ==========================================
-// مكون نموذج إرسال الإشعارات العامة
-// ==========================================
-type BroadcastAudience = 'customers' | 'merchants' | 'both';
-
-const BroadcastForm: React.FC = () => {
-  const { sendAdminNotification, provinces, customers, stores } = useApp();
-  const [title, setTitle] = useState('');
-  const [message, setMessage] = useState('');
-  const [audience, setAudience] = useState<BroadcastAudience>('customers');
-  const [scope, setScope] = useState<'all' | string>('all');
-  const [sent, setSent] = useState(false);
-
-  const eligibleCustomers = customers.filter((c) => !c.isBlocked);
-  const eligibleMerchants = stores.filter(
-    (s) => s.status === 'active' && !s.isBanned && !s.is_virtual,
-  );
-
-  const customersInScope =
-    scope === 'all'
-      ? eligibleCustomers
-      : eligibleCustomers.filter((c) => c.province === scope);
-  const merchantsInScope =
-    scope === 'all'
-      ? eligibleMerchants
-      : eligibleMerchants.filter((s) => s.province === scope);
-
-  const customerCount = audience === 'merchants' ? 0 : customersInScope.length;
-  const merchantCount = audience === 'customers' ? 0 : merchantsInScope.length;
-  const totalCount = customerCount + merchantCount;
-
-  const buildTarget = () => `${audience}:${scope}`;
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim() || !message.trim() || totalCount === 0) return;
-
-    try {
-      await sendAdminNotification(title.trim(), message.trim(), buildTarget());
-      setSent(true);
-      setTitle('');
-      setMessage('');
-      setAudience('customers');
-      setScope('all');
-      setTimeout(() => setSent(false), 3000);
-    } catch {
-      showToast('error', 'فشل الإرسال', 'تعذر إرسال الإشعار. حاول مرة أخرى.');
-    }
-  };
-
-  const audienceSummary =
-    audience === 'customers'
-      ? `${customerCount} زبون`
-      : audience === 'merchants'
-        ? `${merchantCount} تاجر`
-        : `${customerCount} زبون و ${merchantCount} تاجر (${totalCount} إجمالاً)`;
-
-  const deliveryHint =
-    audience === 'customers'
-      ? 'يظهر للزبائن في قائمة إشعاراتهم وتطبيق محلك'
-      : audience === 'merchants'
-        ? 'يظهر للتجار في قائمة إشعاراتهم وتطبيق التاجر'
-        : 'يظهر للزبائن والتجار في تطبيقاتهم وقوائم الإشعارات';
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      {sent && (
-        <div className="bg-green-50 border border-green-200 text-green-700 p-3 rounded-xl text-sm font-bold flex items-center space-x-2 space-x-reverse animate-fade-in">
-          <Check size={18} />
-          <span>تم إرسال الإشعار بنجاح! 📢</span>
-        </div>
-      )}
-
-      <div>
-        <label className="block text-xs font-bold text-gray-500 mb-1">عنوان الإشعار *</label>
-        <input 
-          type="text" 
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="مثال: عروض رمضان الكبرى"
-          required
-          className="w-full border border-gray-200 p-3 rounded-xl text-sm focus:ring-2 focus:ring-[#9952FF] focus:outline-none"
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-gray-500 mb-1">نص الإشعار *</label>
-        <textarea 
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="اكتب محتوى الإشعار هنا..."
-          required
-          rows={4}
-          className="w-full border border-gray-200 p-3 rounded-xl text-sm focus:ring-2 focus:ring-[#9952FF] focus:outline-none resize-none"
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-gray-500 mb-1">نوع الجمهور</label>
-        <select
-          value={audience}
-          onChange={(e) => setAudience(e.target.value as BroadcastAudience)}
-          className="w-full border border-gray-200 p-3 rounded-xl text-sm bg-white focus:ring-2 focus:ring-[#9952FF] focus:outline-none"
-        >
-          <option value="customers">الزبائن فقط ({eligibleCustomers.length})</option>
-          <option value="merchants">التجار فقط ({eligibleMerchants.length})</option>
-          <option value="both">الزبائن والتجار معاً ({eligibleCustomers.length + eligibleMerchants.length})</option>
-        </select>
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-gray-500 mb-1">النطاق الجغرافي</label>
-        <select 
-          value={scope}
-          onChange={(e) => setScope(e.target.value)}
-          className="w-full border border-gray-200 p-3 rounded-xl text-sm bg-white focus:ring-2 focus:ring-[#9952FF] focus:outline-none"
-        >
-          <option value="all">
-            {audience === 'customers'
-              ? `جميع الزبائن (${eligibleCustomers.length})`
-              : audience === 'merchants'
-                ? `جميع التجار (${eligibleMerchants.length})`
-                : `الجميع — زبائن وتجار (${eligibleCustomers.length + eligibleMerchants.length})`}
-          </option>
-          {provinces.map((p) => {
-            const cCount = eligibleCustomers.filter((c) => c.province === p.name).length;
-            const mCount = eligibleMerchants.filter((s) => s.province === p.name).length;
-            const label =
-              audience === 'customers'
-                ? `${p.name} (${cCount} زبون)`
-                : audience === 'merchants'
-                  ? `${p.name} (${mCount} تاجر)`
-                  : `${p.name} (${cCount} زبون، ${mCount} تاجر)`;
-            return (
-              <option key={p.id} value={p.name}>
-                {label}
-              </option>
-            );
-          })}
-        </select>
-      </div>
-
-      <div className="bg-[#f5eeff] p-3 rounded-xl border border-[#e9daff]">
-        <p className="text-xs text-[#4D2980] font-bold">
-          📊 عدد المستلمين: <span className="text-lg">{audienceSummary}</span>
-        </p>
-        <p className="text-[10px] text-[#9952FF] mt-1">
-          الإشعار يرسل باسم "محلك" — {deliveryHint}
-        </p>
-        {totalCount === 0 && (
-          <p className="text-[10px] text-red-600 mt-2 font-bold">
-            لا يوجد مستلمون في النطاق المحدد.
-          </p>
-        )}
-      </div>
-
-      {(title.trim() || message.trim()) && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 mb-3">معاينة شكل الإشعار</p>
-          {title.trim() ? (
-            <h4 className="text-base font-black text-slate-900 mb-1 leading-snug">{title}</h4>
-          ) : (
-            <h4 className="text-base font-black text-slate-300 mb-1 leading-snug">عنوان الإشعار</h4>
-          )}
-          {message.trim() ? (
-            <p className="text-sm text-slate-500 font-normal leading-relaxed whitespace-pre-line">{message}</p>
-          ) : (
-            <p className="text-sm text-slate-300 font-normal leading-relaxed">نص الإشعار يظهر هنا...</p>
-          )}
-        </div>
-      )}
-
-      <button 
-        type="submit"
-        disabled={!title.trim() || !message.trim() || totalCount === 0}
-        className="w-full py-3 bg-gradient-to-l from-[#9952FF] to-[#4D2980] hover:from-[#4D2980] hover:to-[#4D2980] text-white font-bold rounded-xl shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 space-x-reverse"
-      >
-        <Bell size={18} />
-        <span>إرسال الإشعار الآن</span>
-      </button>
-    </form>
-  );
-};
 
 // ==========================================
 // Database Management Panel
@@ -952,6 +781,9 @@ type AdsSettingsDraft = {
   merchantAdsSectionOrder: ReturnType<typeof getMerchantAdsSectionOrder>;
   merchantDeliveryAds: any[];
   merchantMediaAds: any[];
+  enableVerifiedStoresCarousel: boolean;
+  verifiedStoresCarouselInterval: number;
+  verifiedStoresCarouselExcludeIds: string[];
 };
 
 /** Deep-clone ads so draft edits never mutate live adminSettings by reference. */
@@ -966,6 +798,14 @@ const createAdsSettingsDraft = (settings: Record<string, any>): AdsSettingsDraft
   merchantAdsSectionOrder: getMerchantAdsSectionOrder(settings.merchantAdsSectionOrder),
   merchantDeliveryAds: cloneSponsoredAdsList(settings.merchantDeliveryAds ?? settings.merchantAds),
   merchantMediaAds: cloneSponsoredAdsList(settings.merchantMediaAds),
+  enableVerifiedStoresCarousel: settings.enableVerifiedStoresCarousel !== false,
+  verifiedStoresCarouselInterval:
+    Number(settings.verifiedStoresCarouselInterval) > 0
+      ? Number(settings.verifiedStoresCarouselInterval)
+      : 4,
+  verifiedStoresCarouselExcludeIds: Array.isArray(settings.verifiedStoresCarouselExcludeIds)
+    ? [...settings.verifiedStoresCarouselExcludeIds]
+    : [],
 });
 
 const SponsoredAdOrderControls: React.FC<{
@@ -1011,12 +851,16 @@ export const AdminPanel: React.FC = () => {
     updateStoreReview, deleteStoreReview,
     markAllNotificationsAsRead,
     deleteProduct, updateProduct, addProduct, updateAdminSettings,
-    flashSales, flashSaleRequests, createFlashSale, updateFlashSaleStatus, updateFlashSaleRequestStatus, updateFlashSaleDates, deleteFlashSale,
+    flashSales, flashSaleRequests, createFlashSale, updateFlashSaleStatus, updateFlashSaleRequestStatus, updateFlashSaleDates, updateFlashSale, deleteFlashSale,
     rechargeCodes, generateRechargeCodes, deleteRechargeCode, seedDatabase,
     generateVirtualData, deleteAllVirtualData,
     getCustomerSeqId, getOrderSeqId,
     payoutRequests, completePayout,
     updateOrderStatus,
+    addNotification,
+    adminStaff,
+    adminLogout,
+    updateMyProfile,
   } = useApp();
 
   // ==========================================
@@ -1166,6 +1010,18 @@ export const AdminPanel: React.FC = () => {
     }
   }, [catalogPlans, selectedActivationPlanId]);
 
+  // باقات توثيق المتاجر (الشارة الرسمية)
+  const catalogVerificationPlans = useMemo(() => resolveAllVerificationPlans(adminSettings), [adminSettings]);
+  const [selectedVerificationPlanId, setSelectedVerificationPlanId] = useState('verify_1m');
+  const [verifyAsLifetime, setVerifyAsLifetime] = useState(false);
+
+  useEffect(() => {
+    if (catalogVerificationPlans.length === 0) return;
+    if (!catalogVerificationPlans.some((p) => p.id === selectedVerificationPlanId)) {
+      setSelectedVerificationPlanId(catalogVerificationPlans[0].id);
+    }
+  }, [catalogVerificationPlans, selectedVerificationPlanId]);
+
   // إنشاء بروموكود جديد
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [newPromoCode, setNewPromoCode] = useState('');
@@ -1215,8 +1071,6 @@ export const AdminPanel: React.FC = () => {
     logo: '',
     status: 'active'
   });
-  const [verifyDuration, setVerifyDuration] = useState<number>(30);
-  const [verifyDurationType, setVerifyDurationType] = useState<'days' | 'months' | 'years' | 'lifetime'>('days');
   const [subDecreaseSelection, setSubDecreaseSelection] = useState<string>('1_day');
   
   // لتمثيل تعديل المنتجات الخاص بالمتجر النشط
@@ -1296,6 +1150,11 @@ export const AdminPanel: React.FC = () => {
 
   const [deleteConfirmModal, setDeleteConfirmModal] = useState<{type: 'store' | 'customer' | 'flashSale', id: string, name: string} | null>(null);
   const [editFlashSaleDatesModal, setEditFlashSaleDatesModal] = useState<{id: string, name: string, start: string, end: string} | null>(null);
+  const [editFlashSaleTextsModal, setEditFlashSaleTextsModal] = useState<{
+    id: string;
+    title: string;
+    description: string;
+  } | null>(null);
 
   // تحديث الحقول بشكل تلقائي عند تغيير المتجر المختار للتعديل
   useEffect(() => {
@@ -1540,9 +1399,42 @@ export const AdminPanel: React.FC = () => {
   const [themeColor, setThemeColor] = useState<'indigo' | 'emerald' | 'blue' | 'purple' | 'rose' | 'amber'>('indigo');
   const [showThemePicker, setShowThemePicker] = useState(false);
 
-  // حالات البحث في اختيار المتاجر المميزة والقريبة وفي الإعلانات
+  // نافذة تعديل الملف الشخصي (الاسم والصورة) — متاحة لكل موظف بغض النظر عن صلاحياته
+  const [showMyProfileModal, setShowMyProfileModal] = useState(false);
+  const [myProfileName, setMyProfileName] = useState('');
+  const [myProfilePhoto, setMyProfilePhoto] = useState('');
+  const [savingMyProfile, setSavingMyProfile] = useState(false);
+
+  const openMyProfileModal = () => {
+    setMyProfileName(currentAdminDoc?.name || '');
+    setMyProfilePhoto(currentAdminDoc?.photoUrl || '');
+    setShowMyProfileModal(true);
+  };
+
+  const handleSaveMyProfile = async () => {
+    if (!myProfileName.trim()) {
+      showToast('warning', 'يرجى إدخال الاسم');
+      return;
+    }
+    setSavingMyProfile(true);
+    try {
+      await updateMyProfile({ name: myProfileName.trim(), photoUrl: myProfilePhoto });
+      showToast('success', 'تم الحفظ', 'تم تحديث ملفك الشخصي بنجاح');
+      setShowMyProfileModal(false);
+    } catch (error) {
+      showToast('error', 'فشل الحفظ', error instanceof Error ? error.message : 'حدث خطأ غير متوقع');
+    } finally {
+      setSavingMyProfile(false);
+    }
+  };
+
+  const myProfileInitials = (currentAdminDoc?.name || currentAdminDoc?.email || 'A').trim().slice(0, 2).toUpperCase();
+
+  // حالات البحث في اختيار المتاجر (مثلاً استبعاد سلايدر الموثّقة) وفي الإعلانات
   const [storeSearch, setStoreSearch] = useState('');
   const [adTargetSearch, setAdTargetSearch] = useState('');
+  // بحث في جدول أرباح جميع المتاجر (تاب المستحقات)
+  const [payoutsWalletSearch, setPayoutsWalletSearch] = useState('');
   const [selectedAdForTarget, setSelectedAdForTarget] = useState<number | null>(null);
   const [adsDraft, setAdsDraft] = useState<AdsSettingsDraft>(() => createAdsSettingsDraft(adminSettings));
   const [adsDirty, setAdsDirty] = useState(false);
@@ -1820,12 +1712,24 @@ export const AdminPanel: React.FC = () => {
     activePromos: stats.activePromos,
     unreadReviews: storeReviews.filter((r) => !r.isReadByAdmin && stores.some((s) => s.id === r.storeId)).length,
     pendingPayouts: payoutRequests.filter((r) => r.status === 'pending').length,
-  }), [stats.totalCustomers, stats.pendingOrders, stats.totalProducts, stats.activePromos, storeReviews, stores, payoutRequests]);
+    pendingStores: stores.filter((s) => s.status === 'pending').length,
+    expiredSubscriptions: stats.expiredSubscriptionStores,
+    pendingFlashSaleRequests: flashSaleRequests.filter((r) => r.status === 'pending').length,
+    blockedAccountsCount: blockedAccounts.length,
+    activeRechargeCodes: stats.activeRechargeCodes,
+    adsCount: (adminSettings?.ads?.length as number) || 0,
+    adminStaffCount: adminStaff.length,
+  }), [
+    stats.totalCustomers, stats.pendingOrders, stats.totalProducts, stats.activePromos,
+    stats.expiredSubscriptionStores, stats.activeRechargeCodes,
+    storeReviews, stores, payoutRequests, flashSaleRequests, blockedAccounts,
+    adminSettings, adminStaff,
+  ]);
 
   // تسجيل خروج الأدمن
   const handleAdminLogout = async () => {
     try {
-      await signOut(auth);
+      await adminLogout();
     } catch {
       // ignore sign-out errors
     }
@@ -1967,9 +1871,11 @@ export const AdminPanel: React.FC = () => {
       </button>
 
       {/* ==========================================
-          الشريط الجانبي (Sidebar) - ينغلق آلياً بالمحمول
+          الشريط الجانبي (يمين) — ثابت على الكمبيوتر، درج على الموبايل
           ========================================== */}
-      <aside className={`admin-sidebar ${sidebarOpen ? 'admin-sidebar-open' : 'admin-sidebar-closed'} w-72 bg-gradient-to-b from-[#4D2980] to-[#381a66] text-white p-4 flex flex-col fixed right-0 top-0 h-screen z-[950] shadow-2xl transition-transform duration-300`}>
+      <aside
+        className={`admin-sidebar ${sidebarOpen ? 'admin-sidebar-open' : 'admin-sidebar-closed'} w-72 bg-gradient-to-b from-[#4D2980] to-[#381a66] text-white p-4 flex flex-col fixed right-0 top-0 h-screen z-[950] shadow-2xl transition-transform duration-300 lg:translate-x-0`}
+      >
         
         {/* اللوغو */}
         <div className="flex items-center space-x-3 space-x-reverse border-b border-[#9952FF] pb-4 mb-4">
@@ -1999,10 +1905,13 @@ export const AdminPanel: React.FC = () => {
         </button>
       </aside>
 
+      {/* شريط التنقل السفلي — يظهر على الكمبيوتر بجانب الشريط الجانبي */}
+      <AdminBottomNav activeTab={activeTab} onSelect={handleTabSelect} />
+
       {/* ==========================================
           المحتوى الرئيسي
           ========================================== */}
-      <main className="flex-1 min-w-0 lg:mr-72 p-4 lg:p-6 pt-0 lg:pt-0 pb-20 lg:pb-6">
+      <main className="flex-1 min-w-0 lg:mr-72 p-4 lg:p-6 pt-0 lg:pt-0 pb-20 lg:pb-20">
         
         {/* الهيدر العلوي */}
         <header className="sticky top-0 z-10 flex justify-between items-center mb-6 bg-white p-4 rounded-b-2xl md:rounded-2xl shadow-sm border border-slate-200 border-t-0">
@@ -2019,10 +1928,10 @@ export const AdminPanel: React.FC = () => {
               {activeTab === 'promos' && '🎫 إدارة أكواد الخصم والعروض'}
               {activeTab === 'subscriptions' && '💳 الاشتراكات والتفعيل التلقائي'}
               {activeTab === 'payouts' && '💰 أرباح المتاجر (المستحقات)'}
-              {activeTab === 'accounts' && '🧮 الحسابات — أرباح الاشتراكات'}
+              {activeTab === 'accounts' && '🧮 الحسابات — أرباح الاشتراكات والتوثيق'}
                 {activeTab === 'flashsales' && '⚡ الفعاليات المركزية (Flash Sales)'}
                 {activeTab === 'reviews' && '⭐ تقييمات المتاجر'}
-                {activeTab === 'broadcast' && '📢 إرسال إشعارات'}
+                {(activeTab === 'notificationCenter' || activeTab === 'broadcast' || activeTab === 'notificationTemplates') && '🔔 مركز الإشعارات'}
                 {activeTab === 'whatsapp' && '💬 حملات الواتساب الذكية'}
                 {activeTab === 'heatmap' && '🗺️ الخريطة الحرارية للطلبات'}
                 {activeTab === 'database' && '🗄️ إدارة قاعدة البيانات'}
@@ -2030,6 +1939,7 @@ export const AdminPanel: React.FC = () => {
                 {activeTab === 'activityLogs' && '📋 سجل النشاط'}
                 {activeTab === 'adminManagement' && '🛡️ إدارة المدراء'}
                 {activeTab === 'loyaltyWallet' && '🎁 محفظة النقاط والولاء — تطبيق الزبون'}
+                {activeTab === 'spinWheel' && '🎯 عجلة الحظ — تطبيق الزبون'}
                 {activeTab === 'settings' && '⚙️ إعدادات النظام'}
             </h1>
             <p className="text-xs text-slate-400 mt-0.5">لوحة تحكم المشرفين - منصة محلك</p>
@@ -2072,6 +1982,20 @@ export const AdminPanel: React.FC = () => {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
               <span>جلسة أدمن نشطة</span>
             </div>
+
+            {/* الملف الشخصي — متاح لكل موظف لتعديل اسمه وصورته */}
+            <button
+              type="button"
+              onClick={openMyProfileModal}
+              title="تعديل الملف الشخصي (الاسم والصورة)"
+              className="w-9 h-9 rounded-full overflow-hidden border-2 border-slate-200 hover:border-[#9952FF] transition shrink-0 flex items-center justify-center bg-[#f5eeff] text-[#4D2980] font-black text-xs"
+            >
+              {currentAdminDoc?.photoUrl ? (
+                <img src={currentAdminDoc.photoUrl} alt={currentAdminDoc?.name || 'الملف الشخصي'} className="w-full h-full object-cover" />
+              ) : (
+                myProfileInitials
+              )}
+            </button>
             {isTabPending && (
               <div className="text-xs text-[#9952FF] bg-[#f5eeff] px-3 py-1.5 rounded-lg border border-[#e9daff] flex items-center gap-1.5 font-bold">
                 <Loader2 size={14} className="animate-spin" />
@@ -2080,6 +2004,80 @@ export const AdminPanel: React.FC = () => {
             )}
           </div>
         </header>
+
+        {/* نافذة تعديل الملف الشخصي — الاسم والصورة فقط، متاحة لكل موظف بلا استثناء */}
+        <AnimatePresence>
+          {showMyProfileModal && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-[#4D2980]/50 backdrop-blur-sm z-[970] flex items-center justify-center p-4"
+              onClick={() => setShowMyProfileModal(false)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 12 }}
+                transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+                className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl"
+                dir="rtl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between p-6 border-b border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowMyProfileModal(false)}
+                    className="p-2 rounded-xl hover:bg-slate-100 text-slate-500 transition"
+                    aria-label="إغلاق"
+                  >
+                    <X size={20} />
+                  </button>
+                  <h3 className="text-lg font-black text-slate-800">تعديل الملف الشخصي</h3>
+                </div>
+                <div className="p-6 space-y-5">
+                  <div className="max-w-[140px] mx-auto">
+                    <ImageUploader
+                      value={myProfilePhoto}
+                      onChange={(url) => setMyProfilePhoto(url)}
+                      label="الصورة الشخصية"
+                      placeholder="إضافة صورة"
+                      aspectRatio="square"
+                      maxSizeMB={5}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1.5">الاسم الكامل</label>
+                    <input
+                      type="text"
+                      value={myProfileName}
+                      onChange={(e) => setMyProfileName(e.target.value)}
+                      placeholder="مثال: أحمد محمد"
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-[#9952FF]/30 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="px-6 pb-6 flex gap-3 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowMyProfileModal(false)}
+                    className="px-6 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveMyProfile}
+                    disabled={savingMyProfile}
+                    className="px-6 py-2.5 rounded-xl bg-[#9952FF] text-white font-bold hover:bg-[#8642ef] disabled:opacity-50 transition"
+                  >
+                    {savingMyProfile ? 'جاري الحفظ...' : 'حفظ البيانات'}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* ==========================================
             تاب نظرة عامة (Overview)
@@ -2981,6 +2979,21 @@ export const AdminPanel: React.FC = () => {
                                       await adminUpdateStore(activeStore.id, {
                                         isVerified: false
                                       });
+                                      const revokedContent = buildNotificationContent(adminSettings, 'merchant.verificationRevoked', {
+                                        shopName: activeStore.shopName,
+                                      });
+                                      if (revokedContent) {
+                                        addNotification({
+                                          userId: activeStore.id,
+                                          role: 'merchant',
+                                          type: 'system',
+                                          title: revokedContent.title,
+                                          message: revokedContent.message,
+                                          targetId: activeStore.id,
+                                          templateKey: 'merchant.verificationRevoked',
+                                          ...notificationDeliveryFields(adminSettings, 'merchant.verificationRevoked'),
+                                        });
+                                      }
                                       alert('❌ تم إلغاء توثيق المتجر بنجاح!');
                                     } catch (err: any) {
                                       alert('خطأ: ' + err.message);
@@ -2996,68 +3009,159 @@ export const AdminPanel: React.FC = () => {
 
                           {/* خيارات وإضافة توثيق جديد */}
                           <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 space-y-4 text-right">
-                            <h4 className="font-extrabold text-slate-800 text-xs">🛠️ تفعيل / تجديد شارة التوثيق</h4>
-                            
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                <label className="block text-xs font-bold text-slate-500 mb-1">نوع مدة الصلاحية</label>
-                                <select 
-                                  value={verifyDurationType}
-                                  onChange={(e: any) => setVerifyDurationType(e.target.value)}
-                                  className="w-full text-xs rounded-xl border p-3 bg-white"
-                                >
-                                  <option value="days">أيام محددة</option>
-                                  <option value="months">أشهر محددة</option>
-                                  <option value="years">سنين محددة</option>
-                                  <option value="lifetime">مدى الحياة (Lifetime)</option>
-                                </select>
-                              </div>
+                            <h4 className="font-extrabold text-slate-800 text-xs">🛠️ تفعيل / تجديد شارة التوثيق من الباقات</h4>
 
-                              {verifyDurationType !== 'lifetime' && (
-                                <div>
-                                  <label className="block text-xs font-bold text-slate-500 mb-1">قيمة مدة التوثيق</label>
-                                  <input 
-                                    type="number" 
-                                    min={1}
-                                    value={verifyDuration}
-                                    onChange={(e) => setVerifyDuration(Number(e.target.value))}
-                                    className="w-full text-xs rounded-xl border p-3" 
-                                  />
-                                </div>
-                              )}
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-500 mb-1">اختر باقة التوثيق</label>
+                              <select
+                                value={selectedVerificationPlanId}
+                                onChange={(e) => setSelectedVerificationPlanId(e.target.value)}
+                                className="w-full text-xs bg-white border rounded-xl p-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                              >
+                                {catalogVerificationPlans.map((plan) => (
+                                  <option key={plan.id} value={plan.id}>
+                                    {plan.labelAr} — {formatVerificationIqd(plan.priceIqd)} د.ع · {plan.durationDays} يوم{plan.badge ? ` (${plan.badge})` : ''}
+                                  </option>
+                                ))}
+                              </select>
                             </div>
 
-                            <button 
-                              onClick={async () => {
-                                try {
-                                  const base = new Date();
-                                  let finalExpiryStr = 'Lifetime';
-                                  
-                                  if (verifyDurationType !== 'lifetime') {
-                                    if (verifyDurationType === 'days') base.setDate(base.getDate() + verifyDuration);
-                                    else if (verifyDurationType === 'months') base.setMonth(base.getMonth() + verifyDuration);
-                                    else if (verifyDurationType === 'years') base.setFullYear(base.getFullYear() + verifyDuration);
-                                    
-                                    const y = base.getFullYear();
-                                    const m = String(base.getMonth() + 1).padStart(2, '0');
-                                    const d = String(base.getDate()).padStart(2, '0');
-                                    finalExpiryStr = y + '-' + m + '-' + d;
-                                  }
+                            <label className="flex items-center gap-2 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded-xl px-3 py-2.5">
+                              <input
+                                type="checkbox"
+                                checked={verifyAsLifetime}
+                                onChange={(e) => setVerifyAsLifetime(e.target.checked)}
+                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              منح توثيق مدى الحياة (Lifetime) بسعر الباقة المختارة — بدل تاريخ انتهاء محدد
+                            </label>
 
-                                  await adminUpdateStore(activeStore.id, {
-                                    isVerified: true,
-                                    verificationType: verifyDurationType,
-                                    verificationExpiresAt: finalExpiryStr
+                            {(() => {
+                              const sel = catalogVerificationPlans.find((p) => p.id === selectedVerificationPlanId);
+                              if (!sel) return null;
+                              return (
+                                <p className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
+                                  💰 سُيُسجَّل المبلغ: {formatVerificationIqd(sel.priceIqd)} د.ع (يُحسب ضمن «أرباح التوثيق» في صفحة الحسابات) — الصلاحية: {verifyAsLifetime ? 'مدى الحياة' : `${sel.durationDays} يوم`}
+                                </p>
+                              );
+                            })()}
+
+                            {(() => {
+                              const notifyVerificationGranted = () => {
+                                const grantedContent = buildNotificationContent(adminSettings, 'merchant.verificationGranted', {
+                                  shopName: activeStore.shopName,
+                                });
+                                if (grantedContent) {
+                                  addNotification({
+                                    userId: activeStore.id,
+                                    role: 'merchant',
+                                    type: 'system',
+                                    title: grantedContent.title,
+                                    message: grantedContent.message,
+                                    targetId: activeStore.id,
+                                    templateKey: 'merchant.verificationGranted',
+                                    ...notificationDeliveryFields(adminSettings, 'merchant.verificationGranted'),
                                   });
-                                  alert('🎉 تم توثيق المتجر بنجاح وتفعيل الشارة الرسمية! تاريخ الصلاحية: ' + finalExpiryStr);
-                                } catch (e: any) {
-                                  alert('خطأ: ' + e.message);
                                 }
-                              }}
-                              className="w-full py-3 bg-[#9952FF] hover:bg-[#4D2980] text-white text-xs font-bold rounded-xl transition shadow-sm"
-                            >
-                              ✨ تفعيل شارة التوثيق الرسمية للمتجر الآن
-                            </button>
+                              };
+
+                              const notifyVerificationGift = (planLabel: string, expiryDate: string) => {
+                                const giftContent = buildNotificationContent(adminSettings, 'merchant.verificationGift', {
+                                  shopName: activeStore.shopName,
+                                  planLabel,
+                                  expiryDate,
+                                });
+                                if (giftContent) {
+                                  addNotification({
+                                    userId: activeStore.id,
+                                    role: 'merchant',
+                                    type: 'system',
+                                    title: giftContent.title,
+                                    message: giftContent.message,
+                                    targetId: activeStore.id,
+                                    templateKey: 'merchant.verificationGift',
+                                    ...notificationDeliveryFields(adminSettings, 'merchant.verificationGift'),
+                                  });
+                                }
+                              };
+
+                              return (
+                                <>
+                                  <button 
+                                    onClick={async () => {
+                                      try {
+                                        const result = buildVerificationPaidGrant(
+                                          selectedVerificationPlanId,
+                                          adminSettings,
+                                          verifyAsLifetime,
+                                          new Date(),
+                                          activeStore,
+                                        );
+                                        if (!result) {
+                                          showToast('error', 'خطأ', 'الباقة المختارة غير موجودة');
+                                          return;
+                                        }
+                                        await adminUpdateStore(activeStore.id, result.patch);
+                                        notifyVerificationGranted();
+                                        showToast(
+                                          'success',
+                                          'تم التوثيق',
+                                          `الباقة: ${result.plan.labelAr} · ${formatVerificationIqd(result.plan.priceIqd)} د.ع · ينتهي: ${result.patch.verificationExpiresAt}`,
+                                        );
+                                      } catch (e: unknown) {
+                                        showToast('error', 'خطأ', e instanceof Error ? e.message : 'فشل حفظ التوثيق');
+                                      }
+                                    }}
+                                    className="w-full py-3 bg-[#9952FF] hover:bg-[#4D2980] text-white text-xs font-bold rounded-xl transition shadow-sm"
+                                  >
+                                    ✨ تفعيل شارة التوثيق مدفوعة بالباقة المختارة
+                                  </button>
+
+                                  <button
+                                    onClick={async () => {
+                                      const sel = catalogVerificationPlans.find((p) => p.id === selectedVerificationPlanId);
+                                      if (!confirm(`تأكيد إرسال توثيق هدية (بدون مقابل) بالباقة "${sel?.labelAr ?? selectedVerificationPlanId}" لمتجر "${activeStore.shopName}"؟\nلن يُحسب هذا التوثيق ضمن أرباح التوثيق في صفحة الحسابات.`)) {
+                                        return;
+                                      }
+                                      try {
+                                        const result = buildVerificationGiftGrant(
+                                          selectedVerificationPlanId,
+                                          adminSettings,
+                                          verifyAsLifetime,
+                                          new Date(),
+                                          activeStore,
+                                        );
+                                        if (!result) {
+                                          showToast('error', 'خطأ', 'الباقة المختارة غير موجودة');
+                                          return;
+                                        }
+                                        await adminUpdateStore(activeStore.id, result.patch);
+                                        notifyVerificationGift(
+                                          result.plan.labelAr,
+                                          String(result.patch.verificationExpiresAt ?? ''),
+                                        );
+                                        showToast(
+                                          'success',
+                                          'تم إرسال الهدية',
+                                          `الباقة: ${result.plan.labelAr} · هدية مجانية · ينتهي: ${result.patch.verificationExpiresAt}`,
+                                        );
+                                      } catch (e: unknown) {
+                                        showToast('error', 'خطأ', e instanceof Error ? e.message : 'فشل حفظ التوثيق');
+                                      }
+                                    }}
+                                    className="w-full py-3 bg-white hover:bg-amber-50 text-amber-700 font-bold rounded-xl text-xs transition shadow-sm border-2 border-amber-300 flex items-center justify-center gap-1.5"
+                                  >
+                                    <span>🎁 إرسال توثيق هدية (بدون مقابل — لا يُحسب في الحسابات)</span>
+                                  </button>
+                                </>
+                              );
+                            })()}
+
+                            {activeStore.isVerified && activeStore.verificationIsGift && (
+                              <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-center">
+                                🎁 توثيق هذا المتجر الحالي هدية مجانية — غير محسوب ضمن أرباح التوثيق
+                              </p>
+                            )}
                           </div>
                         </div>
                       )}
@@ -3178,6 +3282,60 @@ export const AdminPanel: React.FC = () => {
                                 <span>💳 تفعيل الاشتراك لأول مرة</span>
                               )}
                             </button>
+
+                            <button
+                              onClick={async () => {
+                                const sel = catalogPlans.find((p) => p.id === selectedActivationPlanId);
+                                if (!confirm(`تأكيد إرسال اشتراك هدية (بدون مقابل) بالباقة "${sel?.labelAr ?? selectedActivationPlanId}" لمتجر "${activeStore.shopName}"؟\nلن يُحسب هذا الاشتراك ضمن أرباح الاشتراكات في صفحة الحسابات.`)) {
+                                  return;
+                                }
+                                try {
+                                  const result = buildStoreGiftActivationFromPlan(
+                                    selectedActivationPlanId,
+                                    adminSettings,
+                                    new Date(),
+                                    activeStore,
+                                  );
+                                  if (!result) {
+                                    showToast('error', 'خطأ', 'الباقة المختارة غير موجودة');
+                                    return;
+                                  }
+                                  await adminUpdateStore(activeStore.id, result.patch);
+                                  const giftContent = buildNotificationContent(adminSettings, 'merchant.subscriptionGift', {
+                                    shopName: activeStore.shopName,
+                                    planLabel: result.plan.labelAr,
+                                    expiryDate: String(result.patch.subscriptionExpiry ?? ''),
+                                  });
+                                  if (giftContent) {
+                                    addNotification({
+                                      userId: activeStore.id,
+                                      role: 'merchant',
+                                      type: 'subscription',
+                                      title: giftContent.title,
+                                      message: giftContent.message,
+                                      targetId: activeStore.id,
+                                      templateKey: 'merchant.subscriptionGift',
+                                      ...notificationDeliveryFields(adminSettings, 'merchant.subscriptionGift'),
+                                    });
+                                  }
+                                  showToast(
+                                    'success',
+                                    'تم إرسال الهدية',
+                                    `الباقة: ${result.plan.labelAr} · هدية مجانية · ينتهي: ${result.patch.subscriptionExpiry}`,
+                                  );
+                                } catch (err: unknown) {
+                                  showToast('error', 'خطأ', err instanceof Error ? err.message : 'فشل حفظ الاشتراك');
+                                }
+                              }}
+                              className="w-full py-3 bg-white hover:bg-amber-50 text-amber-700 font-bold text-xs rounded-xl shadow-sm transition border-2 border-amber-300 flex items-center justify-center gap-1.5"
+                            >
+                              <span>🎁 إرسال اشتراك هدية (بدون مقابل — لا يُحسب في الحسابات)</span>
+                            </button>
+                            {activeStore.subscriptionIsGift && isSubscriptionActive && (
+                              <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-center">
+                                🎁 اشتراك هذا المتجر الحالي هدية مجانية — غير محسوب ضمن أرباح الاشتراكات
+                              </p>
+                            )}
                           </div>
 
                           {/* تقليل مدة الاشتراك أو إلغائه */}
@@ -4831,147 +4989,149 @@ export const AdminPanel: React.FC = () => {
               )}
             </div>
 
-            {/* مودال إنشاء بروموكود جديد */}
-            {showPromoModal && (
-              <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-                  <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                    <div className="flex items-center space-x-2 space-x-reverse">
-                      <div className="p-2 bg-green-100 text-green-600 rounded-xl">
-                        <Ticket size={20} />
-                      </div>
-                      <h3 className="text-lg font-black text-slate-800">إنشاء كود خصم جديد</h3>
-                    </div>
-                    <button onClick={() => setShowPromoModal(false)} className="p-2 hover:bg-slate-100 rounded-lg">
-                      <X size={20} />
-                    </button>
+            {/* مودال إنشاء بروموكود جديد — عبر AdminModal لتفادي قص content-visibility */}
+            <AdminModal
+              open={showPromoModal}
+              onClose={() => setShowPromoModal(false)}
+              panelClassName="bg-white rounded-2xl w-full max-w-lg max-h-[92vh] overflow-hidden shadow-2xl flex flex-col"
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
+                <div className="flex items-center space-x-2 space-x-reverse">
+                  <div className="p-2 bg-green-100 text-green-600 rounded-xl">
+                    <Ticket size={20} />
                   </div>
-                  
-                  <form onSubmit={handleCreatePromo} className="p-6 space-y-4 overflow-y-auto max-h-[85vh]">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">كود الخصم (أحرف وأرقام إنكليزية) *</label>
-                      <input 
-                        type="text" 
-                        value={newPromoCode}
-                        onChange={(e) => setNewPromoCode(e.target.value.toUpperCase())}
-                        placeholder="مثال: IRAQ2026 أو SALE50"
-                        required
-                        className="w-full border border-slate-200 p-3 rounded-xl text-sm font-mono uppercase text-left focus:ring-2 focus:ring-green-500 focus:outline-none"
-                        style={{ direction: 'ltr' }}
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                       <div>
-                          <label className="block text-xs font-bold text-slate-500 mb-1">نوع الخصم</label>
-                          <select value={newPromoDiscountType} onChange={e => setNewPromoDiscountType(e.target.value as any)} className="w-full border border-slate-200 p-3 rounded-xl bg-white text-sm focus:ring-2 focus:ring-green-500 focus:outline-none">
-                             <option value="amount">مبلغ ثابت</option>
-                             <option value="percent">نسبة مئوية (%)</option>
-                          </select>
-                       </div>
-                       <div>
-                          <label className="block text-xs font-bold text-slate-500 mb-1">القيمة *</label>
-                          <input type="number" value={newPromoDiscount || ''} onChange={e => setNewPromoDiscount(parseInt(e.target.value) || 0)} required className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
-                       </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                       <div>
-                          <label className="block text-xs font-bold text-slate-500 mb-1">إجمالي الاستخدام</label>
-                          <input type="number" value={newPromoMaxUses || ''} onChange={e => setNewPromoMaxUses(parseInt(e.target.value) || 0)} required className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
-                       </div>
-                       <div>
-                          <label className="block text-xs font-bold text-slate-500 mb-1">للشخص الواحد</label>
-                          <input type="number" value={newPromoMaxUsesPerUser || ''} onChange={e => setNewPromoMaxUsesPerUser(parseInt(e.target.value) || 0)} required className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
-                       </div>
-                    </div>
-
-                    <div>
-                       <label className="block text-xs font-bold text-slate-500 mb-1">تحديد مدة الصلاحية</label>
-                       <select value={newPromoExpiryType} onChange={e => setNewPromoExpiryType(e.target.value as any)} className="w-full border border-slate-200 p-3 rounded-xl bg-white mb-2 text-sm focus:ring-2 focus:ring-green-500 focus:outline-none">
-                          <option value="days">بالأيام المتبقية</option>
-                          <option value="date">بتاريخ محدد</option>
-                       </select>
-                       
-                       {newPromoExpiryType === 'days' ? (
-                          <>
-                             <input type="number" placeholder="عدد الأيام" value={newPromoExpiryDays || ''} onChange={e => setNewPromoExpiryDays(parseInt(e.target.value) || 0)} className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
-                             <p className="text-[10px] text-slate-400 mt-1">ادخل 0 لكود دائم (بدون انتهاء)</p>
-                          </>
-                       ) : (
-                          <div className="grid grid-cols-2 gap-2">
-                             <div>
-                                <label className="block text-[10px] font-bold text-slate-400 mb-1">البدء (اختياري)</label>
-                                <input type="date" value={newPromoStartDate} onChange={e => setNewPromoStartDate(e.target.value)} className="w-full border border-slate-200 p-2 rounded-xl text-center text-xs focus:ring-2 focus:ring-green-500 focus:outline-none" />
-                             </div>
-                             <div>
-                                <label className="block text-[10px] font-bold text-slate-400 mb-1">الانتهاء</label>
-                                <input type="date" value={newPromoEndDate} onChange={e => setNewPromoEndDate(e.target.value)} className="w-full border border-slate-200 p-2 rounded-xl text-center text-xs focus:ring-2 focus:ring-green-500 focus:outline-none" />
-                             </div>
-                          </div>
-                       )}
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-100">
-                       <label className="block text-xs font-bold text-slate-500 mb-2">استهداف المتاجر</label>
-                       <select value={newPromoTargetMode} onChange={(e) => {
-                          setNewPromoTargetMode(e.target.value as any);
-                          setNewPromoSelectedStores([]);
-                          setNewPromoSelectedProvinces([]);
-                       }} className="w-full border border-slate-200 p-3 rounded-xl bg-white text-sm focus:ring-2 focus:ring-green-500 focus:outline-none mb-3">
-                          <option value="all">جميع المتاجر في النظام</option>
-                          <option value="store">متجر محدد (أو عدة متاجر)</option>
-                          <option value="province">متاجر محافظة معينة</option>
-                       </select>
-
-                       {newPromoTargetMode === 'store' && (
-                          <div className="space-y-2 max-h-32 overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-50">
-                             {stores.map(store => (
-                                <label key={store.id} className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer p-1 hover:bg-slate-100 rounded">
-                                   <input type="checkbox" checked={newPromoSelectedStores.includes(store.id)} onChange={(e) => {
-                                      if(e.target.checked) setNewPromoSelectedStores(prev => [...prev, store.id]);
-                                      else setNewPromoSelectedStores(prev => prev.filter(id => id !== store.id));
-                                   }} className="rounded text-green-500 focus:ring-green-500"/>
-                                   {store.shopName} ({store.province})
-                                </label>
-                             ))}
-                          </div>
-                       )}
-
-                       {newPromoTargetMode === 'province' && (
-                          <div className="space-y-2 max-h-32 overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-50">
-                             {provinces.map(prov => (
-                                <label key={prov.id} className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer p-1 hover:bg-slate-100 rounded">
-                                   <input type="checkbox" checked={newPromoSelectedProvinces.includes(prov.name)} onChange={(e) => {
-                                      if(e.target.checked) setNewPromoSelectedProvinces(prev => [...prev, prov.name]);
-                                      else setNewPromoSelectedProvinces(prev => prev.filter(n => n !== prov.name));
-                                   }} className="rounded text-green-500 focus:ring-green-500"/>
-                                   {prov.name}
-                                </label>
-                             ))}
-                          </div>
-                       )}
-                    </div>
-
-                    <div className="flex gap-3 pt-4 border-t border-slate-100">
-                      <button 
-                        type="submit"
-                        className="flex-1 py-3 bg-gradient-to-l from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold rounded-xl shadow-md transition"
-                      >
-                        إنشاء وتفعيل الكود
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => setShowPromoModal(false)}
-                        className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
-                      >
-                        إلغاء
-                      </button>
-                    </div>
-                  </form>
+                  <h3 className="text-lg font-black text-slate-800">إنشاء كود خصم جديد</h3>
                 </div>
+                <button type="button" onClick={() => setShowPromoModal(false)} className="p-2 hover:bg-slate-100 rounded-lg">
+                  <X size={20} />
+                </button>
               </div>
-            )}
+
+              <form onSubmit={handleCreatePromo} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                <div className="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">كود الخصم (أحرف وأرقام إنكليزية) *</label>
+                    <input
+                      type="text"
+                      value={newPromoCode}
+                      onChange={(e) => setNewPromoCode(e.target.value.toUpperCase())}
+                      placeholder="مثال: IRAQ2026 أو SALE50"
+                      required
+                      className="w-full border border-slate-200 p-3 rounded-xl text-sm font-mono uppercase text-left focus:ring-2 focus:ring-green-500 focus:outline-none"
+                      style={{ direction: 'ltr' }}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">نوع الخصم</label>
+                      <select value={newPromoDiscountType} onChange={e => setNewPromoDiscountType(e.target.value as any)} className="w-full border border-slate-200 p-3 rounded-xl bg-white text-sm focus:ring-2 focus:ring-green-500 focus:outline-none">
+                        <option value="amount">مبلغ ثابت</option>
+                        <option value="percent">نسبة مئوية (%)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">القيمة *</label>
+                      <input type="number" value={newPromoDiscount || ''} onChange={e => setNewPromoDiscount(parseInt(e.target.value) || 0)} required className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">إجمالي الاستخدام</label>
+                      <input type="number" value={newPromoMaxUses || ''} onChange={e => setNewPromoMaxUses(parseInt(e.target.value) || 0)} required className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">للشخص الواحد</label>
+                      <input type="number" value={newPromoMaxUsesPerUser || ''} onChange={e => setNewPromoMaxUsesPerUser(parseInt(e.target.value) || 0)} required className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">تحديد مدة الصلاحية</label>
+                    <select value={newPromoExpiryType} onChange={e => setNewPromoExpiryType(e.target.value as any)} className="w-full border border-slate-200 p-3 rounded-xl bg-white mb-2 text-sm focus:ring-2 focus:ring-green-500 focus:outline-none">
+                      <option value="days">بالأيام المتبقية</option>
+                      <option value="date">بتاريخ محدد</option>
+                    </select>
+
+                    {newPromoExpiryType === 'days' ? (
+                      <>
+                        <input type="number" placeholder="عدد الأيام" value={newPromoExpiryDays || ''} onChange={e => setNewPromoExpiryDays(parseInt(e.target.value) || 0)} className="w-full border border-slate-200 p-3 rounded-xl text-center text-sm focus:ring-2 focus:ring-green-500 focus:outline-none" />
+                        <p className="text-[10px] text-slate-400 mt-1">ادخل 0 لكود دائم (بدون انتهاء)</p>
+                      </>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">البدء (اختياري)</label>
+                          <input type="date" value={newPromoStartDate} onChange={e => setNewPromoStartDate(e.target.value)} className="w-full border border-slate-200 p-2 rounded-xl text-center text-xs focus:ring-2 focus:ring-green-500 focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">الانتهاء</label>
+                          <input type="date" value={newPromoEndDate} onChange={e => setNewPromoEndDate(e.target.value)} className="w-full border border-slate-200 p-2 rounded-xl text-center text-xs focus:ring-2 focus:ring-green-500 focus:outline-none" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100">
+                    <label className="block text-xs font-bold text-slate-500 mb-2">استهداف المتاجر</label>
+                    <select value={newPromoTargetMode} onChange={(e) => {
+                      setNewPromoTargetMode(e.target.value as any);
+                      setNewPromoSelectedStores([]);
+                      setNewPromoSelectedProvinces([]);
+                    }} className="w-full border border-slate-200 p-3 rounded-xl bg-white text-sm focus:ring-2 focus:ring-green-500 focus:outline-none mb-3">
+                      <option value="all">جميع المتاجر في النظام</option>
+                      <option value="store">متجر محدد (أو عدة متاجر)</option>
+                      <option value="province">متاجر محافظة معينة</option>
+                    </select>
+
+                    {newPromoTargetMode === 'store' && (
+                      <div className="space-y-2 max-h-32 overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-50">
+                        {stores.map(store => (
+                          <label key={store.id} className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer p-1 hover:bg-slate-100 rounded">
+                            <input type="checkbox" checked={newPromoSelectedStores.includes(store.id)} onChange={(e) => {
+                              if (e.target.checked) setNewPromoSelectedStores(prev => [...prev, store.id]);
+                              else setNewPromoSelectedStores(prev => prev.filter(id => id !== store.id));
+                            }} className="rounded text-green-500 focus:ring-green-500" />
+                            {store.shopName} ({store.province})
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {newPromoTargetMode === 'province' && (
+                      <div className="space-y-2 max-h-32 overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-50">
+                        {provinces.map(prov => (
+                          <label key={prov.id} className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer p-1 hover:bg-slate-100 rounded">
+                            <input type="checkbox" checked={newPromoSelectedProvinces.includes(prov.name)} onChange={(e) => {
+                              if (e.target.checked) setNewPromoSelectedProvinces(prev => [...prev, prov.name]);
+                              else setNewPromoSelectedProvinces(prev => prev.filter(n => n !== prov.name));
+                            }} className="rounded text-green-500 focus:ring-green-500" />
+                            {prov.name}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-3 p-6 border-t border-slate-100 shrink-0 bg-white">
+                  <button
+                    type="submit"
+                    className="flex-1 py-3 bg-gradient-to-l from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold rounded-xl shadow-md transition"
+                  >
+                    إنشاء وتفعيل الكود
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPromoModal(false)}
+                    className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </form>
+            </AdminModal>
           </div>
         )}
 
@@ -4991,6 +5151,108 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* أرباح جميع المتاجر — المبلغ الحالي في المحفظة، حتى لو لم يطلب المتجر السحب */}
+            {(() => {
+              const walletStores = stores
+                .filter((s) => (s.walletBalance || 0) > 0)
+                .filter((s) => {
+                  const q = payoutsWalletSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  return (
+                    s.shopName?.toLowerCase().includes(q) ||
+                    s.username?.toLowerCase().includes(q) ||
+                    s.ownerName?.toLowerCase().includes(q) ||
+                    s.phone?.includes(q)
+                  );
+                })
+                .sort((a, b) => (b.walletBalance || 0) - (a.walletBalance || 0));
+              const totalWallets = walletStores.reduce((sum, s) => sum + (s.walletBalance || 0), 0);
+
+              return (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 border-b border-slate-100">
+                    <div>
+                      <h4 className="font-black text-slate-800 text-md flex items-center gap-2">
+                        <Wallet size={16} className="text-emerald-600" />
+                        أرباح جميع المتاجر (المبلغ الحالي في المحفظة)
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        كل متجر لديه رصيد في محفظته يظهر هنا مباشرةً — حتى لو لم يقدّم طلب سحب.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-slate-500 whitespace-nowrap">
+                        الإجمالي: <span className="font-black text-emerald-600">{totalWallets.toLocaleString()} د.ع</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={payoutsWalletSearch}
+                        onChange={(e) => setPayoutsWalletSearch(e.target.value)}
+                        placeholder="بحث بالاسم أو المستخدم أو الهاتف..."
+                        className="border border-slate-200 rounded-xl px-3 py-2 text-xs w-full sm:w-56 focus:ring-2 focus:ring-[#9952FF] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto max-h-96">
+                    <table className="w-full text-sm text-right">
+                      <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100 sticky top-0">
+                        <tr>
+                          <th className="p-4">المتجر</th>
+                          <th className="p-4">المبلغ في المحفظة</th>
+                          <th className="p-4">حالة طلب السحب</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {walletStores.length === 0 ? (
+                          <tr>
+                            <td colSpan={3} className="p-8 text-center text-slate-400 font-bold">
+                              {payoutsWalletSearch.trim() ? 'لا توجد نتائج مطابقة.' : 'لا توجد متاجر لديها رصيد في المحفظة حالياً.'}
+                            </td>
+                          </tr>
+                        ) : walletStores.map((s) => {
+                          const pendingReq = payoutRequests.find((r) => r.merchantId === s.id && r.status === 'pending');
+                          return (
+                            <tr key={s.id} className="hover:bg-slate-50 transition cursor-pointer" onClick={() => setSelectedStore(s)}>
+                              <td className="p-4">
+                                <div className="flex items-center gap-3">
+                                  <img
+                                    src={s.logo || 'https://via.placeholder.com/150'}
+                                    alt={s.shopName}
+                                    className="w-10 h-10 rounded-lg object-cover border border-slate-200"
+                                    onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://via.placeholder.com/150'; }}
+                                  />
+                                  <div>
+                                    <p className="font-bold text-slate-800 truncate max-w-[180px]">{s.shopName}</p>
+                                    <p className="text-[10px] text-slate-400 font-mono">@{s.username}</p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                <span className="font-black font-mono text-emerald-600 bg-emerald-50 px-3 py-1 rounded-lg">
+                                  {(s.walletBalance || 0).toLocaleString()} د.ع
+                                </span>
+                              </td>
+                              <td className="p-4">
+                                {pendingReq ? (
+                                  <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-bold">
+                                    طلب سحب معلّق ({(pendingReq.requestedAmount || 0).toLocaleString()} د.ع)
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-xs font-bold">
+                                    لا يوجد طلب سحب
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="overflow-x-auto">
@@ -5185,6 +5447,16 @@ export const AdminPanel: React.FC = () => {
               adminSettings={adminSettings}
               updateAdminSettings={updateAdminSettings}
               onOpenModal={() => setShowAutoSubSettingsModal(true)}
+            />
+
+            <VerificationPricingSettingsCard
+              adminSettings={adminSettings}
+              updateAdminSettings={updateAdminSettings}
+            />
+
+            <VerificationBenefitsSettingsCard
+              adminSettings={adminSettings}
+              updateAdminSettings={updateAdminSettings}
             />
 
             <MerchantRenewalPageSettings
@@ -5385,18 +5657,18 @@ export const AdminPanel: React.FC = () => {
         )}
 
         {/* ==========================================
-            تاب إرسال إشعارات عامة
+            تاب مركز الإشعارات (بث + قوالب + إرسال فوري)
             ========================================== */}
-        {activeTab === 'broadcast' && (
-          <div className="space-y-6 admin-tab-content max-w-2xl">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-              <h3 className="font-bold text-slate-800 text-md mb-4 pb-2 border-b border-slate-100 flex items-center space-x-2 space-x-reverse">
-                <Bell size={20} className="text-[#9952FF]" />
-                <span>📢 إرسال إشعار عام</span>
-              </h3>
-              
-              <BroadcastForm />
-            </div>
+        {(activeTab === 'notificationCenter' || activeTab === 'broadcast' || activeTab === 'notificationTemplates') && (
+          <div className="admin-tab-content max-w-3xl">
+            <NotificationCenterPanel
+              adminSettings={adminSettings as Record<string, unknown>}
+              updateAdminSettings={async (data) => {
+                await updateAdminSettings(data);
+              }}
+              canBroadcast={canAccessTab('broadcast')}
+              canEditTemplates={canAccessTab('notificationTemplates')}
+            />
           </div>
         )}
 
@@ -5419,7 +5691,7 @@ export const AdminPanel: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-black text-slate-800 text-lg">الفعاليات المركزية (Flash Sales)</h3>
-                  <p className="text-xs text-slate-500">قم بإنشاء فعاليات مؤقتة لاستقبال طلبات المتاجر والموافقة عليها</p>
+                  <p className="text-xs text-slate-500">إنشاء فعاليات، ضبط نصوص واجهة الزبون، واستقبال طلبات المتاجر</p>
                 </div>
               </div>
               <button 
@@ -5431,13 +5703,25 @@ export const AdminPanel: React.FC = () => {
               </button>
             </div>
 
+            <FlashSalesDisplaySettings
+              adminSettings={adminSettings as Record<string, unknown>}
+              updateAdminSettings={async (data) => {
+                await updateAdminSettings(data);
+              }}
+            />
+
             <div className="grid grid-cols-1 gap-6">
               {flashSales.map(sale => (
                 <div key={sale.id} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 relative overflow-hidden">
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <h4 className="text-xl font-black text-slate-800 mb-2">{sale.title}</h4>
-                      <p className="text-sm text-slate-500 max-w-2xl">{sale.description}</p>
+                  <div className="flex justify-between items-start mb-6 gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <h4 className="text-xl font-black text-slate-800">{sale.title}</h4>
+                        <span className="text-[10px] font-bold bg-[#f5eeff] text-[#9952FF] px-2 py-0.5 rounded-full border border-[#e9daff]">
+                          يظهر للزبون كشارة
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-500 max-w-2xl">{sale.description || 'لا يوجد وصف للمتاجر'}</p>
                     </div>
                     {sale.status === 'upcoming' && <span className="px-3 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-full border border-amber-200">تبدأ قريباً</span>}
                     {sale.status === 'active' && <span className="px-3 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full border border-emerald-200 flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></div>فعالية نشطة</span>}
@@ -5474,6 +5758,18 @@ export const AdminPanel: React.FC = () => {
                         إنهاء الفعالية
                       </button>
                     )}
+                    <button 
+                      onClick={() => {
+                        setEditFlashSaleTextsModal({
+                          id: sale.id,
+                          title: sale.title,
+                          description: sale.description || '',
+                        });
+                      }}
+                      className="py-2.5 bg-indigo-50 text-indigo-700 font-bold rounded-xl hover:bg-indigo-100 transition text-sm flex items-center justify-center gap-2"
+                    >
+                       تعديل النصوص
+                    </button>
                     <button 
                       onClick={() => {
                         setEditFlashSaleDatesModal({
@@ -5837,6 +6133,121 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
+            {/* سلايدر المتاجر الموثّقة — تحت إعلانات الزبون */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+              <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100 gap-3">
+                <h3 className="font-bold text-slate-800 text-md flex items-center gap-2 min-w-0">
+                  <VerifiedBadge size={20} />
+                  <span className="truncate">سلايدر المتاجر الموثّقة</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() =>
+                    patchAdsDraft({
+                      enableVerifiedStoresCarousel: !adsDraft.enableVerifiedStoresCarousel,
+                    })
+                  }
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all border shrink-0 ${
+                    adsDraft.enableVerifiedStoresCarousel
+                      ? 'bg-sky-500 border-sky-500 text-white shadow-lg shadow-sky-100'
+                      : 'bg-white border-slate-200 text-slate-500'
+                  }`}
+                >
+                  <Shield size={14} fill={adsDraft.enableVerifiedStoresCarousel ? 'currentColor' : 'none'} />
+                  <span className="text-[10px] font-black">
+                    {adsDraft.enableVerifiedStoresCarousel ? 'مفعّل' : 'معطّل'}
+                  </span>
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 font-bold mb-4">
+                يظهر تحت السلايدر الإعلاني في تطبيق الزبون — يُضاف أي متجر تلقائياً بعد التوثيق
+              </p>
+
+              {adsDraft.enableVerifiedStoresCarousel && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 bg-sky-50/70 border border-sky-100 rounded-xl">
+                    <div>
+                      <span className="text-xs font-bold text-slate-700 block">سرعة التقليب التلقائي</span>
+                      <span className="text-[10px] text-slate-400">المدة بين عرض كل متجر وآخر</span>
+                    </div>
+                    <div className="flex items-center space-x-2 space-x-reverse">
+                      <input
+                        type="number"
+                        min={2}
+                        max={30}
+                        value={adsDraft.verifiedStoresCarouselInterval}
+                        onChange={(e) => {
+                          const n = Math.min(30, Math.max(2, parseInt(e.target.value, 10) || 4));
+                          patchAdsDraft({ verifiedStoresCarouselInterval: n });
+                        }}
+                        className="w-16 border border-sky-200 p-2 rounded-lg text-center font-bold text-sky-800 bg-white"
+                      />
+                      <span className="text-xs text-slate-500">ثانية</span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <span className="text-xs font-bold text-slate-700 block">استبعاد متاجر من السلايدر</span>
+                        <span className="text-[10px] text-slate-400">تبقى موثّقة لكن لا تظهر في التقليب</span>
+                      </div>
+                      <div className="relative w-48">
+                        <Search size={14} className="absolute right-2 top-2 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="بحث باسم المتجر..."
+                          value={storeSearch}
+                          onChange={(e) => setStoreSearch(e.target.value)}
+                          className="w-full pr-7 py-1.5 border rounded-lg text-[10px]"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+                      {stores
+                        .filter(
+                          (s) =>
+                            (s.isVerified || (s as any).is_verified) &&
+                            s.status === 'active' &&
+                            (s.shopName.toLowerCase().includes(storeSearch.toLowerCase()) ||
+                              s.username.toLowerCase().includes(storeSearch.toLowerCase())),
+                        )
+                        .map((store) => {
+                          const excluded = adsDraft.verifiedStoresCarouselExcludeIds.includes(store.id);
+                          return (
+                            <button
+                              key={`vcarousel-${store.id}`}
+                              type="button"
+                              onClick={() => {
+                                const current = adsDraft.verifiedStoresCarouselExcludeIds;
+                                const updated = excluded
+                                  ? current.filter((id) => id !== store.id)
+                                  : [...current, store.id];
+                                patchAdsDraft({ verifiedStoresCarouselExcludeIds: updated });
+                              }}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition flex items-center gap-2 ${
+                                excluded
+                                  ? 'bg-rose-50 border-rose-200 text-rose-700'
+                                  : 'bg-white border-slate-200 text-slate-500 hover:border-sky-300'
+                              }`}
+                            >
+                              <img src={store.logo || undefined} className="w-4 h-4 rounded-full" alt="" />
+                              <span>{store.shopName}</span>
+                              {excluded && <span className="text-[8px]">مستبعد</span>}
+                            </button>
+                          );
+                        })}
+                      {stores.filter((s) => s.isVerified || (s as any).is_verified).length === 0 && (
+                        <p className="text-[9px] text-slate-400 font-bold w-full text-center py-2">
+                          لا توجد متاجر موثّقة حالياً — ستُضاف تلقائياً بعد التوثيق
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Merchant Ads */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mt-6 mb-6 space-y-6">
               <h3 className="font-bold text-slate-800 text-md pb-2 border-b border-slate-100 flex items-center space-x-2 space-x-reverse">
@@ -6160,6 +6571,16 @@ export const AdminPanel: React.FC = () => {
           </div>
         )}
 
+        {activeTab === 'spinWheel' && (
+          <div className="space-y-6 admin-tab-content max-w-6xl">
+            <SpinWheelSettingsCard
+              adminSettings={adminSettings}
+              updateAdminSettings={updateAdminSettings}
+            />
+            <SpinWheelHistoryPanel />
+          </div>
+        )}
+
         {/* ==========================================
             تاب إعدادات النظام
             ========================================== */}
@@ -6174,113 +6595,34 @@ export const AdminPanel: React.FC = () => {
 
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
               <h3 className="font-bold text-slate-800 text-md mb-4 pb-2 border-b border-slate-100 flex items-center space-x-2 space-x-reverse">
-                <Award size={20} className="text-yellow-500" />
-                <span>إدارة المتاجر المميزة والقريبة</span>
+                <MapPin size={20} className="text-[#9952FF]" />
+                <span>إعدادات الموقع والخرائط</span>
               </h3>
-              
-              <div className="space-y-6">
-                {/* إدارة المتاجر المميزة */}
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <label className="text-xs font-black text-slate-700">المتاجر المميزة (يظهر 4 في الواحدة)</label>
-                    <div className="relative w-48">
-                      <Search size={14} className="absolute right-2 top-2 text-slate-400" />
-                      <input 
-                        type="text" 
-                        placeholder="بحث باسم المتجر..." 
-                        value={storeSearch}
-                        onChange={(e) => setStoreSearch(e.target.value)}
-                        className="w-full pr-7 py-1.5 border rounded-lg text-[10px]"
-                      />
-                    </div>
+
+              <div className="space-y-4">
+                <div className="p-4 bg-[#f5eeff]/50 rounded-2xl border border-[#e9daff]/50 text-center">
+                  <div className="w-10 h-10 bg-white rounded-xl shadow-sm border border-[#e9daff] flex items-center justify-center mx-auto mb-2 text-[#9952FF]">
+                    <MapPin size={20} />
                   </div>
-                  <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-slate-50 rounded-xl border border-slate-100">
-                    {stores
-                      .filter(s => s.status === 'active' && (s.shopName.toLowerCase().includes(storeSearch.toLowerCase()) || s.username.toLowerCase().includes(storeSearch.toLowerCase())))
-                      .map(store => (
-                        <button 
-                          key={`feat-${store.id}`}
-                          onClick={() => {
-                            const current = adminSettings.featuredStoreIds || [];
-                            const updated = current.includes(store.id)
-                              ? current.filter((id: string) => id !== store.id)
-                              : [...current, store.id];
-                            updateAdminSettings({ featuredStoreIds: updated });
-                          }}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition flex items-center gap-2 ${adminSettings.featuredStoreIds?.includes(store.id) ? 'bg-yellow-50 border-yellow-200 text-yellow-700' : 'bg-white border-slate-200 text-slate-500 hover:border-[#cba8ff]'}`}
-                        >
-                          <img src={store.logo || undefined} className="w-4 h-4 rounded-full" />
-                          <span>{store.shopName}</span>
-                          <span className="text-[8px] text-slate-400 opacity-70">@{store.username}</span>
-                          {adminSettings.featuredStoreIds?.includes(store.id) && <Check size={12} />}
-                        </button>
-                      ))}
-                  </div>
+                  <p className="text-[10px] font-black text-[#4D2980] mb-1">المتاجر القريبة — فرز تلقائي حسب المسافة ✅</p>
+                  <p className="text-[9px] text-[#9952FF]/70 font-bold leading-relaxed">
+                    يرتّب التطبيق متاجر الزبون تلقائياً حسب المسافة الجغرافية الدقيقة من موقعه الفعلي (GPS أو موقع التوصيل). لا يوجد تحكم يدوي بالقائمة.
+                  </p>
                 </div>
 
-                {/* إدارة المتاجر القريبة */}
-                <div>
-                  <div className="flex items-center justify-between mb-3 pt-4 border-t border-slate-50">
-                    <div className="flex flex-col">
-                      <label className="text-xs font-black text-slate-700">المتاجر القريبة</label>
-                      <span className="text-[9px] text-slate-400 font-bold">تحكم بطريقة عرض المتاجر القريبة للزبون</span>
-                    </div>
-                    <button 
-                      onClick={() => updateAdminSettings({ enableAutoNearby: !adminSettings.enableAutoNearby })}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all border ${adminSettings.enableAutoNearby ? 'bg-[#9952FF] border-[#9952FF] text-white shadow-lg shadow-[#e9daff]' : 'bg-white border-slate-200 text-slate-500'}`}
-                    >
-                      <Zap size={14} fill={adminSettings.enableAutoNearby ? "currentColor" : "none"} />
-                      <span className="text-[10px] font-black">{adminSettings.enableAutoNearby ? 'فرز تلقائي (حسب المسافة)' : 'تحكم يدوي (بالقائمة)'}</span>
-                    </button>
+                <div className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl shadow-sm">
+                  <div className="flex flex-col">
+                    <label className="text-xs font-black text-slate-700">خرائط الموقع للطلبات</label>
+                    <span className="text-[9px] text-slate-400 font-bold">تفعيل مصغرات الخريطة (Map) في تفاصيل الطلبات</span>
                   </div>
-
-                  {/* إعدادات الخرائط */}
-                  <div className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl shadow-sm">
-                    <div className="flex flex-col">
-                      <label className="text-xs font-black text-slate-700">خرائط الموقع للطلبات</label>
-                      <span className="text-[9px] text-slate-400 font-bold">تفعيل مصغرات الخريطة (Map) في تفاصيل الطلبات</span>
-                    </div>
-                    <button 
-                      onClick={() => updateAdminSettings({ enableMaps: adminSettings.enableMaps === false ? true : false })}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all border ${adminSettings.enableMaps !== false ? 'bg-[#9952FF] border-[#9952FF] text-white shadow-lg shadow-[#e9daff]' : 'bg-white border-slate-200 text-slate-500'}`}
-                    >
-                      <MapPin size={14} fill={adminSettings.enableMaps !== false ? "currentColor" : "none"} />
-                      <span className="text-[10px] font-black">{adminSettings.enableMaps !== false ? 'مفعلة' : 'معطلة'}</span>
-                    </button>
-                  </div>
-
-                  {!adminSettings.enableAutoNearby ? (
-                    <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-slate-50 rounded-xl border border-slate-100">
-                     {stores
-                        .filter(s => s.status === 'active' && (s.shopName.toLowerCase().includes(storeSearch.toLowerCase()) || s.username.toLowerCase().includes(storeSearch.toLowerCase())))
-                        .map(store => (
-                          <button 
-                            key={`near-${store.id}`}
-                            onClick={() => {
-                              const current = adminSettings.nearbyStoreIds || [];
-                              const updated = current.includes(store.id)
-                                ? current.filter((id: string) => id !== store.id)
-                                : [...current, store.id];
-                              updateAdminSettings({ nearbyStoreIds: updated });
-                            }}
-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition flex items-center gap-2 ${adminSettings.nearbyStoreIds?.includes(store.id) ? 'bg-[#f5eeff] border-[#e9daff] text-[#4D2980]' : 'bg-white border-slate-200 text-slate-500 hover:border-[#cba8ff]'}`}
-                          >
-                            <img src={store.logo || undefined} className="w-4 h-4 rounded-full" />
-                            <span>{store.shopName}</span>
-                            <span className="text-[8px] text-slate-400 opacity-70">@{store.username}</span>
-                            {adminSettings.nearbyStoreIds?.includes(store.id) && <Check size={12} />}
-                          </button>
-                        ))}
-                    </div>
-                  ) : (
-                    <div className="p-4 bg-[#f5eeff]/50 rounded-2xl border border-[#e9daff]/50 text-center">
-                      <div className="w-10 h-10 bg-white rounded-xl shadow-sm border border-[#e9daff] flex items-center justify-center mx-auto mb-2 text-[#9952FF]">
-                        <MapPin size={20} />
-                      </div>
-                      <p className="text-[10px] font-black text-[#4D2980] mb-1">الفرز التلقائي مفعل ✅</p>
-                      <p className="text-[9px] text-[#9952FF]/70 font-bold">سيقوم التطبيق بترتيب المتاجر تلقائياً للزبون بناءً على موقعه الجغرافي الفعلي.</p>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => updateAdminSettings({ enableMaps: adminSettings.enableMaps === false ? true : false })}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all border ${adminSettings.enableMaps !== false ? 'bg-[#9952FF] border-[#9952FF] text-white shadow-lg shadow-[#e9daff]' : 'bg-white border-slate-200 text-slate-500'}`}
+                  >
+                    <MapPin size={14} fill={adminSettings.enableMaps !== false ? 'currentColor' : 'none'} />
+                    <span className="text-[10px] font-black">{adminSettings.enableMaps !== false ? 'مفعلة' : 'معطلة'}</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -6722,6 +7064,94 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
+      {editFlashSaleTextsModal && (
+        <div className="fixed inset-0 bg-[#4D2980]/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-scale-in">
+            <div className="bg-[#9952FF] p-4 flex justify-between items-center text-white">
+              <h3 className="font-bold flex items-center gap-2">
+                <Zap size={18} className="text-yellow-400" />
+                تعديل نصوص الفعالية
+              </h3>
+              <button
+                onClick={() => setEditFlashSaleTextsModal(null)}
+                className="bg-white/10 p-1.5 rounded-lg hover:bg-white/20 transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-right">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">
+                  عنوان الفعالية (شارة الزبون)
+                </label>
+                <input
+                  type="text"
+                  className="w-full p-3 bg-slate-50 rounded-xl border focus:border-[#9952FF] outline-none transition text-sm font-bold"
+                  value={editFlashSaleTextsModal.title}
+                  onChange={(e) =>
+                    setEditFlashSaleTextsModal((prev) =>
+                      prev ? { ...prev, title: e.target.value } : null,
+                    )
+                  }
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">
+                  وصف للمتاجر (دعوة المشاركة)
+                </label>
+                <textarea
+                  rows={3}
+                  className="w-full p-3 bg-slate-50 rounded-xl border focus:border-[#9952FF] outline-none transition text-sm font-bold resize-none"
+                  value={editFlashSaleTextsModal.description}
+                  onChange={(e) =>
+                    setEditFlashSaleTextsModal((prev) =>
+                      prev ? { ...prev, description: e.target.value } : null,
+                    )
+                  }
+                />
+              </div>
+
+              <div className="flex gap-3 mt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!editFlashSaleTextsModal.title.trim()) {
+                      showToast('error', 'ناقص', 'عنوان الفعالية مطلوب.');
+                      return;
+                    }
+                    try {
+                      await updateFlashSale(editFlashSaleTextsModal.id, {
+                        title: editFlashSaleTextsModal.title.trim(),
+                        description: editFlashSaleTextsModal.description.trim(),
+                      });
+                      setEditFlashSaleTextsModal(null);
+                      showToast('success', 'تم الحفظ', 'تم تحديث نصوص الفعالية.');
+                    } catch (err: unknown) {
+                      showToast(
+                        'error',
+                        'فشل الحفظ',
+                        err instanceof Error ? err.message : 'تعذر تحديث النصوص',
+                      );
+                    }
+                  }}
+                  className="flex-1 py-3 bg-[#9952FF] text-white font-bold rounded-xl shadow-lg hover:bg-[#4D2980] transition"
+                >
+                  حفظ النصوص
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditFlashSaleTextsModal(null)}
+                  className="flex-1 py-3 bg-slate-100 text-slate-700 font-bold rounded-xl transition hover:bg-slate-200"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <AutoSubscriptionSettingsModal
         open={showAutoSubSettingsModal}
         onClose={() => setShowAutoSubSettingsModal(false)}
@@ -6811,7 +7241,9 @@ export const AdminPanel: React.FC = () => {
             
             <form onSubmit={handleCreateFlashSale} className="p-6 space-y-4">
               <div>
-                <label className="text-xs font-bold text-slate-500 mb-1.5 block">عنوان الفعالية (مثال: خصومات الجمعة السوداء)</label>
+                <label className="text-xs font-bold text-slate-500 mb-1.5 block">
+                  عنوان الفعالية (يظهر كشارة للزبون — مثال: يوم الجمعة)
+                </label>
                 <input 
                   type="text" 
                   autoFocus
@@ -6819,17 +7251,19 @@ export const AdminPanel: React.FC = () => {
                   value={newFlashSaleForm.title}
                   onChange={e => setNewFlashSaleForm(prev => ({...prev, title: e.target.value}))}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold outline-none focus:border-[#9952FF] focus:ring-1 focus:ring-[#9952FF] transition"
-                  placeholder="حدث تخفيضات الشتاء..."
+                  placeholder="يوم الجمعة"
                 />
               </div>
               
               <div>
-                <label className="text-xs font-bold text-slate-500 mb-1.5 block">وصف الفعالية (اختياري)</label>
+                <label className="text-xs font-bold text-slate-500 mb-1.5 block">
+                  وصف للمتاجر (دعوة المشاركة — لا يظهر للزبون داخل الشريط)
+                </label>
                 <textarea 
                   value={newFlashSaleForm.description}
                   onChange={e => setNewFlashSaleForm(prev => ({...prev, description: e.target.value}))}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold outline-none focus:border-[#9952FF] focus:ring-1 focus:ring-[#9952FF] transition resize-none"
-                  placeholder="الوصف يظهر للمتاجر كدعوة للمشاركة..."
+                  placeholder="شاركونا منتجاتكم بسوق الجمعة..."
                   rows={2}
                 />
               </div>

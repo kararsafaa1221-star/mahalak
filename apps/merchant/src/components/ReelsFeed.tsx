@@ -1,10 +1,12 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable react-hooks/immutability */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { db, auth } from '@shared/lib/firebase';
 import { collection, doc, getDoc, getDocs, query, updateDoc, increment, addDoc, where, arrayUnion, arrayRemove, limit } from 'firebase/firestore';
 import { Reel, Product, Store, Customer } from '@shared/types';
-import { VerifiedBadge } from './VerifiedBadge';
+import { VerifiedBadge } from '@shared/components/VerifiedBadge';
+import { isStoreVerified } from '@shared/utils/storeVerification';
 import { useApp } from '@shared/context/useApp';
 import { Share } from '@capacitor/share'; // استيراد ميزة مشاركة النظام الرسمية للموبايل
 import {
@@ -42,6 +44,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
   currentCustomer,
   onShareReel
 }) => {
+  const { t } = useTranslation();
   const { toggleFollowStore } = useApp();
   const [reels, setReels] = useState<Reel[]>(() => {
     try {
@@ -85,6 +88,9 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
         storedSaves.forEach((rid: string) => { savedMap[rid] = true; });
         setLikedReels(likedMap);
         setSavedReels(savedMap);
+      } catch {
+        /* ignore corrupt localStorage */
+      }
     }
   }, [currentCustomer]);
 
@@ -133,6 +139,9 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
             localStorage.setItem(viewStorageKey, JSON.stringify(currentViews));
             setReels(prev => prev.map((r, i) => i === index ? { ...r, viewsCount: (r.viewsCount || 0) + 1 } : r));
           }
+        } catch {
+          /* ignore view tracking errors */
+        }
       }
 
       if (storeId && !lazyStoresRef.current[storeId]) {
@@ -174,7 +183,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
         lazyFetchProductAndStore(fetchedReels[idxToFetch], idxToFetch);
       }
     } catch (err: any) {
-      setError("فشل تحميل المقطع التسوقي. الرجاء التحقق من جودة الاتصال بالإنترنت.");
+      setError(t('merchant.reels.feed.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -274,42 +283,90 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
   const handleLikeReel = async (index: number) => {
     const reel = reels[index];
     const isLiked = likedReels[reel.id];
+    const nextLiked = !isLiked;
+    const delta = isLiked ? -1 : 1;
+
+    // Optimistic UI — reflect instantly on weak networks
+    setLikedReels((prev) => ({ ...prev, [reel.id]: nextLiked }));
+    setReels((prev) =>
+      prev.map((r, i) =>
+        i === index ? { ...r, likesCount: Math.max(0, (r.likesCount || 0) + delta) } : r,
+      ),
+    );
+
     try {
-      await updateDoc(doc(db, 'reels', reel.id), { likesCount: increment(isLiked ? -1 : 1) });
-      setLikedReels(prev => ({ ...prev, [reel.id]: !isLiked }));
-      setReels(prev => prev.map((r, i) => i === index ? { ...r, likesCount: Math.max(0, (r.likesCount || 0) + (isLiked ? -1 : 1)) } : r));
+      await updateDoc(doc(db, 'reels', reel.id), { likesCount: increment(delta) });
 
       if (currentCustomer) {
         await updateDoc(doc(db, 'customers', currentCustomer.id), {
-          likedReels: isLiked ? arrayRemove(reel.id) : arrayUnion(reel.id)
+          likedReels: isLiked ? arrayRemove(reel.id) : arrayUnion(reel.id),
         });
       } else {
         const storedLikes = JSON.parse(localStorage.getItem('unregistered_liked_reels') || '[]');
-        localStorage.setItem('unregistered_liked_reels', JSON.stringify(isLiked ? storedLikes.filter((id: string) => id !== reel.id) : [...storedLikes, reel.id]));
+        localStorage.setItem(
+          'unregistered_liked_reels',
+          JSON.stringify(
+            isLiked
+              ? storedLikes.filter((id: string) => id !== reel.id)
+              : [...storedLikes, reel.id],
+          ),
+        );
       }
+    } catch {
+      // Rollback on failure
+      setLikedReels((prev) => ({ ...prev, [reel.id]: isLiked }));
+      setReels((prev) =>
+        prev.map((r, i) =>
+          i === index ? { ...r, likesCount: Math.max(0, (r.likesCount || 0) - delta) } : r,
+        ),
+      );
+    }
   };
 
   const handleToggleBookmark = async (index: number) => {
     const reel = reels[index];
     const isSaved = savedReels[reel.id];
+    const nextSaved = !isSaved;
+    const delta = isSaved ? -1 : 1;
+
+    setSavedReels((prev) => ({ ...prev, [reel.id]: nextSaved }));
+    setReels((prev) =>
+      prev.map((r, i) =>
+        i === index ? { ...r, savesCount: Math.max(0, (r.savesCount || 0) + delta) } : r,
+      ),
+    );
+
     try {
-      await updateDoc(doc(db, 'reels', reel.id), { savesCount: increment(isSaved ? -1 : 1) });
-      setSavedReels(prev => ({ ...prev, [reel.id]: !isSaved }));
-      setReels(prev => prev.map((r, i) => i === index ? { ...r, savesCount: Math.max(0, (r.savesCount || 0) + (isSaved ? -1 : 1)) } : r));
+      await updateDoc(doc(db, 'reels', reel.id), { savesCount: increment(delta) });
 
       if (currentCustomer) {
         await updateDoc(doc(db, 'customers', currentCustomer.id), {
-          savedReels: isSaved ? arrayRemove(reel.id) : arrayUnion(reel.id)
+          savedReels: isSaved ? arrayRemove(reel.id) : arrayUnion(reel.id),
         });
       } else {
         const storedSaves = JSON.parse(localStorage.getItem('unregistered_saved_reels') || '[]');
-        localStorage.setItem('unregistered_saved_reels', JSON.stringify(isSaved ? storedSaves.filter((id: string) => id !== reel.id) : [...storedSaves, reel.id]));
+        localStorage.setItem(
+          'unregistered_saved_reels',
+          JSON.stringify(
+            isSaved
+              ? storedSaves.filter((id: string) => id !== reel.id)
+              : [...storedSaves, reel.id],
+          ),
+        );
       }
+    } catch {
+      setSavedReels((prev) => ({ ...prev, [reel.id]: isSaved }));
+      setReels((prev) =>
+        prev.map((r, i) =>
+          i === index ? { ...r, savesCount: Math.max(0, (r.savesCount || 0) - delta) } : r,
+        ),
+      );
+    }
   };
 
   const handleToggleFollow = (storeId: string) => {
     if (!currentCustomer) {
-      alert('يرجى تسجيل الدخول لمتابعة المتجر');
+      alert(t('merchant.reels.feed.loginToFollow'));
       return;
     }
     toggleFollowStore(currentCustomer.id, storeId);
@@ -319,15 +376,14 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
   const handleShareReel = async (index: number) => {
     const reel = reels[index];
     const store = lazyStores[reel.merchantId];
-    const shopName = store ? store.shopName : 'متجر مميز';
+    const shopName = store ? store.shopName : t('merchant.reels.feed.defaultShopName');
 
     try {
-      // استدعاء نظام كاباسيتور الأصلي لفتح الـ Share Sheet الخاص بالآيفون والأندرويد مباشرة
       await Share.share({
-        title: `مشاركة مقطع من متجر ${shopName}`,
-        text: `شاهد هذا المنتج المذهل من متجر (${shopName}) على تطبيق محلك! 🎬🛍️`,
+        title: t('merchant.reels.feed.shareTitle', { shopName }),
+        text: t('merchant.reels.feed.shareText', { shopName }),
         url: reel.videoUrl,
-        dialogTitle: 'مشاركة المقطع التسوقي عبر تطبيقات الموبايل',
+        dialogTitle: t('merchant.reels.feed.shareDialogTitle'),
       });
 
       // زيادة عداد المشاركات في الفايربيس للريل
@@ -338,7 +394,10 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
       // خطة احتياطية للـ Web والـ Browsers العادية
       try {
         await navigator.clipboard.writeText(reel.videoUrl);
-        alert('تم نسخ رابط فيديو المنتج بنجاح لمشاركته! 🔗');
+        alert(t('merchant.reels.feed.linkCopied'));
+      } catch {
+        /* ignore */
+      }
     }
   };
 
@@ -358,14 +417,18 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
       snap.forEach((d) => { list.push({ id: d.id, ...d.data() }); });
       list.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setActiveComments(list);
-    finally { setLoadingComments(false); }
+    } catch {
+      setActiveComments([]);
+    } finally {
+      setLoadingComments(false);
+    }
   };
 
   const handleAddComment = async (reelId: string, index: number) => {
     if (!newCommentText.trim()) return;
     const uid = auth.currentUser?.uid;
     if (!uid) return;
-    const authorName = currentCustomer?.name || 'مشتري مهتم';
+    const authorName = currentCustomer?.name || t('merchant.reels.feed.defaultAuthorName');
     try {
       const commentDoc = {
         reelId,
@@ -380,13 +443,16 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
       setNewCommentText('');
       setActiveComments(prev => [commentDoc as any, ...prev]);
       setReels(prev => prev.map((r, i) => i === index ? { ...r, commentsCount: (r.commentsCount || 0) + 1 } : r));
+    } catch {
+      /* ignore comment failures */
+    }
   };
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] p-8 text-center bg-black" dir="rtl">
         <Loader2 className="animate-spin text-vibrant-purple mb-4" size={40} />
-        <p className="text-sm font-black text-slate-400 font-tajawal">جاري تجهيز صالة العرض ومقاطع الفيديوهات...</p>
+        <p className="text-sm font-black text-slate-400 font-tajawal">{t('merchant.reels.feed.loading')}</p>
       </div>
     );
   }
@@ -398,7 +464,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
           <AlertCircle size={28} />
         </div>
         <div>
-          <h4 className="text-sm font-black text-slate-200 font-tajawal">عذراً، فشل تحميل صالة العرض</h4>
+          <h4 className="text-sm font-black text-slate-200 font-tajawal">{t('merchant.reels.feed.errorTitle')}</h4>
           <p className="text-xs text-slate-400 mt-1 font-medium">{error}</p>
         </div>
       </div>
@@ -509,7 +575,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                     )}
                   </div>
 
-                  {store && (store.isVerified || (store as any).is_verified) && (
+                  {store && isStoreVerified(store) && (
                     <div className="absolute -bottom-1 left-0 z-10 drop-shadow-md">
                       <VerifiedBadge size={13} />
                     </div>
@@ -521,7 +587,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                       className="absolute -bottom-2 w-9 h-4 bg-rose-500 rounded-full border border-white text-white flex items-center justify-center font-black shadow-md hover:bg-rose-600 transition"
                       style={{ fontSize: '8px' }}
                     >
-                      متابعة
+                      {t('merchant.reels.feed.follow')}
                     </button>
                   )}
                 </div>
@@ -534,7 +600,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                     <Heart size={20} className={isLiked ? "fill-current animate-pulse" : ""} />
                   </div>
                   <span className="text-[10px] text-slate-200 font-extrabold mt-1 font-mono">{(reel.likesCount || 0).toLocaleString()}</span>
-                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">أعجبني</span>
+                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">{t('merchant.reels.feed.like')}</span>
                 </button>
 
                 {/* زر التعليقات */}
@@ -543,7 +609,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                     <MessageCircle size={20} />
                   </div>
                   <span className="text-[10px] text-slate-200 font-extrabold mt-1 font-mono">{(reel.commentsCount || 0).toLocaleString()}</span>
-                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">تعليق</span>
+                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">{t('merchant.reels.feed.comment')}</span>
                 </button>
 
                 {/* زر المشاركة المدعوم بالـ Native Share Sheet الأصلي للجهاز */}
@@ -552,7 +618,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                     <Share2 size={20} />
                   </div>
                   <span className="text-[10px] text-slate-200 font-extrabold mt-1 font-mono">{(reel.sharesCount || 0).toLocaleString()}</span>
-                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">مشاركة</span>
+                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">{t('merchant.reels.feed.share')}</span>
                 </button>
 
                 {/* زر الحفظ */}
@@ -563,7 +629,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                     <Bookmark size={20} className={isSaved ? "fill-current" : ""} />
                   </div>
                   <span className="text-[10px] text-slate-200 font-extrabold mt-1 font-mono">{(reel.savesCount || 0).toLocaleString()}</span>
-                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">حفظ</span>
+                  <span className="text-[8px] text-slate-300 font-bold opacity-80 mt-0.5">{t('merchant.reels.feed.save')}</span>
                 </button>
 
               </div>
@@ -583,15 +649,19 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                         )}
                       </div>
 
-                      <div className="flex flex-col">
-                        <span className="text-xs font-black text-white flex items-center gap-1">
-                          {store.shopName}
-                          {(store.isVerified || (store as any).is_verified) && <VerifiedBadge size={12} />}
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-xs font-black text-white flex items-center gap-1 min-w-0">
+                          <span className="truncate">{store.shopName}</span>
+                          {isStoreVerified(store) && <VerifiedBadge size={12} />}
                         </span>
-
+                        {store.username ? (
+                          <span className="text-[9px] font-bold text-white/75 truncate" dir="ltr">
+                            @{String(store.username).replace(/^@+/, '')}
+                          </span>
+                        ) : null}
                         <span className="text-[9px] text-slate-300 flex items-center gap-0.5">
                           <MapPin size={10} className="text-slate-400" />
-                          {store.province || 'العراق'} {store.area ? `- ${store.area}` : ''}
+                          {store.province || t('merchant.reels.feed.defaultCountry')} {store.area ? `- ${store.area}` : ''}
                         </span>
                       </div>
                     </div>
@@ -616,7 +686,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                                 {product.price.toLocaleString()} د.ع
                               </span>
                               <span className="text-rose-400 text-[9px] font-black bg-rose-500/10 px-1.5 py-0.5 rounded">
-                                خصم ({Math.round(((product.price - product.finalPrice) / product.price) * 100)}%)
+                                {t('merchant.reels.feed.discount', { percent: Math.round(((product.price - product.finalPrice) / product.price) * 100) })}
                               </span>
                             </div>
                           )}
@@ -629,19 +699,19 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
                           if (onAddToCart) {
                             onAddToCart(product, 1);
                           } else {
-                            alert(`تم إضافة ${product.name} للسلة`);
+                            alert(t('merchant.reels.feed.addedToCart', { name: product.name }));
                           }
                         }}
                         className="w-full py-2.5 bg-vibrant-purple hover:bg-violet active:scale-[0.97] transition text-white font-black text-xs sm:text-sm rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-vibrant-purple/25/20 cursor-pointer"
                       >
                         <ShoppingBag size={15} />
-                        <span>إضافة إلى السلة</span>
+                        <span>{t('merchant.reels.feed.addToCart')}</span>
                       </button>
                     </>
                   ) : (
                     <div className="flex items-center justify-center gap-2 py-1">
                       <Loader2 size={13} className="animate-spin text-purple-400" />
-                      <span className="text-[10px] font-bold text-slate-400">جاري مزامنة بيانات المنتج...</span>
+                      <span className="text-[10px] font-bold text-slate-400">{t('merchant.reels.feed.syncingProduct')}</span>
                     </div>
                   )}
                 </div>
@@ -676,13 +746,13 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
         <div className="absolute inset-x-0 bottom-0 h-[60%] bg-[#0B0D17] border-t border-white/10 rounded-t-3xl z-50 flex flex-col font-tajawal shadow-2xl overflow-hidden text-white animate-slide-up">
           <div className="flex items-center justify-between p-4 border-b border-white/10">
             <h3 className="font-black text-sm flex items-center gap-1.5">
-              <span>التعليقات</span>
+              <span>{t('merchant.reels.feed.commentsTitle')}</span>
               <span className="text-xs text-slate-400 bg-white/10 px-2 py-0.5 rounded-full font-mono">
                 {activeComments.length}
               </span>
             </h3>
             <button onClick={() => setShowComments(false)} className="text-slate-400 hover:text-white p-1 text-sm font-bold">
-              إغلاق ×
+              {t('merchant.reels.feed.closeComments')}
             </button>
           </div>
 
@@ -690,7 +760,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
             {activeComments.length === 0 ? (
               <div className="text-center py-12 text-slate-500 space-y-1">
                 <MessageCircle size={32} className="mx-auto text-slate-600 mb-2" />
-                <p className="text-xs font-bold">لا توجد تعليقات بعد لهذا المقطع</p>
+                <p className="text-xs font-bold">{t('merchant.reels.feed.noComments')}</p>
               </div>
             ) : (
               activeComments.map((comment, i) => (
@@ -711,7 +781,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
               type="text"
               value={newCommentText}
               onChange={(e) => setNewCommentText(e.target.value)}
-              placeholder="اكتب تعليقاً حقيقياً..."
+              placeholder={t('merchant.reels.feed.commentPlaceholder')}
               className="flex-1 bg-white/10 text-white rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none placeholder-slate-500 text-right pr-3"
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -724,7 +794,7 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
               disabled={!newCommentText.trim()}
               className="bg-vibrant-purple disabled:bg-slate-700 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl"
             >
-              إرسال
+              {t('merchant.reels.feed.sendComment')}
             </button>
           </div>
         </div>

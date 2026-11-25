@@ -95,5 +95,6 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['onnxruntime-web/webgpu'],
+    include: ['@imgly/background-removal', 'onnxruntime-web'],
   },
 });

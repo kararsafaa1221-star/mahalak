@@ -2,11 +2,15 @@ import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, laz
 import { useApp } from "@shared/context/useApp";
 import { validateUserStatus } from "@shared/utils/userValidation";
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Product, Order } from "@shared/types";
-import { STORE_CATEGORIES } from "@shared/constants";
+import { STORE_CATEGORIES, getStoreCategoryFullLabel, getProvinceLabel } from "@shared/constants";
 import { isStoreSubscriptionActive } from "@shared/utils/store";
 import { buildMerchantRenewalWhatsAppMessage, resolveMerchantRenewalPageSettings } from "@shared/constants/merchantRenewalPlans";
+import { buildNotificationContent, notificationDeliveryFields, getNotificationDisplayText } from "@shared/constants/notificationTemplates";
 import { StorageService } from "@shared/services/storageService";
+import { LanguageSwitcher } from "@shared/i18n/LanguageSwitcher";
+import { useLocale } from "@shared/i18n/LocaleProvider";
 import { authService } from "@shared/services/authService";
 import { normalizeOtpCode } from "@shared/utils/phone";
 import { showToast, showModal, showConfirm } from "@shared/utils/alerts";
@@ -17,6 +21,10 @@ import {
   hasTrackedInventory,
 } from "@shared/utils/productInventory";
 import { showLocalNotification, requestNotificationPermission, setupPushNotifications } from "@shared/lib/pushNotifications";
+import {
+  formatStoreVisitCount,
+  subscribeStoreVisitStats,
+} from "@shared/lib/storeVisitTracking";
 import { formatSafeDate, formatSafeTimeString, formatSafeDateTimeString, getTimestampMillis } from "@shared/utils/date";
 import { orderMatchesCustomerSearch } from "@shared/utils/customerId";
 import { isOrderVisibleToMerchant, isOrderShownInMerchantInbox, isMerchantInboxClearableStatus } from "@shared/utils/orderMerchantVisibility";
@@ -24,18 +32,12 @@ import {
   buildMerchantProductSharePayload,
   buildMerchantStoreSharePayload,
   buildPlatformShareAction,
-  buildStoreShareUrl,
   tryNativeShare,
   type SharePlatform,
 } from "@shared/utils/shareContent";
-import {
-  EMPTY_MARKETING_SHARE_STATS,
-  getTopSharedProducts,
-  subscribeMarketingShareStats,
-  type MarketingShareStats,
-} from "@shared/lib/shareVisitTracking";
 import { motion, AnimatePresence } from "framer-motion";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, AreaChart, Area } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Cell, CartesianGrid, AreaChart, Area } from "recharts";
+import { SafeChartContainer } from "@/components/SafeChartContainer";
 import { useReactToPrint } from "react-to-print";
 import { QRCodeSVG } from "qrcode.react";
 const LazyOrderMap = lazy(() => import("@/components/OrderMap"));
@@ -43,16 +45,26 @@ import { MerchantOnboarding } from "@/components/MerchantOnboarding";
 import { MerchantAuthPage } from "@/components/MerchantAuthPage";
 import { MerchantTermsAgreement } from "@/components/MerchantTermsAgreement";
 import { MerchantSubscriptionPlans } from "@/components/MerchantSubscriptionPlans";
-import { MerchantDashboardTour } from "@/components/MerchantDashboardTour";
+import { MerchantVerificationPage } from "@/components/MerchantVerificationPage";
+import { MerchantDashboardTour, markMerchantTourEligible } from "@/components/MerchantDashboardTour";
 import { MerchantLocationPicker } from "@/components/MerchantLocationPicker";
 import { useMerchantAndroidBack } from "@/hooks/useMerchantAndroidBack";
 import { DeleteAccountSection } from "@shared/components/DeleteAccountSection";
 import { PrivacyPolicyModal } from "@shared/components/PrivacyPolicyModal";
 import { AboutUsModal } from "@shared/components/AboutUsModal";
 import { ChangePasswordModal } from "@shared/components/ChangePasswordModal";
+import { StoreIdentity } from "@shared/components/StoreIdentity";
+import { VerifiedBadge } from "@shared/components/VerifiedBadge";
+import { isStoreVerified } from "@shared/utils/storeVerification";
 import { MahalakLogo, MahalakLogoIcon } from "@shared/components/MahalakLogo";
 import { SponsoredAdSlider, type SponsoredAdItem } from "@shared/components/SponsoredAdSlider";
 import { getPublishedSponsoredAds, getMerchantAdsSectionOrder } from "@shared/utils/sponsoredAds";
+import { scrollAppToTop } from "@shared/utils/appScrollHistory";
+import {
+  buildMerchantOrderDeepLink,
+  extractOrderIdFromScanPayload,
+} from "@shared/utils/merchantOrderDeepLink";
+import { applyHtml5QrcodeScannerTranslations } from "@/utils/html5QrcodeI18n";
 
 /** WhatsApp دعم الاشتراك — 07735187868 */
 const SUPPORT_WHATSAPP_NUMBER = "9647735187868";
@@ -64,6 +76,7 @@ function resolveSupportWhatsApp(adminWhatsapp?: string) {
 }
 
 import {
+  Settings,
   Store as StoreIcon,
   Package,
   ClipboardList,
@@ -80,13 +93,15 @@ import {
   MessageCircle,
   Send,
   Camera,
+  Image as ImageIcon,
   ChevronRight,
   ChevronLeft,
   ChevronDown,
   ChevronUp,
   LogOut,
   Phone,
-  BellRing,
+  Bell,
+  BellOff,
   Shield,
   Gift,
   Truck,
@@ -103,6 +118,7 @@ import {
   Car,
   Sparkles,
   Printer,
+  Download,
   ShoppingBag,
   TrendingUp,
   Star,
@@ -117,24 +133,31 @@ import {
   Copy,
   AlertCircle,
   Loader2,
+  BadgeCheck,
+  Eye,
 } from "lucide-react";
-import { Wallet as MerchantWallet } from "@/components/merchant/Wallet";
 import { ImageUploader } from "@shared/components/ImageUploader";
 const BackgroundRemover = lazy(() => import("@/components/BackgroundRemover").then(m => ({ default: m.BackgroundRemover })));
 const PromoBannerBuilderLazy = lazy(() => import("@/components/PromoBannerBuilder").then(m => ({ default: m.PromoBannerBuilder })));
-const StoreThemeEditorLazy = lazy(() => import("@/components/StoreThemeEditor").then(m => ({ default: m.StoreThemeEditor })));
+const MerchantStorePreview = lazy(() =>
+  import("@/components/MerchantStorePreview").then((m) => ({ default: m.MerchantStorePreview })),
+);
+const MerchantWallet = lazy(() => import("@/components/merchant/Wallet").then(m => ({ default: m.Wallet })));
+const MerchantPromoCodesManager = lazy(() => import("@/components/MerchantPromoCodesManager").then(m => ({ default: m.MerchantPromoCodesManager })));
+const StoreAudiencePanel = lazy(() => import("../components/StoreAudiencePanel").then(m => ({ default: m.StoreAudiencePanel })));
 import type { PromoBannerFormData } from "@/components/PromoBannerBuilder";
-import { MerchantPromoCodesManager } from "@/components/MerchantPromoCodesManager";
 import { CopyButton } from "@shared/components/CopyButton";
+import { DashboardChunkFallback } from "@shared/components/DashboardChunkFallback";
 import { ProductImage } from "@shared/components/ProductImage";
+import { VirtualizedGrid } from "@shared/components/VirtualizedGrid";
+import { VirtualizedList } from "@shared/components/VirtualizedList";
 import { prefetchImageUrls } from "@shared/utils/prefetchImages";
 import {
-  StoreAudiencePanel,
   getStoreAudienceStats,
-} from "../components/StoreAudiencePanel";
+  type StoreAudienceSegment,
+} from "../utils/storeAudience";
 import { auth } from "@shared/lib/firebase";
-import { Html5QrcodeScanner } from "html5-qrcode";
-import QRCode from "react-qr-code";
+import { Html5Qrcode, Html5QrcodeScanner, Html5QrcodeScanType } from "html5-qrcode";
 
 const notificationSound = new Audio(
   "https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3",
@@ -143,14 +166,14 @@ const notificationSound = new Audio(
 // ==========================================
 // دالة لفتح الخرائط في الموبايل
 // ==========================================
-const openNativeMapApp = (lat: number, lng: number, appType: 'google' | 'waze' = 'google') => {
+const openNativeMapApp = (lat: number, lng: number, appType: 'google' | 'waze' = 'google', noCoordsMessage?: string) => {
   if (!lat || !lng) {
-    alert('عذراً، إحداثيات موقع الزبون غير متوفرة لهذا الطلب.');
+    if (noCoordsMessage) alert(noCoordsMessage);
     return;
   }
 
   if (appType === 'google') {
-    const mapUrl = `geo:${lat},${lng}?q=${lat},${lng}(موقع الزبون)`;
+    const mapUrl = `geo:${lat},${lng}?q=${lat},${lng}(${encodeURIComponent('Customer')})`;
     const fallbackUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
     
     try {
@@ -180,7 +203,14 @@ const openNativeMapApp = (lat: number, lng: number, appType: 'google' | 'waze' =
   }
 };
 
+import {
+  captureElementPngBlob,
+  downloadPngBlob,
+  openWhatsAppInvoiceText,
+  shareInvoiceTextAndImage,
+} from "@/utils/shareOrderInvoice";
 import { PushPermissionPrompt } from "@shared/components/PushPermissionPrompt";
+import { WelcomeScreenBackground } from "@shared/components/WelcomeScreenBackground";
 import { shouldShowLocationPrompt, shouldShowNotificationPrompt } from "@shared/lib/permissions";
 
 // ==========================================
@@ -189,6 +219,8 @@ import { shouldShowLocationPrompt, shouldShowNotificationPrompt } from "@shared/
 
 export const MerchantApp: React.FC = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation();
+  const { language } = useLocale();
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const {
     currentMerchant,
@@ -257,18 +289,6 @@ export const MerchantApp: React.FC = () => {
     })();
   }, [currentMerchant?.id]);
 
-  const [isSyncing, setIsSyncing] = useState(false);
-  const handleManualSync = async () => {
-    setIsSyncing(true);
-    try {
-      await refreshStoreAudience();
-    } catch {
-      /* ignored — listeners keep core data fresh */
-    } finally {
-      setTimeout(() => setIsSyncing(false), 600);
-    }
-  };
-
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [notificationTitle, setNotificationTitle] = useState("");
   const [notificationBody, setNotificationBody] = useState("");
@@ -276,13 +296,13 @@ export const MerchantApp: React.FC = () => {
 
   const handleSendNotificationToFollowers = async () => {
     if(!notificationTitle.trim() || !notificationBody.trim()) {
-        showToast("error", "حقول ناقصة", "يرجى إدخال عنوان ومحتوى الإشعار");
+        showToast("error", t("merchant.notifications.bulk.missingFieldsTitle"), t("merchant.notifications.bulk.missingFields"));
         return;
     }
     
     // Check if subscription active
     if (currentMerchant?.status !== "active" || !isStoreSubscriptionActive(currentMerchant)) {
-        showToast("error", "الاشتراك غير فعال", "عذراً، يجب أن يكون اشتراكك فعالاً لإرسال إشعارات جماعية للزبائن.");
+        showToast("error", t("merchant.notifications.bulk.subscriptionInactiveTitle"), t("merchant.notifications.bulk.subscriptionInactive"));
         return;
     }
 
@@ -295,15 +315,15 @@ export const MerchantApp: React.FC = () => {
           "promo",
         );
         if (sent <= 0) {
-           showToast("info", "لا يوجد متابعون", "لا يوجد لديك متابعين متاحين لإرسال الإشعار");
+           showToast("info", t("merchant.notifications.bulk.noFollowersTitle"), t("merchant.notifications.bulk.noFollowers"));
            return;
         }
-        showToast("success", "تم الإرسال", `تم إرسال الإشعار لـ ${sent} متابع بنجاح!`);
+        showToast("success", t("merchant.notifications.bulk.sentTitle"), t("merchant.notifications.bulk.sentSuccess", { count: sent }));
         setShowNotificationModal(false);
         setNotificationTitle("");
         setNotificationBody("");
     } catch (e: any) {
-        showToast("error", "فشل الإرسال", e.message || "تعذر إرسال الإشعارات");
+        showToast("error", t("merchant.notifications.bulk.sendFailedTitle"), e.message || t("merchant.notifications.bulk.sendFailed"));
     } finally {
         setIsSendingNotification(false);
     }
@@ -319,6 +339,7 @@ export const MerchantApp: React.FC = () => {
     const isAppInstallLink = 
       lowerUrl.includes('wa.me') || 
       lowerUrl.includes('whatsapp') || 
+      lowerUrl.includes('whatsapp://') || 
       lowerUrl.includes('t.me') || 
       lowerUrl.includes('telegram') || 
       lowerUrl.includes('maps.google') || 
@@ -362,75 +383,7 @@ export const MerchantApp: React.FC = () => {
     setIframeUrl(url);
   };
 
-  const handleWhatsAppShare = (order: any) => {
-    if (!order) return;
-    const phoneNum = order.customerPhone || "";
-    // Keep only numbers for clean country-code formatting
-    let cleaned = phoneNum.replace(/[^0-9]/g, '');
-    
-    // If it starts with 07..., prepend Iraqi country code '964' and remove the leading 0
-    if (cleaned.startsWith('0')) {
-      cleaned = '964' + cleaned.substring(1);
-    }
-    
-    // If it's pure 10 digits starting with 7... e.g. 7701234567, prepend '964'
-    if (cleaned.length === 10 && cleaned.startsWith('7')) {
-      cleaned = '964' + cleaned;
-    }
-
-    const shopName = currentMerchant?.shopName || "المتجر";
-    const orderId = order.id || "";
-    const customerName = order.customerName || "زبوننا الكريم";
-    const totalAmount = (order.total || 0).toLocaleString();
-    const address = order.customerAddress ? `${order.customerProvince || ''} - ${order.customerAddress}` : (order.customerProvince || '');
-
-    // Choose the message based on order status as requested:
-    // 1- Accepted/Preparing state: "تم قبول الطلب شكرا لاستخدامك تطبيق محلك"
-    // 2- Shipped/With delivery driver: "طلبك مع مندوب التوصيل وشكرا لاستخدامك تطبيق محلك"
-    // 3- Received/Delivered state: "تم توصيل طلبك شكرا لاستخدامك تطبيق محلك"
-    
-    let message: string;
-    if (order.status === "pending" || order.status === "accepted") {
-      message = `مرحباً ${customerName} 👋
-معك ${shopName} 🏪
-
-نود إعلامك بأنه تم قبول طلبك وجاري تجهيزه بكل حب وتفاصيل طلبك كالتالي:
-📋 رقم الطلب: #${orderId}
-💰 إجمالي الحساب: ${totalAmount} د.ع
-
-تم قبول الطلب شكرا لاستخدامك تطبيق محلك ✨`;
-    } else if (order.status === "shipped") {
-      message = `مرحباً ${customerName} 👋
-معك ${shopName} 🏪
-
-نود إعلامك بأن طلبك الآن في الطريق إليك مع مندوب التوصيل 🚚:
-📦 رقم الطلب: #${orderId}
-📍 العنوان: ${address}
-💰 إجمالي الحساب للتسليم: ${totalAmount} د.ع
-
-طلبك مع مندوب التوصيل وشكرا لاستخدامك تطبيق محلك ✨`;
-    } else if (order.status === "delivered") {
-      message = `مرحباً ${customerName} 👋
-معك ${shopName} 🏪
-
-يسرنا إعلامك بأنه تم تسليم ووصول طلبك بنجاح 🎉:
-📦 رقم الطلب: #${orderId}
-💰 المبلغ المستلم: ${totalAmount} د.ع
-
-تم توصيل طلبك شكرا لاستخدامك تطبيق محلك ✨
-نتمنى لك تجربة تسوق رائعة دائماً! ❤️`;
-    } else {
-      message = `مرحباً ${customerName} 👋
-معك ${shopName} 🏪
-
-بخصوص طلبك رقم #${orderId} بقيمة ${totalAmount} د.ع.
-شكراً لاستخدامك تطبيق محلك ✨`;
-    }
-
-    const encodedMessage = encodeURIComponent(message);
-    const whatsappUrl = `https://wa.me/${cleaned}?text=${encodedMessage}`;
-    openExternalUrl(whatsappUrl);
-  };
+  // مشاركة واتساب للطلب/الفاتورة تُعرَّف لاحقاً بعد refs الفاتورة
 
   // ==========================================
   // الحالات (States)
@@ -475,19 +428,37 @@ export const MerchantApp: React.FC = () => {
       const localKey = diffDays <= 0 ? `sub_notif_expired_${currentMerchant.id}_${today.toDateString()}` : `sub_notif_sent_${currentMerchant.id}_${diffDays}_days`;
       if (!alreadyNotified && !localStorage.getItem(localKey)) {
         localStorage.setItem(localKey, 'true');
-        addNotification({
-          userId: currentMerchant.id,
-          role: 'merchant',
-          title: diffDays <= 0 ? 'انتهى الاشتراك ⚠️' : 'تنبيه الاشتراك ⚠️',
-          message: diffDays <= 0 ? 'لقد انتهت صلاحية اشتراكك! متجرك الآن مخفي عن الزبائن، بادر بتجديد الاشتراك للعودة لحركة المبيعات.' : `اشتراكك ينتهي خلال ${diffDays} يوم. يرجى التجديد لضمان استمرارية الخدمة وعدم تقييد المبيعات.`,
-          type: 'subscription',
-          actionLink: `https://wa.me/${resolveSupportWhatsApp(adminSettings?.whatsappNumber)}?text=${encodeURIComponent(buildMerchantRenewalWhatsAppMessage({
-            shopName: currentMerchant.shopName,
-            username: currentMerchant.username,
-            phone: currentMerchant.phone,
-          }, 'لم أحدد بعد'))}`,
-          actionText: "تواصل مع الدعم الفني للاشتراك"
+        const subKey =
+          diffDays <= 0
+            ? 'merchant.subscription.expired'
+            : diffDays === 1
+              ? 'merchant.subscription.1day'
+              : diffDays === 3
+                ? 'merchant.subscription.3days'
+                : 'merchant.subscription.7days';
+        const content = buildNotificationContent(adminSettings as Record<string, unknown>, subKey, {
+          ownerName: currentMerchant.ownerName,
+          shopName: currentMerchant.shopName,
+          expiryDate: currentMerchant.subscriptionExpiry || currentMerchant.subscriptionValidUntil || '',
+          diffDays,
         });
+        if (content) {
+          addNotification({
+            userId: currentMerchant.id,
+            role: 'merchant',
+            title: content.title,
+            message: content.message,
+            type: 'subscription',
+            templateKey: subKey,
+            actionLink: `https://wa.me/${resolveSupportWhatsApp(adminSettings?.whatsappNumber)}?text=${encodeURIComponent(buildMerchantRenewalWhatsAppMessage({
+              shopName: currentMerchant.shopName,
+              username: currentMerchant.username,
+              phone: currentMerchant.phone,
+            }, t("merchant.subscription.planNotSelectedYet")))}`,
+            actionText: t("merchant.subscription.supportAction"),
+            ...notificationDeliveryFields(adminSettings as Record<string, unknown>, subKey),
+          });
+        }
       }
     }
   }, [currentMerchant, notifications, addNotification, adminSettings]);
@@ -498,7 +469,6 @@ export const MerchantApp: React.FC = () => {
     | "products"
     | "orders"
     | "delivery"
-    | "promo"
     | "customers"
     | "profile"
     | "flashsales"
@@ -508,7 +478,11 @@ export const MerchantApp: React.FC = () => {
 
   const [isTabPending, startTabTransition] = useTransition();
 
-  const [myStoreSubPage, setMyStoreSubPage] = useState<null | "reports" | "marketing" | "delivery" | "promo">(null);
+  const [myStoreSubPage, setMyStoreSubPage] = useState<
+    null | "reports" | "marketing" | "delivery" | "customers"
+  >(null);
+  const [audienceSegment, setAudienceSegment] = useState<StoreAudienceSegment | null>(null);
+  const [audienceSearchQuery, setAudienceSearchQuery] = useState("");
 
   const isSubscriptionActive = currentMerchant
     ? isStoreSubscriptionActive(currentMerchant)
@@ -516,23 +490,28 @@ export const MerchantApp: React.FC = () => {
 
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
 
-  const handleTabChange = (newTab: any) => {
-    if (!isSubscriptionActive && newTab !== 'products') {
+  const applyTabChange = (newTab: any) => {
+    if (!isSubscriptionActive && newTab !== "products") {
       setShowSubscriptionModal(true);
       return;
     }
-    if (activeTab === "profile" && isProfileDirty) {
+    setMyStoreSubPage(null);
+    setProfileSubPage(null);
+    setAudienceSegment(null);
+    setShowNotifications(false);
+    setIframeUrl(null);
+    scrollAppToTop();
+    startTabTransition(() => setActiveTab(newTab));
+  };
+
+  const handleTabChange = (newTab: any) => {
+    // تنبيه التغييرات غير المحفوظة فقط داخل صفحات التعديل (معلومات المتجر / الموقع)
+    if (isProfileDirty && isProfileFormSubPage) {
       setPendingTab(newTab);
       setShowUnsavedModal(true);
-    } else {
-      setMyStoreSubPage(null);
-      setShowNotifications(false);
-      setIframeUrl(null);
-      if (newTab === 'home') {
-        setTimeout(() => window.scrollTo({ top: 0, behavior: 'instant' }), 0);
-      }
-      startTabTransition(() => setActiveTab(newTab));
+      return;
     }
+    applyTabChange(newTab);
   };
 
   useEffect(() => {
@@ -545,34 +524,172 @@ export const MerchantApp: React.FC = () => {
   }, [currentMerchant, isSubscriptionActive, view]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [iframeUrl, setIframeUrl] = useState<string | null>(null);
+  const [showStorePreview, setShowStorePreview] = useState(false);
 
-  // States for expandable sections in profile tab
-  const [expandedSections, setExpandedSections] = useState({
-    wallet: false,
-    personalInfo: false,
-    customers: false
-  });
+  const [profileSubPage, setProfileSubPage] = useState<
+    null | "storeInfo" | "location" | "wallet" | "verification" | "settings"
+  >(null);
+  const isProfileFormSubPage =
+    profileSubPage === "storeInfo" || profileSubPage === "location";
 
-  const toggleSection = (section: keyof typeof expandedSections) => {
-    setExpandedSections((prev) => {
-      const nextOpen = !prev[section];
-      if (section === 'customers' && nextOpen) {
-        void refreshStoreAudience();
-      }
-      return { ...prev, [section]: nextOpen };
-    });
+  const openProfileSubPage = (page: "storeInfo" | "location" | "wallet" | "verification" | "settings") => {
+    if (isProfileDirty && isProfileFormSubPage && profileSubPage !== page) {
+      setPendingTab(`__profile_${page}`);
+      setShowUnsavedModal(true);
+      return;
+    }
+    setMyStoreSubPage(null);
+    setShowNotifications(false);
+    setIframeUrl(null);
+    setProfileSubPage(page);
+    scrollAppToTop();
+    if (activeTab !== "profile") {
+      startTabTransition(() => setActiveTab("profile"));
+    }
+  };
+
+  const openMyStoreSubPage = (page: "reports" | "marketing" | "delivery" | "customers") => {
+    if (!isSubscriptionActive) {
+      setShowSubscriptionModal(true);
+      return;
+    }
+    if (isProfileDirty && isProfileFormSubPage) {
+      setPendingTab(`__mystore_${page}`);
+      setShowUnsavedModal(true);
+      return;
+    }
+    setProfileSubPage(null);
+    setShowNotifications(false);
+    setIframeUrl(null);
+    if (page === "customers") {
+      setAudienceSegment(null);
+      setAudienceSearchQuery("");
+      void refreshStoreAudience();
+    }
+    setMyStoreSubPage(page);
+    scrollAppToTop();
+    if (activeTab !== "mystore") {
+      startTabTransition(() => setActiveTab("mystore"));
+    }
+  };
+
+  /** توجيه التاجر لصفحة مرتبطة بموضوع الإشعار */
+  const navigateFromNotification = (n: {
+    id: string;
+    type?: string;
+    title?: string;
+    message?: string;
+    targetId?: string;
+    actionLink?: string;
+    templateKey?: string;
+  }) => {
+    markNotificationAsRead(n.id);
+    setShowNotifications(false);
+
+    const key = n.templateKey || "";
+    const text = `${n.title || ""} ${n.message || ""}`;
+    const type = n.type || "system";
+
+    const goOrders = () => {
+      if (n.targetId) setTargetOrderId(n.targetId);
+      handleTabChange("orders");
+    };
+    const goSubscription = () => setShowSubscriptionModal(true);
+    const goCustomers = () => openMyStoreSubPage("customers");
+    const goVerification = () => openProfileSubPage("verification");
+    const goProducts = () => handleTabChange("products");
+    const goReports = () => openMyStoreSubPage("reports");
+    const goMarketing = () => openMyStoreSubPage("marketing");
+    const goProfile = () => handleTabChange("profile");
+    const goHome = () => handleTabChange("home");
+
+    if (type === "order" || key.includes("newOrder") || key.includes("reelsOrder") || /طلب|داواکاری/.test(n.title || "")) {
+      goOrders();
+      return;
+    }
+    if (type === "subscription" || key.includes("subscription") || /اشتراك|بەشداری|ئابوونە/.test(text)) {
+      goSubscription();
+      return;
+    }
+    if (type === "social" || key.includes("newFollower") || /متابع|شوێنکەوت/.test(text)) {
+      goCustomers();
+      return;
+    }
+    if (key.includes("verification") || /توثيق|پشتڕاست/.test(text)) {
+      goVerification();
+      return;
+    }
+    if (type === "product" || key.includes("productReview") || /تقييم منتج|هەڵسەنگاندنی بەرهەم/.test(text)) {
+      goProducts();
+      return;
+    }
+    if (key.includes("storeReview") || /تقييم|هەڵسەنگاندن/.test(text)) {
+      goReports();
+      return;
+    }
+    if (
+      type === "promo" ||
+      type === "event" ||
+      key.includes("flashSale") ||
+      key.includes("banner") ||
+      key.includes("platformPromo") ||
+      /فلاش|فعالية|بانر|لافتة|كود خصم/.test(text)
+    ) {
+      goMarketing();
+      return;
+    }
+    if (key.includes("storeActivated") || key.includes("storeSuspended") || /تفعيل|إيقاف|حالة المتجر/.test(text)) {
+      goProfile();
+      return;
+    }
+    if (n.actionLink) {
+      window.open(n.actionLink, "_blank");
+      return;
+    }
+    goHome();
   };
 
   useEffect(() => {
-    if (view !== "dashboard" || activeTab !== "customers" || !currentMerchant?.id) return;
+    if (
+      view !== "dashboard" ||
+      activeTab !== "mystore" ||
+      myStoreSubPage !== "customers" ||
+      !currentMerchant?.id
+    ) {
+      return;
+    }
     void refreshStoreAudience();
-  }, [view, activeTab, currentMerchant?.id, refreshStoreAudience]);
+  }, [view, activeTab, myStoreSubPage, currentMerchant?.id, refreshStoreAudience]);
+
+  // روابط قديمة #/dashboard/customers → متجري / جمهوري
+  useEffect(() => {
+    if (activeTab !== "customers") return;
+    setActiveTab("mystore");
+    setMyStoreSubPage("customers");
+    void refreshStoreAudience();
+  }, [activeTab, refreshStoreAudience]);
 
   // ==========================================
   // نظام التزامن مع تاريخ المتصفح لدعم رجوع الأندرويد وإيماءات اليد (للتاجر)
   // ==========================================
   const isPopStateRef = React.useRef(false);
   const appNavDepthRef = React.useRef(1);
+
+  // أي تبويب أو صفحة داخلية: ابدأ من الأعلى (ما عدا الرجوع من التاريخ)
+  useEffect(() => {
+    if (isPopStateRef.current) return;
+    if (view !== "dashboard") return;
+    scrollAppToTop();
+  }, [
+    view,
+    activeTab,
+    myStoreSubPage,
+    profileSubPage,
+    showNotifications,
+    iframeUrl,
+    showStorePreview,
+    audienceSegment,
+  ]);
 
   const getMerchantHashUrl = (state: any) => {
     let sub = '';
@@ -589,13 +706,17 @@ export const MerchantApp: React.FC = () => {
   };
 
   const parseMerchantHashToState = (hash: string) => {
-    const path = hash.replace('#/dashboard', '');
-    const parts = path.split('/').filter(Boolean);
+    const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+    const [pathOnly, query = ""] = raw.split("?");
+    const path = pathOnly.replace(/^\/?dashboard\/?/, "");
+    const parts = path.split("/").filter(Boolean);
+    const params = new URLSearchParams(query);
     
     const state: any = {
       view: 'dashboard',
       activeTab: 'home',
-      showNotifications: false
+      showNotifications: false,
+      orderId: null as string | null,
     };
 
     if (parts[0] === 'login') {
@@ -609,6 +730,13 @@ export const MerchantApp: React.FC = () => {
       state.view = 'dashboard';
       state.activeTab = parts[0] as any;
     }
+
+    const orderId = params.get("orderId") || params.get("order");
+    if (orderId) {
+      state.view = "dashboard";
+      state.activeTab = "orders";
+      state.orderId = orderId;
+    }
     return state;
   };
 
@@ -620,6 +748,7 @@ export const MerchantApp: React.FC = () => {
     setView(initialState.view);
     setActiveTab(initialState.activeTab);
     if (initialState.showNotifications) setShowNotifications(true);
+    if (initialState.orderId) setTargetOrderId(initialState.orderId);
     setTimeout(() => {
       isPopStateRef.current = false;
     }, 50);
@@ -640,6 +769,9 @@ export const MerchantApp: React.FC = () => {
         }
         if (state.showNotifications !== undefined) {
           setShowNotifications(state.showNotifications);
+        }
+        if (state.orderId) {
+          setTargetOrderId(state.orderId);
         }
 
         setTimeout(() => {
@@ -683,7 +815,7 @@ export const MerchantApp: React.FC = () => {
   // نظام المشاركة المطور
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareConfig, setShareConfig] = useState<{
-    type: "store" | "product";
+    type: "store" | "product" | "location";
     data: any;
   } | null>(null);
   const [shareText, setShareText] = useState("");
@@ -695,31 +827,18 @@ export const MerchantApp: React.FC = () => {
     [updateStoreProfile],
   );
 
-  const [marketingShareType, setMarketingShareType] = useState<"store" | "product">("store");
   const [marketingSelectedProductId, setMarketingSelectedProductId] = useState("");
-  const [marketingShareStats, setMarketingShareStats] = useState<MarketingShareStats>(
-    EMPTY_MARKETING_SHARE_STATS(""),
-  );
   const [bulkStoreDiscountPercent, setBulkStoreDiscountPercent] = useState(10);
   const [bulkStoreDiscountScope, setBulkStoreDiscountScope] = useState<
     "published" | "all" | "draft" | "archived"
   >("published");
   const [bulkStoreDiscountApplying, setBulkStoreDiscountApplying] = useState(false);
 
-  useEffect(() => {
-    const onMarketing =
-      activeTab === "marketing" ||
-      (activeTab === "mystore" && myStoreSubPage === "marketing");
-    if (!onMarketing || !currentMerchant?.id) return;
-    setMarketingShareStats(EMPTY_MARKETING_SHARE_STATS(currentMerchant.id));
-    return subscribeMarketingShareStats(currentMerchant.id, setMarketingShareStats);
-  }, [activeTab, myStoreSubPage, currentMerchant?.id]);
-
-  // تحميل مسبق لصور منتجات التاجر لتظهر فوراً عند فتح صفحة المنتجات
+  // تحميل مسبق محدود لصور منتجات التاجر (أول شاشة فقط)
   useEffect(() => {
     if (!currentMerchant?.id || view !== "dashboard") return;
     prefetchImageUrls(
-      products.filter((p) => p.storeId === currentMerchant.id && p.image).slice(0, 30).map((p) => p.image),
+      products.filter((p) => p.storeId === currentMerchant.id && p.image).slice(0, 12).map((p) => p.image),
     );
   }, [view, currentMerchant?.id, products]);
 
@@ -744,21 +863,25 @@ export const MerchantApp: React.FC = () => {
   const executeShare = (platform: SharePlatform) => {
     if (!shareConfig) return;
 
-    const payload =
-      shareConfig.type === "store"
-        ? buildMerchantStoreSharePayload(shareConfig.data)
-        : buildMerchantProductSharePayload({
-            ...shareConfig.data,
-            storeId: shareConfig.data.storeId || currentMerchant?.id,
-          });
+    const shareUrl =
+      shareConfig.type === "location"
+        ? String(shareConfig.data?.url || "")
+        : shareConfig.type === "store"
+          ? buildMerchantStoreSharePayload(shareConfig.data).url
+          : buildMerchantProductSharePayload({
+              ...shareConfig.data,
+              storeId: shareConfig.data.storeId || currentMerchant?.id,
+            }).url;
 
-    const action = buildPlatformShareAction(platform, shareText, payload.url);
+    const action = buildPlatformShareAction(platform, shareText, shareUrl);
     if (action.kind === "copy") {
       navigator.clipboard.writeText(shareText);
-      alert(action.message);
+      showToast("success", t("share.copied"), action.message);
+      setShowShareModal(false);
       return;
     }
     openExternalUrl(action.shareUrl);
+    setShowShareModal(false);
   };
 
   const merchantNotifications = React.useMemo(
@@ -777,6 +900,10 @@ export const MerchantApp: React.FC = () => {
       if (latestNotif && !latestNotif.read) {
         if (view === "dashboard") {
           // alert or local handling
+        }
+        // الصوت الداخلي: يُعطَّل فقط إن كان soundProfile للقالب المرسل منه = صامت داخلياً
+        if ((latestNotif as any).inAppSound !== false) {
+          notificationSound.play().catch(() => {});
         }
         showLocalNotification(latestNotif.title, latestNotif.message, { type: latestNotif.type, targetId: latestNotif.targetId });
       }
@@ -828,7 +955,7 @@ export const MerchantApp: React.FC = () => {
   const [isProfileDirty, setIsProfileDirty] = useState(false);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingTab, setPendingTab] = useState<any>(null);
-  /** يعيد رسم الطلبات المخفية خلال نافذة إلغاء الزبون (30ث) */
+  /** يعيد رسم الطلبات المخفية خلال نافذة إلغاء الزبون (15ث) */
   const [orderGraceTick, setOrderGraceTick] = useState(0);
 
   const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
@@ -871,6 +998,54 @@ export const MerchantApp: React.FC = () => {
     setIsProfileDirty(true);
   };
 
+  const isProfileDirtyRef = useRef(false);
+  isProfileDirtyRef.current = isProfileDirty;
+
+  const buildProfileFormFromMerchant = (merchant: typeof currentMerchant) => {
+    if (!merchant) return null;
+    return {
+      ownerName: merchant.ownerName,
+      shopName: merchant.shopName,
+      username: merchant.username,
+      category: merchant.category || "clothing",
+      province: merchant.province,
+      area: merchant.area,
+      landmark: merchant.landmark,
+      deliveryPrice: merchant.deliveryPrice || 5000,
+      isFreeDelivery: merchant.isFreeDelivery || false,
+      localProvinceDeliveryPrice: (merchant as any).localProvinceDeliveryPrice !== undefined ? (merchant as any).localProvinceDeliveryPrice : (merchant.deliveryPrice || 5000),
+      otherProvincesDeliveryPrice: (merchant as any).otherProvincesDeliveryPrice !== undefined ? (merchant as any).otherProvincesDeliveryPrice : 8000,
+      localProvinceFreeDelivery: (merchant as any).localProvinceFreeDelivery || false,
+      otherProvincesFreeDelivery: (merchant as any).otherProvincesFreeDelivery || false,
+      provinceDeliveryPrices: (merchant as any).provinceDeliveryPrices || {},
+      provinceFreeDelivery: (merchant as any).provinceFreeDelivery || {},
+      logo: merchant.logo || "",
+      lat: merchant.lat,
+      lng: merchant.lng,
+      showArea: merchant.showArea !== false,
+      showLandmark: merchant.showLandmark !== false,
+      showMap: merchant.showMap !== false,
+      showPhone: merchant.showPhone !== false,
+      zainCashNumber: merchant.payoutMethods?.zainCashNumber || "",
+      mastercardNumber: merchant.payoutMethods?.mastercardNumber || "",
+    };
+  };
+
+  const profileSaveErrorMessage = (err: unknown) => {
+    const raw = err instanceof Error ? err.message : String(err || "");
+    let msg = raw;
+    try {
+      const parsed = JSON.parse(raw) as { error?: string };
+      if (parsed?.error) msg = parsed.error;
+    } catch {
+      /* keep raw */
+    }
+    if (/insufficient permissions|permission-denied|PERMISSION_DENIED/i.test(msg)) {
+      return t("merchant.profileForm.permissionDenied");
+    }
+    return msg || t("merchant.profileForm.saveErrorGeneric");
+  };
+
   const [showPasswordChange, setShowPasswordChange] = useState(false);
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [showAboutUs, setShowAboutUs] = useState(false);
@@ -909,12 +1084,16 @@ export const MerchantApp: React.FC = () => {
   const [productFilterStatus, setProductFilterStatus] =
     useState<Product["status"]>("published");
   const [productSearchQuery, setProductSearchQuery] = useState("");
+  /** Caps DOM nodes in the products grid (lazy window / virtualization companion). */
+  const [visibleProductsLimit, setVisibleProductsLimit] = useState(32);
   const [prodSpecialOffer, setProdSpecialOffer] = useState("");
   const [prodTags, setProdTags] = useState<string[]>([]);
   const [prodBarcode, setProdBarcode] = useState("");
   const [prodInventory, setProdInventory] = useState<number | "">("");
   const [showScanner, setShowScanner] = useState(false);
-  const [scannerMode, setScannerMode] = useState<"inventory" | "search">("inventory");
+  const [scannerMode, setScannerMode] = useState<"inventory" | "search" | "order">("inventory");
+  const [isScanningOrderFile, setIsScanningOrderFile] = useState(false);
+  const orderGalleryInputRef = useRef<HTMLInputElement>(null);
 
   // Additional extra product info fields
   const [prodColor, setProdColor] = useState("");
@@ -987,12 +1166,12 @@ export const MerchantApp: React.FC = () => {
       for (const id of selectedProductIds) {
         await updateProduct(id, bulkUpdateData);
       }
-      alert(`✅ تم تحديث ${count} منتج بنجاح!`);
+      alert(t("merchant.products.alert.bulkUpdateSuccess", { count }));
       setSelectedProductIds([]);
       setShowBulkEditModal(false);
       setBulkUpdateData({});
     } catch {
-      alert("❌ فشل التحديث الجماعي");
+      alert(t("merchant.products.alert.bulkUpdateFailed"));
     } finally {
       setIsBulkUpdating(false);
     }
@@ -1008,20 +1187,20 @@ export const MerchantApp: React.FC = () => {
   const applyBulkStoreDiscount = async () => {
     const percent = Number(bulkStoreDiscountPercent);
     if (!Number.isFinite(percent) || percent < 1 || percent > 99) {
-      showToast("warning", "نسبة غير صالحة", "أدخل نسبة خصم بين 1% و 99%");
+      showToast("warning", t("merchant.products.toast.invalidDiscountTitle"), t("merchant.products.toast.invalidDiscount"));
       return;
     }
 
     const targets = getBulkStoreDiscountTargets();
     if (targets.length === 0) {
-      showToast("info", "لا توجد منتجات", "لا توجد منتجات ضمن النطاق المحدد.");
+      showToast("info", t("merchant.products.toast.noProductsTitle"), t("merchant.products.toast.noProducts"));
       return;
     }
 
     const confirm = await showConfirm(
-      "تطبيق خصم شامل؟",
-      `سيتم تطبيق خصم ${percent}% على ${targets.length} منتج. السعر الأصلي يبقى كما هو ويُحدَّث سعر البيع فقط.`,
-      "نعم، طبّق الخصم",
+      t("merchant.products.confirm.applyDiscountTitle"),
+      t("merchant.products.confirm.applyDiscountBody", { percent, count: targets.length }),
+      t("merchant.products.confirm.applyDiscountBtn"),
     );
     if (!confirm.isConfirmed) return;
 
@@ -1034,9 +1213,24 @@ export const MerchantApp: React.FC = () => {
           finalPrice: computeProductFinalPrice(product.price, "percent", percent),
         });
       }
-      showToast("success", "تم بنجاح", `طبّقنا خصم ${percent}% على ${targets.length} منتج.`);
+      if (currentMerchant?.id) {
+        const saleContent = buildNotificationContent(adminSettings as Record<string, unknown>, "customer.storeWideSale", {
+          storeName: currentMerchant.shopName,
+          percent,
+        });
+        if (saleContent) {
+          sendMerchantFollowerNotifications(
+            currentMerchant.id,
+            saleContent.title,
+            saleContent.message,
+            "promo",
+            "customer.storeWideSale",
+          ).catch(() => undefined);
+        }
+      }
+      showToast("success", t("merchant.products.toast.applyDiscountSuccessTitle"), t("merchant.products.toast.applyDiscountSuccess", { percent, count: targets.length }));
     } catch {
-      showToast("error", "فشل التطبيق", "تعذّر تطبيق الخصم. حاول مرة أخرى.");
+      showToast("error", t("merchant.products.toast.applyDiscountFailedTitle"), t("merchant.products.toast.applyDiscountFailed"));
     } finally {
       setBulkStoreDiscountApplying(false);
     }
@@ -1045,14 +1239,14 @@ export const MerchantApp: React.FC = () => {
   const removeBulkStoreDiscount = async () => {
     const targets = getBulkStoreDiscountTargets().filter((p) => p.discountType !== "none");
     if (targets.length === 0) {
-      showToast("info", "لا يوجد خصم", "لا توجد منتجات بخصم ضمن النطاق المحدد.");
+      showToast("info", t("merchant.products.toast.noDiscountTitle"), t("merchant.products.toast.noDiscount"));
       return;
     }
 
     const confirm = await showConfirm(
-      "إلغاء الخصم الشامل؟",
-      `سيتم إزالة الخصم من ${targets.length} منتج وإرجاع سعر البيع إلى السعر الأصلي.`,
-      "نعم، ألغِ الخصم",
+      t("merchant.products.confirm.removeDiscountTitle"),
+      t("merchant.products.confirm.removeDiscountBody", { count: targets.length }),
+      t("merchant.products.confirm.removeDiscountBtn"),
     );
     if (!confirm.isConfirmed) return;
 
@@ -1065,9 +1259,9 @@ export const MerchantApp: React.FC = () => {
           finalPrice: product.price,
         });
       }
-      showToast("success", "تم الإلغاء", `أزلنا الخصم من ${targets.length} منتج.`);
+      showToast("success", t("merchant.products.toast.removeDiscountSuccessTitle"), t("merchant.products.toast.removeDiscountSuccess", { count: targets.length }));
     } catch {
-      showToast("error", "فشل الإلغاء", "تعذّر إلغاء الخصم. حاول مرة أخرى.");
+      showToast("error", t("merchant.products.toast.removeDiscountFailedTitle"), t("merchant.products.toast.removeDiscountFailed"));
     } finally {
       setBulkStoreDiscountApplying(false);
     }
@@ -1079,6 +1273,150 @@ export const MerchantApp: React.FC = () => {
   const [isClearingInbox, setIsClearingInbox] = useState(false);
   // تتبع الطلب المحدد من الإشعارات للتاجر
   const [targetOrderId, setTargetOrderId] = useState<string | null>(null);
+
+  const openOrderFromScan = useCallback((orderId: string) => {
+    const id = String(orderId || "").trim();
+    if (!id) return;
+    if (view !== "dashboard" || !currentMerchant) {
+      try {
+        sessionStorage.setItem("mahalak_pending_order_id", id);
+      } catch {
+        // ignore storage failures
+      }
+    }
+    setShowShippingLabelModal(false);
+    setShowInvoiceModal(false);
+    setShowScanner(false);
+    setSelectedInvoice(null);
+    setTargetOrderId(id);
+    setMyStoreSubPage(null);
+    setProfileSubPage(null);
+    setShowNotifications(false);
+    scrollAppToTop();
+    if (view === "dashboard") {
+      startTabTransition(() => setActiveTab("orders"));
+      showToast(
+        "success",
+        t("merchant.orders.shippingLabel.orderQrHint"),
+        `#${getOrderSeqId(id) || id}`,
+      );
+    }
+  }, [startTabTransition, t, view, currentMerchant, getOrderSeqId]);
+
+  const tryOpenOrderFromPayload = useCallback(
+    (raw: string) => {
+      const orderId = extractOrderIdFromScanPayload(raw);
+      if (!orderId) return false;
+      openOrderFromScan(orderId);
+      return true;
+    },
+    [openOrderFromScan],
+  );
+
+  const handleOrderBarcodeDecoded = useCallback(
+    (decodedText: string) => {
+      if (tryOpenOrderFromPayload(decodedText)) return true;
+
+      const raw = String(decodedText || "").trim();
+      const storeOrders = orders.filter((o) => o.storeId === currentMerchant?.id);
+      const byId = storeOrders.find((o) => o.id === raw);
+      if (byId) {
+        openOrderFromScan(byId.id);
+        return true;
+      }
+      const seq = raw.replace(/^#/, "");
+      const bySeq = storeOrders.find((o) => getOrderSeqId(o.id) === seq);
+      if (bySeq) {
+        openOrderFromScan(bySeq.id);
+        return true;
+      }
+      showToast("error", t("merchant.orders.scanOrderTitle"), t("merchant.orders.scanOrderNotFound"));
+      return false;
+    },
+    [tryOpenOrderFromPayload, orders, currentMerchant?.id, openOrderFromScan, getOrderSeqId, t],
+  );
+
+  const handleScanOrderFromGallery = useCallback(
+    async (file: File | null | undefined) => {
+      if (!file) return;
+      setIsScanningOrderFile(true);
+      showToast("info", t("merchant.orders.scanOrderTitle"), t("merchant.orders.scanOrderGalleryScanning"));
+      const readerId = "order-qr-file-reader";
+      let scanner: Html5Qrcode | null = null;
+      try {
+        let host = document.getElementById(readerId);
+        if (!host) {
+          host = document.createElement("div");
+          host.id = readerId;
+          host.className = "hidden";
+          document.body.appendChild(host);
+        }
+        scanner = new Html5Qrcode(readerId);
+        const decodedText = await scanner.scanFile(file, false);
+        setShowScanner(false);
+        handleOrderBarcodeDecoded(decodedText);
+      } catch {
+        showToast("error", t("merchant.orders.scanOrderTitle"), t("merchant.orders.scanOrderGalleryFailed"));
+      } finally {
+        try {
+          await scanner?.clear();
+        } catch {
+          // ignore cleanup errors
+        }
+        setIsScanningOrderFile(false);
+        if (orderGalleryInputRef.current) orderGalleryInputRef.current.value = "";
+      }
+    },
+    [handleOrderBarcodeDecoded, t],
+  );
+
+  // After login, resume order deep-link if the scan happened while logged out
+  React.useEffect(() => {
+    if (view !== "dashboard" || !currentMerchant) return;
+    let pending: string | null = null;
+    try {
+      pending = sessionStorage.getItem("mahalak_pending_order_id");
+      if (pending) sessionStorage.removeItem("mahalak_pending_order_id");
+    } catch {
+      pending = null;
+    }
+    if (pending) openOrderFromScan(pending);
+  }, [view, currentMerchant, openOrderFromScan]);
+
+  // Deep links / QR scan via OS camera or Capacitor app open
+  React.useEffect(() => {
+    const applyIncomingUrl = (url: string) => {
+      tryOpenOrderFromPayload(url);
+    };
+
+    applyIncomingUrl(window.location.href);
+
+    const onHashChange = () => applyIncomingUrl(window.location.href);
+    window.addEventListener("hashchange", onHashChange);
+
+    let removeCapListener: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { Capacitor } = await import("@capacitor/core");
+        if (!Capacitor.isNativePlatform()) return;
+        const { App } = await import("@capacitor/app");
+        const launch = await App.getLaunchUrl();
+        if (launch?.url) applyIncomingUrl(launch.url);
+        const handle = await App.addListener("appUrlOpen", ({ url }) => applyIncomingUrl(url));
+        removeCapListener = () => {
+          void handle.remove();
+        };
+      } catch {
+        // Capacitor unavailable in web preview
+      }
+    })();
+
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+      removeCapListener?.();
+    };
+  }, [tryOpenOrderFromPayload]);
+
   const [promoModal, setPromoModal] = useState(false);
   const [actionModal, setActionModal] = useState<{
     show: boolean;
@@ -1100,48 +1438,215 @@ export const MerchantApp: React.FC = () => {
 
   const invoiceRef = useRef<HTMLDivElement>(null);
   const shippingLabelRef = useRef<HTMLDivElement>(null);
+  const [isSharingInvoice, setIsSharingInvoice] = useState(false);
 
   const handlePrint = useReactToPrint({
     contentRef: invoiceRef,
-    documentTitle: `فاتورة_طلب_${selectedInvoice?.id || ""}`,
+    documentTitle: t("merchant.orders.print.invoiceDocTitle", { id: selectedInvoice?.id || "" }),
     suppressErrors: true,
     onPrintError: (errorLocation, error) => {
-      alert("الطباعة غير مدعومة داخل وضع المعاينة. يرجى فتح التطبيق في علامة تبويب جديدة للطباعة.");
+      alert(t("merchant.orders.print.notSupported"));
     }
   });
 
   const handlePrintShippingLabel = useReactToPrint({
     contentRef: shippingLabelRef,
-    documentTitle: `بوليصة_شحن_${selectedInvoice?.id || ""}`,
+    documentTitle: t("merchant.orders.print.shippingDocTitle", { id: selectedInvoice?.id || "" }),
     suppressErrors: true,
     onPrintError: (errorLocation, error) => {
-      alert("الطباعة غير مدعومة داخل وضع المعاينة. يرجى فتح التطبيق في علامة تبويب جديدة للطباعة.");
+      alert(t("merchant.orders.print.notSupported"));
     }
   });
 
-  const handleShareWhatsAppInvoice = (order: Order) => {
-    const itemsText = order.items
-      .map((it) => `🔹 ${it.productName} (عدد ${it.quantity}) - ${it.price.toLocaleString()} د.ع`)
-      .join("\n\n");
+  const buildFullInvoiceWhatsAppText = useCallback(
+    (order: Order) => {
+      const itemsText = (order.items || [])
+        .map((it: any) =>
+          t("merchant.orders.whatsapp.invoice.itemLine", {
+            name: it.productName,
+            qty: it.quantity,
+            price: Number(it.price || 0).toLocaleString(),
+          }),
+        )
+        .join("\n\n");
 
-    const mapsLink = order.customerLat && order.customerLng 
-      ? `\n📍 *الموقع على الخريطة:*\nhttps://www.google.com/maps/search/?api=1&query=${order.customerLat},${order.customerLng}\n\n`
-      : `\n\n`;
+      const mapsLink =
+        order.customerLat && order.customerLng
+          ? t("merchant.orders.whatsapp.invoice.mapLink", {
+              lat: order.customerLat,
+              longitude: order.customerLng,
+            })
+          : "\n\n";
 
-    const text = `📦 *فاتورة شراء من تطبيق محلك*\n\n` +
-      `*رقم الطلب:* #${order.id}\n` +
-      `*الزبون:* ${order.customerName}\n\n` +
-      `*التفاصيل:*\n\n${itemsText}\n\n` +
-      `*المجموع الكلي:* ${order.total?.toLocaleString()} د.ع\n\n` +
-      `*الموقع:* ${order.customerProvince} - ${order.customerAddress}` +
-      mapsLink +
-      `✅ *تم قبول الطلب سوف يصلك الطلب بأسرع وقت*\n` +
-      `شكراً لتسوقكم معنا! 🌹`;
-    
-    const encodedText = encodeURIComponent(text);
-    const phone = order.customerPhone.replace(/\s+/g, "").replace(/^0/, "964");
-    openExternalUrl(`https://wa.me/${phone}?text=${encodedText}`);
-  };
+      const discountAmount = Number(order.discountAmount || 0);
+      const discountLine =
+        discountAmount > 0
+          ? t("merchant.orders.whatsapp.invoice.discountLine", {
+              discount: discountAmount.toLocaleString(),
+            })
+          : "";
+
+      return t("merchant.orders.whatsapp.invoice.body", {
+        shopName: currentMerchant?.shopName || currentMerchant?.ownerName || t("merchant.orders.whatsapp.defaultShop"),
+        orderId: getOrderSeqId(order.id) || order.id,
+        customerName: order.customerName || t("merchant.orders.whatsapp.defaultCustomer"),
+        phone: order.customerPhone || "",
+        items: itemsText,
+        subtotal: Number(order.subtotal || 0).toLocaleString(),
+        delivery: Number(order.deliveryPrice || 0).toLocaleString(),
+        discountLine,
+        total: Number(order.total || 0).toLocaleString(),
+        location: `${order.customerProvince || ""} - ${order.customerAddress || ""}`.trim(),
+        mapLink: mapsLink,
+      });
+    },
+    [t, currentMerchant?.shopName, currentMerchant?.ownerName, getOrderSeqId],
+  );
+
+  const runInvoiceShare = useCallback(
+    async (order: Order) => {
+      const el = shippingLabelRef.current;
+      if (!el) throw new Error("invoice_not_ready");
+
+      const seq = getOrderSeqId(order.id) || order.id;
+      const text = buildFullInvoiceWhatsAppText(order);
+      const title = t("merchant.orders.whatsapp.invoice.shareTitle", { orderId: seq });
+
+      try {
+        // Scroll label into view so off-screen clipping doesn't break capture
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+        const { blob, file } = await captureElementPngBlob(el, `invoice-${seq}.png`);
+        const result = await shareInvoiceTextAndImage({
+          title,
+          text,
+          file,
+          blob,
+          customerPhone: order.customerPhone,
+          openExternalUrl,
+        });
+
+        if (result === "shared") {
+          showToast("success", title, t("merchant.orders.whatsapp.invoice.shareSuccess"));
+        } else if (result === "partial") {
+          showToast("success", title, t("merchant.orders.whatsapp.invoice.sharePartial"));
+        } else if (result === "failed") {
+          showToast("error", title, t("merchant.orders.whatsapp.invoice.shareFailed"));
+        }
+      } catch {
+        // Capture failed — still send full invoice text via WhatsApp
+        openWhatsAppInvoiceText({
+          text,
+          customerPhone: order.customerPhone,
+          openExternalUrl,
+        });
+        showToast("success", title, t("merchant.orders.whatsapp.invoice.sharePartial"));
+      }
+    },
+    [buildFullInvoiceWhatsAppText, getOrderSeqId, openExternalUrl, t],
+  );
+
+  const handleWhatsAppShare = useCallback(
+    async (order: Order | null | undefined, opts?: { captureImage?: boolean }) => {
+      if (!order?.id || isSharingInvoice) return;
+
+      const invoiceOpen =
+        showShippingLabelModal && selectedInvoice?.id === order.id && !!shippingLabelRef.current;
+      const shouldCaptureImage = opts?.captureImage === true || invoiceOpen;
+
+      // من بطاقة الطلب: فتح واتساب مباشرة بدون فتح الفاتورة
+      if (!shouldCaptureImage) {
+        setIsSharingInvoice(true);
+        try {
+          const text = buildFullInvoiceWhatsAppText(order);
+          openWhatsAppInvoiceText({
+            text,
+            customerPhone: order.customerPhone,
+            openExternalUrl,
+          });
+        } finally {
+          setIsSharingInvoice(false);
+        }
+        return;
+      }
+
+      // من نافذة الفاتورة: التقاط صورة + مشاركة
+      setIsSharingInvoice(true);
+      showToast(
+        "info",
+        t("merchant.orders.whatsapp.invoice.shareTitle", {
+          orderId: getOrderSeqId(order.id) || order.id,
+        }),
+        t("merchant.orders.whatsapp.invoice.capturing"),
+      );
+
+      try {
+        await runInvoiceShare(order);
+      } catch {
+        const text = buildFullInvoiceWhatsAppText(order);
+        openWhatsAppInvoiceText({
+          text,
+          customerPhone: order.customerPhone,
+          openExternalUrl,
+        });
+        showToast(
+          "success",
+          t("merchant.orders.whatsapp.invoice.shareTitle", {
+            orderId: getOrderSeqId(order.id) || order.id,
+          }),
+          t("merchant.orders.whatsapp.invoice.sharePartial"),
+        );
+      } finally {
+        setIsSharingInvoice(false);
+      }
+    },
+    [
+      buildFullInvoiceWhatsAppText,
+      getOrderSeqId,
+      isSharingInvoice,
+      openExternalUrl,
+      runInvoiceShare,
+      selectedInvoice?.id,
+      showShippingLabelModal,
+      t,
+    ],
+  );
+
+  const handleSaveShippingLabel = useCallback(async () => {
+    const order = selectedInvoice;
+    const el = shippingLabelRef.current;
+    if (!order?.id || !el || isSharingInvoice) return;
+
+    setIsSharingInvoice(true);
+    const seq = getOrderSeqId(order.id) || order.id;
+    try {
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const { blob } = await captureElementPngBlob(el, `invoice-${seq}.png`, { pixelRatio: 4 });
+      downloadPngBlob(blob, `invoice-${seq}.png`);
+      showToast(
+        "success",
+        t("merchant.orders.shippingLabel.saveLabel"),
+        t("merchant.orders.shippingLabel.saveSuccess"),
+      );
+    } catch {
+      showToast(
+        "error",
+        t("merchant.orders.shippingLabel.saveLabel"),
+        t("merchant.orders.shippingLabel.saveFailed"),
+      );
+    } finally {
+      setIsSharingInvoice(false);
+    }
+  }, [getOrderSeqId, isSharingInvoice, selectedInvoice, t]);
+
+  const handleShareWhatsAppInvoice = useCallback(
+    (order: Order) => {
+      void handleWhatsAppShare(order);
+    },
+    [handleWhatsAppShare],
+  );
 
   const [replacementModal, setReplacementModal] = useState<{
     show: boolean;
@@ -1163,6 +1668,7 @@ export const MerchantApp: React.FC = () => {
       activeTab,
       showNotifications,
       iframeUrl,
+      showStorePreview,
       showShareModal,
       showSubscriptionModal,
       showUnsavedModal,
@@ -1183,12 +1689,16 @@ export const MerchantApp: React.FC = () => {
       giftModalShow: giftModal.show,
       replacementModalShow: replacementModal.show,
       returnConfirmModalShow: returnConfirmModal.show,
+      profileSubPage,
+      myStoreSubPage,
+      audienceSegment,
     }),
     actions: {
       setView,
       setActiveTab,
       setShowNotifications,
       setIframeUrl,
+      setShowStorePreview,
       setShowShareModal,
       setShowSubscriptionModal,
       setShowUnsavedModal,
@@ -1210,12 +1720,23 @@ export const MerchantApp: React.FC = () => {
       closeGiftModal: () => setGiftModal({ show: false, customerId: '', customerName: '' }),
       closeReplacementModal: () => setReplacementModal({ show: false, orderId: '', originalItems: [] }),
       closeReturnConfirmModal: () => setReturnConfirmModal({ show: false, orderId: '' }),
+      setProfileSubPage,
+      setMyStoreSubPage,
+      setAudienceSegment,
+      requestLeaveProfileSubPage: () => {
+        if (isProfileDirty && isProfileFormSubPage) {
+          setPendingTab("__profile_hub__");
+          setShowUnsavedModal(true);
+          return true;
+        }
+        return false;
+      },
     },
   });
 
   const handleReturnOrder = (orderId: string) => {
     if (skipReturnConfirm) {
-      void runOrderStatusUpdate(orderId, "returned", "إرجاع من قبل التاجر");
+      void runOrderStatusUpdate(orderId, "returned", t("merchant.orders.returnByMerchant"));
     } else {
       setReturnConfirmModal({ show: true, orderId });
     }
@@ -1231,16 +1752,16 @@ export const MerchantApp: React.FC = () => {
         replacementQuantity,
       );
       if (!result.success) {
-        showToast("error", "فشل الاستبدال", "تعذر تحديث الطلب. حاول مرة أخرى.");
+        showToast("error", t("merchant.orders.update.replacementFailedTitle"), t("merchant.orders.update.replacementFailed"));
         return;
       }
       setReplacementModal({ show: false, orderId: "", originalItems: [] });
       setReplacementProduct(null);
       setReplacementSearch("");
-      showToast("success", "تم الاستبدال", "تم تحديث الطلب كعملية استبدال ✅");
+      showToast("success", t("merchant.orders.update.replacementSuccessTitle"), t("merchant.orders.update.replacementSuccess"));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "تعذر تحديث الطلب";
-      showToast("error", "فشل الاستبدال", msg.includes("{") ? "تعذر تحديث الطلب. تحقق من صلاحياتك." : msg);
+      const msg = err instanceof Error ? err.message : t("merchant.orders.update.replacementFailed");
+      showToast("error", t("merchant.orders.update.replacementFailedTitle"), msg.includes("{") ? t("merchant.orders.update.replacementPermissionFailed") : msg);
     } finally {
       setIsConfirmingReplacement(false);
     }
@@ -1251,8 +1772,21 @@ export const MerchantApp: React.FC = () => {
     setUpdatingOrderId(orderId);
     try {
       await updateOrderStatus(orderId, status, reason);
+      const bodyKey =
+        status === "accepted"
+          ? "merchant.orders.update.successAccepted"
+          : status === "shipped"
+            ? "merchant.orders.update.successShipped"
+            : status === "delivered"
+              ? "merchant.orders.update.successDelivered"
+              : status === "rejected"
+                ? "merchant.orders.update.successRejected"
+                : status === "returned"
+                  ? "merchant.orders.update.successReturned"
+                  : "merchant.orders.update.successGeneric";
+      showToast("success", t("merchant.orders.update.success"), t(bodyKey));
     } catch {
-      showToast("error", "فشل التحديث", "تعذر تحديث حالة الطلب. حاول مرة أخرى.");
+      showToast("error", t("merchant.orders.update.statusFailedTitle"), t("merchant.orders.update.statusFailed"));
     } finally {
       setUpdatingOrderId(null);
     }
@@ -1276,7 +1810,6 @@ export const MerchantApp: React.FC = () => {
     isBlocked: boolean;
   }>({ show: false, customerId: "", name: "", isBlocked: false });
 
-  const [audienceSearchQuery, setAudienceSearchQuery] = useState("");
   const [orderSearchQuery, setOrderSearchQuery] = useState("");
   const [selectedAudienceId, setSelectedAudienceId] = useState<string | null>(null);
 
@@ -1288,9 +1821,21 @@ export const MerchantApp: React.FC = () => {
     [currentMerchant?.id, customers, orders],
   );
 
-  const openAudienceGift = (customerId: string, customerName: string) => {
+  const [mapVisitCount, setMapVisitCount] = useState(0);
+  useEffect(() => {
+    if (!currentMerchant?.id) {
+      setMapVisitCount(0);
+      return;
+    }
+    const unsub = subscribeStoreVisitStats(currentMerchant.id, (stats) => {
+      setMapVisitCount(stats.visitCount);
+    });
+    return () => unsub();
+  }, [currentMerchant?.id]);
+
+  const openAudienceGift = useCallback((customerId: string, customerName: string) => {
     setGiftModal({ show: true, customerId, customerName });
-  };
+  }, []);
 
   const handleMerchantSponsoredAdClick = useCallback((ad: SponsoredAdItem) => {
     if (!ad.link) return;
@@ -1313,19 +1858,19 @@ export const MerchantApp: React.FC = () => {
       delivery: {
         key: 'delivery' as const,
         ads: merchantDeliveryAds,
-        defaultTitle: 'عرض توصيل مميز',
-        defaultDesc: 'تواصل مع شركات التوصيل الشريكة',
+        defaultTitle: t('merchant.partnerAds.deliveryTitle'),
+        defaultDesc: t('merchant.partnerAds.deliveryDesc'),
       },
       media: {
         key: 'media' as const,
         ads: merchantMediaAds,
-        defaultTitle: 'خدمة تصوير احترافية',
-        defaultDesc: 'صوّر منتجاتك بأعلى جودة',
+        defaultTitle: t('merchant.partnerAds.mediaTitle'),
+        defaultDesc: t('merchant.partnerAds.mediaDesc'),
       },
     };
 
     return getMerchantAdsSectionOrder(adminSettings.merchantAdsSectionOrder).map((key) => sections[key]);
-  }, [adminSettings.merchantAdsSectionOrder, merchantDeliveryAds, merchantMediaAds]);
+  }, [adminSettings.merchantAdsSectionOrder, merchantDeliveryAds, merchantMediaAds, t]);
 
   // ==========================================
   // التحقق والتطبيع (مطابق للزبون)
@@ -1384,32 +1929,10 @@ export const MerchantApp: React.FC = () => {
 
       setTimeout(() => {
         if (view !== "dashboard") setView("dashboard");
-        setProfileForm({
-          ownerName: currentMerchant.ownerName,
-          shopName: currentMerchant.shopName,
-          username: currentMerchant.username,
-          category: currentMerchant.category || "clothing",
-          province: currentMerchant.province,
-          area: currentMerchant.area,
-          landmark: currentMerchant.landmark,
-          deliveryPrice: currentMerchant.deliveryPrice || 5000,
-          isFreeDelivery: currentMerchant.isFreeDelivery || false,
-          localProvinceDeliveryPrice: (currentMerchant as any).localProvinceDeliveryPrice !== undefined ? (currentMerchant as any).localProvinceDeliveryPrice : (currentMerchant.deliveryPrice || 5000),
-          otherProvincesDeliveryPrice: (currentMerchant as any).otherProvincesDeliveryPrice !== undefined ? (currentMerchant as any).otherProvincesDeliveryPrice : 8000,
-          localProvinceFreeDelivery: (currentMerchant as any).localProvinceFreeDelivery || false,
-          otherProvincesFreeDelivery: (currentMerchant as any).otherProvincesFreeDelivery || false,
-          provinceDeliveryPrices: (currentMerchant as any).provinceDeliveryPrices || {},
-          provinceFreeDelivery: (currentMerchant as any).provinceFreeDelivery || {},
-          logo: currentMerchant.logo || "",
-          lat: currentMerchant.lat,
-          lng: currentMerchant.lng,
-          showArea: currentMerchant.showArea !== false,
-          showLandmark: currentMerchant.showLandmark !== false,
-          showMap: currentMerchant.showMap !== false,
-          showPhone: currentMerchant.showPhone !== false,
-          zainCashNumber: currentMerchant.payoutMethods?.zainCashNumber || "",
-          mastercardNumber: currentMerchant.payoutMethods?.mastercardNumber || "",
-        });
+        // لا تمسح تعديلات المستخدم الجارية عند تحديث stores / currentMerchant
+        if (isProfileDirtyRef.current) return;
+        const nextForm = buildProfileFormFromMerchant(currentMerchant);
+        if (nextForm) setProfileForm(nextForm);
       }, 0);
       return;
     }
@@ -1434,29 +1957,27 @@ export const MerchantApp: React.FC = () => {
 
     if (loginMethod === 'phone') {
       if (!loginPhone.trim()) {
-        setLoginError("يرجى إدخال رقم الهاتف");
+        setLoginError(t("auth.errors.phoneEnter"));
         return;
       }
       if (!isLoginPhoneValid) {
-        setLoginError(
-          "رقم الهاتف غير صحيح. يبدأ بـ 077/078/079/075 ويتكون من 11 رقم",
-        );
+        setLoginError(t("auth.errors.phoneInvalid"));
         return;
       }
     }
 
     if (loginMethod === 'username' && !loginUsername.trim()) {
-      setLoginError("يرجى إدخال اسم المستخدم");
+      setLoginError(t("auth.errors.usernameEnter"));
       return;
     }
 
     if (!loginPassword) {
-      setLoginError("يرجى إدخال كلمة المرور");
+      setLoginError(t("auth.errors.passwordEnter"));
       return;
     }
 
     if (loginPassword.length < 8) {
-      setLoginError("كلمة المرور يجب أن لا تقل عن 8 حروف أو رموز");
+      setLoginError(t("auth.errors.passwordMin8"));
       return;
     }
 
@@ -1471,13 +1992,13 @@ export const MerchantApp: React.FC = () => {
 
     if (!loginResult.success || !loginResult.store) {
       if (loginResult.error === 'wrong_password') {
-        setLoginError("كلمة المرور غير صحيحة.");
+        setLoginError(t("auth.errors.passwordWrong"));
       } else if (loginResult.error === 'rate_limited') {
-        setLoginError("محاولات كثيرة. انتظر قليلاً ثم حاول مجدداً.");
+        setLoginError(t("auth.errors.rateLimited"));
       } else if (loginResult.error === 'service_unavailable' || loginResult.error === 'network' || loginResult.error === 'auth_required') {
-        setLoginError("تعذر الاتصال بالخادم. تحقق من الإنترنت وحاول مرة أخرى.");
+        setLoginError(t("auth.errors.serviceUnavailable"));
       } else {
-        setLoginError(loginMethod === 'phone' ? "الرقم غير مسجل. أنشئ حساباً جديداً." : "اسم المستخدم غير موجود.");
+        setLoginError(loginMethod === 'phone' ? t("auth.errors.phoneNotRegisteredMerchant") : t("auth.errors.usernameNotFound"));
       }
       return;
     }
@@ -1505,7 +2026,7 @@ export const MerchantApp: React.FC = () => {
     }
     setLoginError("");
     } catch {
-      setLoginError("تعذر التحقق من الحساب. حاول مرة أخرى.");
+      setLoginError(t("auth.errors.verifyFailed"));
     } finally {
       setIsAuthBusy(false);
     }
@@ -1516,7 +2037,7 @@ export const MerchantApp: React.FC = () => {
     if (isAuthBusy) return;
     setLoginError('');
     if (!isFormValid) {
-      showToast('warning', 'حقول ناقصة', 'يرجى إكمال جميع الحقول المطلوبة.');
+      showToast('warning', t('auth.toast.missingFieldsTitle'), t('auth.toast.missingFields'));
       return;
     }
     const normalized = normalizeIraqiPhone(phone);
@@ -1525,22 +2046,22 @@ export const MerchantApp: React.FC = () => {
     try {
     const phoneCheck = await checkPhoneAvailable(normalized);
     if (!phoneCheck.available) {
-      let message = "رقم الهاتف مسجل مسبقاً كتاجر! لا يمكن إنشاء حساب جديد بنفس الرقم.";
+      let message = t("auth.errors.phoneTakenMerchant");
       if (phoneCheck.blocked || phoneCheck.entityType === 'blocked') {
-        message = "هذا الرقم محظور من قبل إدارة النظام. تواصل مع الدعم لرفع الحظر.";
+        message = t("auth.errors.phoneBlocked");
       } else if (phoneCheck.entityType === 'customer') {
-        message = "رقم الهاتف مسجل مسبقاً كزبون! لا يمكن استخدامه لإنشاء حساب تاجر.";
+        message = t("auth.errors.phoneTakenCustomer");
       }
       setLoginError(message);
-      showModal("error", "تعذر التسجيل", message);
+      showModal("error", t("auth.toast.registerFailedTitle"), message);
       return;
     }
 
     const usernameCheck = await checkUsernameAvailable(username);
     if (!usernameCheck.available) {
-      const message = "اسم المستخدم مسجل مسبقاً من متجر آخر!";
+      const message = t("auth.errors.usernameTakenMerchant");
       setLoginError(message);
-      showModal("error", "تعذر التسجيل", message);
+      showModal("error", t("auth.toast.registerFailedTitle"), message);
       return;
     }
 
@@ -1577,17 +2098,17 @@ export const MerchantApp: React.FC = () => {
       const ok = await authService.requestOTP(normalized, "signup");
       if (ok) {
         setView("otp");
-        showToast("success", "تم إرسال الرمز", "تحقق من رقمك على واتساب");
+        showToast("success", t("auth.toast.otpSentTitle"), t("auth.toast.otpSent"));
       } else {
-        showModal("error", "فشل الإرسال", "يرجى المحاولة لاحقاً");
+        showModal("error", t("auth.toast.sendFailedTitle"), t("auth.toast.sendFailed"));
       }
     } catch (err: any) {
       const msg = String(err?.message || "");
       if (msg.includes("واتساب") || msg.includes("استغرق")) {
         setView("otp");
-        showToast("warning", "تحقق من واتساب", msg);
+        showToast("warning", t("auth.toast.checkWhatsApp"), msg);
       } else {
-        showModal("error", "خطأ في الاتصال", msg || "فشل الإرسال. تأكد من الإنترنت.");
+        showModal("error", t("auth.toast.connectionErrorTitle"), msg || t("auth.toast.connectionError"));
       }
     } finally {
       setIsAuthBusy(false);
@@ -1598,19 +2119,19 @@ export const MerchantApp: React.FC = () => {
     e.preventDefault();
     if (isAuthBusy) return;
     if (!forgotPhone.trim()) {
-      setLoginError("يرجى إدخال رقم الهاتف");
+      setLoginError(t("auth.errors.phoneEnter"));
       return;
     }
     if (!forgotNewPassword) {
-      setLoginError("يرجى إدخال كلمة المرور الجديدة");
+      setLoginError(t("auth.errors.newPasswordEnter"));
       return;
     }
     if (!iraqiPhoneRegex.test(forgotPhone)) {
-      setLoginError('اكتب الرقم المحلي 10 أو 11 رقم، ويبدأ بـ 77 أو 78 أو 79 أو 75، مع أو بدون صفر البداية');
+      setLoginError(t("auth.errors.phoneLocalFormat"));
       return;
     }
     if (forgotNewPassword.length < 8) {
-      setLoginError("كلمة المرور الجديدة يجب أن لا تقل عن 8 حروف");
+      setLoginError(t("auth.errors.newPasswordMin8"));
       return;
     }
     setIsAuthBusy(true);
@@ -1620,7 +2141,7 @@ export const MerchantApp: React.FC = () => {
         (s) => normalizeIraqiPhone(s.phone) === normalized,
       );
       if (!found) {
-        setLoginError("الرقم غير مسجل");
+        setLoginError(t("auth.errors.phoneNotRegistered"));
         return;
       }
       setOtpMode("forgot");
@@ -1630,12 +2151,12 @@ export const MerchantApp: React.FC = () => {
       const ok = await authService.requestOTP(normalized, "forgot");
       if (ok) {
         setView("otp");
-        showToast("success", "تم إرسال الرمز", "تحقق من رقمك على الواتساب");
+        showToast("success", t("auth.toast.otpSentTitle"), t("auth.toast.otpSentWhatsApp"));
       } else {
-        showModal("error", "فشل الإرسال", "يرجى المحاولة لاحقاً");
+        showModal("error", t("auth.toast.sendFailedTitle"), t("auth.toast.sendFailed"));
       }
     } catch (err: any) {
-      showModal("error", "خطأ في الاتصال", err.message || "فشل الإرسال. تأكد من الإنترنت.");
+      showModal("error", t("auth.toast.connectionErrorTitle"), err.message || t("auth.toast.connectionError"));
     } finally {
       setIsAuthBusy(false);
     }
@@ -1646,20 +2167,20 @@ export const MerchantApp: React.FC = () => {
     if (isAuthBusy) return;
 
     if (!otpCode || otpCode.length < 6) {
-      showToast("warning", "رمز ناقص", "يرجى إدخال رمز التحقق بالكامل.");
+      showToast("warning", t("auth.toast.otpIncompleteTitle"), t("auth.toast.otpIncomplete"));
       return;
     }
 
     if (otpMode === "forgot") {
       if (forgotNewPassword.length < 8) {
-        showToast("warning", "كلمة المرور قصيرة", "كلمة المرور يجب أن لا تقل عن 8 رموز");
+        showToast("warning", t("auth.toast.passwordShortTitle"), t("auth.toast.passwordShort"));
         return;
       }
       setIsAuthBusy(true);
       try {
         const result = await resetStorePasswordSecure(forgotPhone, otpCode, forgotNewPassword);
         if (!result.success) {
-          showModal("error", "فشل إعادة التعيين", result.error || "تأكد من الرمز المرسل إلى رقم هاتفك.");
+          showModal("error", t("auth.modal.resetFailedTitle"), result.error || t("auth.modal.resetFailedHint"));
           return;
         }
         const login = await verifyMerchantLogin({
@@ -1670,13 +2191,13 @@ export const MerchantApp: React.FC = () => {
           setCurrentMerchant(login.store as any);
           setView("dashboard");
           setShowPushPrompt(true);
-          setTimeout(() => showToast("success", "تم تغيير كلمة المرور وتسجيل الدخول بنجاح!"), 400);
+          setTimeout(() => showToast("success", t("auth.toast.passwordChangedAndLogin")), 400);
         } else {
-          showToast("success", "تم تغيير كلمة المرور بنجاح! سجّل الدخول الآن.");
+          showToast("success", t("auth.toast.passwordChanged"));
           setView("login");
         }
       } catch (error: any) {
-        showModal("error", "خطأ في إعادة التعيين", error.message || "حاول مرة أخرى.");
+        showModal("error", t("auth.modal.resetErrorTitle"), error.message || t("auth.toast.tryAgain"));
       } finally {
         setIsAuthBusy(false);
       }
@@ -1690,25 +2211,26 @@ export const MerchantApp: React.FC = () => {
       
       const isValid = await authService.verifyOTP(normalizedPhone, otpCode);
       if (!isValid) {
-        const message = "تأكد من الرمز المرسل إلى رقم هاتفك.";
-        setLoginError(`رمز OTP غير صحيح. ${message}`);
-        showModal("error", "الرمز غير صحيح", message);
+        const message = t("auth.errors.otpInvalidWithHint");
+        setLoginError(message);
+        showModal("error", t("auth.toast.otpInvalid"), message);
         return;
       }
 
       if (otpMode === "signup" && pendingData) {
         const res = await registerMerchant(pendingData);
         if (res?.success) {
-          showModal("success", "تم إنشاء متجرك مبدئياً! أكمل الخطوات لإنهائه 🎉");
+          if (res.storeId) markMerchantTourEligible(res.storeId);
+          showModal("success", t("auth.modal.storeCreatedSuccess"));
           setView("onboarding");
           setShowPushPrompt(true);
         } else {
-          showModal("error", "خطأ", res?.message || 'تعذر إنشاء المتجر');
+          showModal("error", t("auth.toast.errorTitle"), res?.message || t("auth.modal.storeCreateFailed"));
           setView("signup");
         }
       }
     } catch (error: any) {
-      showModal("error", "خطأ في التحقق", error.message || "الرمز غير صحيح!");
+      showModal("error", t("auth.modal.verifyErrorTitle"), error.message || t("auth.modal.otpWrong"));
     } finally {
       setIsAuthBusy(false);
     }
@@ -1727,12 +2249,12 @@ export const MerchantApp: React.FC = () => {
     try {
       const ok = await authService.requestOTP(normalized, otpMode);
       if (ok) {
-        showToast("success", "تم إعادة إرسال رمز OTP بنجاح!");
+        showToast("success", t("auth.toast.otpResent"));
       } else {
-        showToast("error", "فشل الإرسال. يرجى المحاولة لاحقاً");
+        showToast("error", t("auth.toast.otpResendFailed"));
       }
     } catch (err: any) {
-      showModal("error", "خطأ في الاتصال", err.message);
+      showModal("error", t("auth.toast.connectionErrorTitle"), err.message);
     } finally {
       setIsResendingOtp(false);
     }
@@ -1760,22 +2282,22 @@ export const MerchantApp: React.FC = () => {
         const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
         if (ok) {
           setPwStep(2);
-          showToast("success", "تم إرسال رمز OTP", "تم الإرسال لتغيير كلمة المرور إلى واتساب!");
+          showToast("success", t("auth.toast.otpSentTitle"), t("auth.toast.otpSentWhatsApp"));
         } else {
-          showToast("error", "فشل إرسال الرمز", "حاول مرة أخرى.");
+          showToast("error", t("auth.toast.sendFailedTitle"), t("auth.toast.sendFailed"));
         }
       } catch (err: any) {
-        showToast("error", "خطأ", err.message || "حاول مرة أخرى.");
+        showToast("error", t("auth.toast.connectionErrorTitle"), err.message || t("auth.errors.generic"));
       } finally {
         setIsSendingPwOtp(false);
       }
     } else {
       if (!otpPwCode || otpPwCode.length < 6) {
-        showToast("warning", "رمز ناقص", "يرجى إدخال الرمز كاملاً");
+        showToast("warning", t("auth.toast.otpIncompleteTitle"), t("auth.toast.otpIncomplete"));
         return;
       }
       if (newPassword.length < 8) {
-        alert("كلمة المرور الجديدة يجب أن لا تقل عن 8 رموز");
+        alert(t("auth.toast.passwordShort"));
         return;
       }
       if (!currentMerchant || isUpdatingPassword) return;
@@ -1783,14 +2305,14 @@ export const MerchantApp: React.FC = () => {
       try {
         const result = await resetStorePasswordSecure(currentMerchant.phone, otpPwCode, newPassword);
         if (!result.success) {
-          showModal("error", "تعذر تغيير كلمة المرور", result.error || "تحقق من رمز OTP وحاول مجدداً");
+          showModal("error", t("auth.modal.passwordChangeFailedTitle"), result.error || t("auth.modal.otpVerifyRetry"));
           return;
         }
         setShowPasswordChange(false);
         setPwStep(1);
         setOtpPwCode("");
         setNewPassword("");
-        setTimeout(() => alert("تم تغيير كلمة المرور بنجاح! ✅"), 100);
+        setTimeout(() => alert(t("auth.toast.passwordChangedSuccessAlert")), 100);
       } finally {
         setIsUpdatingPassword(false);
       }
@@ -1816,34 +2338,67 @@ export const MerchantApp: React.FC = () => {
         provinceFreeDelivery: profileForm.provinceFreeDelivery,
       });
       setIsProfileDirty(false);
-      alert("تم حفظ إعدادات التوصيل بنجاح! 🚚✨");
+      alert(t("merchant.delivery.saveSuccess"));
     } catch (e: any) {
-      alert(e.message || "حدث خطأ أثناء حفظ التعديلات.");
+      alert(e.message || t("merchant.delivery.saveError"));
     } finally {
       setIsDeliverySaving(false);
     }
   };
 
-  const handleSaveProfile = async () => {
+  const handleSaveProfile = async (section: "storeInfo" | "location" = "storeInfo") => {
     if (isSavingProfile) return;
-    if (profileForm.lat === undefined || profileForm.lng === undefined) {
-      alert("يرجى تحديد موقعك على الخريطة أولاً 📍");
-      return;
+
+    if (section === "storeInfo") {
+      if (!profileForm.ownerName.trim() || !profileForm.shopName.trim()) {
+        showToast("error", t("merchant.profileForm.incompleteData"), t("merchant.profileForm.ownerShopRequired"));
+        return;
+      }
+      if (!profileForm.username.trim() || profileForm.username.trim().length < 3) {
+        showToast("error", t("merchant.profileForm.usernameTitle"), t("merchant.profileForm.usernameMin"));
+        return;
+      }
     }
+
+    if (section === "location") {
+      if (!profileForm.province?.trim() || !profileForm.area?.trim() || !profileForm.landmark?.trim()) {
+        showToast("error", t("merchant.profileForm.incompleteData"), t("merchant.profileForm.locationRequired"));
+        return;
+      }
+      if (profileForm.lat === undefined || profileForm.lng === undefined) {
+        showToast("error", t("merchant.profileForm.mapRequiredTitle"), t("merchant.profileForm.mapRequired"));
+        return;
+      }
+    }
+
     setIsSavingProfile(true);
     try {
-      const dbPayload = {
-         ...profileForm,
-         payoutMethods: {
-           zainCashNumber: profileForm.zainCashNumber,
-           mastercardNumber: profileForm.mastercardNumber,
-         }
-      };
+      const dbPayload =
+        section === "storeInfo"
+          ? {
+              ownerName: profileForm.ownerName.trim(),
+              shopName: profileForm.shopName.trim(),
+              username: profileForm.username.trim().toLowerCase(),
+              category: profileForm.category,
+              showPhone: profileForm.showPhone,
+              logo: profileForm.logo || "",
+            }
+          : {
+              province: profileForm.province,
+              area: profileForm.area.trim(),
+              landmark: profileForm.landmark.trim(),
+              lat: profileForm.lat,
+              lng: profileForm.lng,
+              showArea: profileForm.showArea,
+              showLandmark: profileForm.showLandmark,
+              showMap: profileForm.showMap,
+            };
+
       await updateStoreProfile(dbPayload);
       setIsProfileDirty(false);
-      alert("تم حفظ التعديلات ✅");
-    } catch (e: any) {
-      alert(e.message || "حدث خطأ أثناء حفظ التعديلات.");
+      showToast("success", t("profile.saveSuccess"), t("merchant.profileForm.saveSuccessDetail"));
+    } catch (e: unknown) {
+      showToast("error", t("profile.saveFailed"), profileSaveErrorMessage(e));
     } finally {
       setIsSavingProfile(false);
     }
@@ -1862,9 +2417,14 @@ export const MerchantApp: React.FC = () => {
 
   useEffect(() => {
     if (showScanner) {
+      applyHtml5QrcodeScannerTranslations(t);
       const scanner = new Html5QrcodeScanner(
         "reader",
-        { fps: 10, qrbox: { width: 250, height: 250 } },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 },
+          supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA],
+        },
         false,
       );
 
@@ -1872,6 +2432,15 @@ export const MerchantApp: React.FC = () => {
         (decodedText) => {
           scanner.clear();
           setShowScanner(false);
+
+          if (tryOpenOrderFromPayload(decodedText)) {
+            return;
+          }
+
+          if (scannerMode === "order") {
+            handleOrderBarcodeDecoded(decodedText);
+            return;
+          }
           
           if (scannerMode === "search") {
             setProductSearchQuery(decodedText);
@@ -1915,9 +2484,7 @@ export const MerchantApp: React.FC = () => {
             const globalMatch = products.find((p) => p.barcode === decodedText);
             setProdModal({ show: true, mode: "add" });
             if (globalMatch) {
-              alert(
-                "تم العثور على المنتج في النظام! تم تعبئة البيانات تلقائياً. 📦",
-              );
+              alert(t("merchant.products.form.barcodeFound"));
               setProdName(globalMatch.name);
               setProdDesc(globalMatch.description || "");
               setProdPrice(globalMatch.price);
@@ -1971,19 +2538,24 @@ export const MerchantApp: React.FC = () => {
       );
 
       return () => {
+        try {
+          scanner.clear().catch(() => undefined);
+        } catch {
+          // ignore
+        }
       };
     }
-  }, [showScanner, products, currentMerchant, scannerMode]);
+  }, [showScanner, products, currentMerchant, scannerMode, tryOpenOrderFromPayload, handleOrderBarcodeDecoded, t, language]);
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingProduct) return;
     if (!prodName.trim()) {
-      showToast("warning", "الاسم مطلوب", "يرجى إدخال اسم المنتج.");
+      showToast("warning", t("merchant.products.toast.nameRequiredTitle"), t("merchant.products.toast.nameRequired"));
       return;
     }
     if (!Number.isFinite(prodPrice) || prodPrice <= 0) {
-      showToast("warning", "السعر غير صالح", "يرجى إدخال سعر للزبون أكبر من صفر.");
+      showToast("warning", t("merchant.products.toast.invalidPriceTitle"), t("merchant.products.toast.invalidPrice"));
       return;
     }
 
@@ -2045,10 +2617,10 @@ export const MerchantApp: React.FC = () => {
     try {
       if (prodModal.mode === "edit" && prodModal.product) {
         await updateProduct(prodModal.product.id, data);
-        showToast("success", "تم الحفظ", "تم تحديث بيانات المنتج بنجاح.");
+        showToast("success", t("merchant.products.toast.saveSuccessTitle"), t("merchant.products.toast.saveUpdated"));
       } else {
         await addProduct(data);
-        showToast("success", "تمت الإضافة", "تم إضافة المنتج بنجاح.");
+        showToast("success", t("merchant.products.toast.saveAddedTitle"), t("merchant.products.toast.saveAdded"));
       }
       setProdModal({ show: false, mode: "add" });
       setProdName("");
@@ -2072,8 +2644,12 @@ export const MerchantApp: React.FC = () => {
       setProdWarranty("");
       setProdBrand("");
       setShowExtraInfo(false);
-    } catch {
-      showToast("error", "فشل الحفظ", "تعذّر حفظ المنتج. حاول مرة أخرى.");
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : t("merchant.products.toast.saveFailed");
+      showToast("error", t("merchant.products.toast.saveFailedTitle"), msg);
     } finally {
       setIsSavingProduct(false);
     }
@@ -2089,9 +2665,9 @@ export const MerchantApp: React.FC = () => {
     try {
       await deleteProduct(deleteConfirm.id, "permanent");
       setDeleteConfirm({ show: false, id: "", name: "" });
-      showToast("success", "تم الحذف", "تم حذف المنتج نهائياً.");
+      showToast("success", t("merchant.products.toast.deleteSuccessTitle"), t("merchant.products.toast.deleteSuccess"));
     } catch {
-      showToast("error", "فشل الحذف", "تعذر حذف المنتج. حاول مرة أخرى.");
+      showToast("error", t("merchant.products.toast.deleteFailedTitle"), t("merchant.products.toast.deleteFailed"));
     } finally {
       setIsDeletingProduct(false);
     }
@@ -2102,9 +2678,9 @@ export const MerchantApp: React.FC = () => {
     setIsUpdatingProductStatus(true);
     try {
       await updateProduct(id, { status: "archived" });
-      alert("✅ تم نقل المنتج إلى الأرشيف بنجاح!");
+      alert(t("merchant.products.alert.archiveSuccess"));
     } catch (e) {
-      alert("❌ فشل نقل المنتج إلى الأرشيف");
+      alert(t("merchant.products.alert.archiveFailed"));
     } finally {
       setIsUpdatingProductStatus(false);
     }
@@ -2115,9 +2691,9 @@ export const MerchantApp: React.FC = () => {
     setIsUpdatingProductStatus(true);
     try {
       await updateProduct(id, { status: "published" });
-      alert("✅ تم نشر المنتج على المتجر بنجاح!");
+      alert(t("merchant.products.alert.publishSuccess"));
     } catch (e) {
-      alert("❌ فشل نشر المنتج");
+      alert(t("merchant.products.alert.publishFailed"));
     } finally {
       setIsUpdatingProductStatus(false);
     }
@@ -2128,9 +2704,9 @@ export const MerchantApp: React.FC = () => {
     setIsUpdatingProductStatus(true);
     try {
       await updateProduct(id, { status: "draft" });
-      alert("✅ تم نقل المنتج إلى المسودة بنجاح!");
+      alert(t("merchant.products.alert.draftSuccess"));
     } catch (e) {
-      alert("❌ فشل نقل المنتج إلى المسودة");
+      alert(t("merchant.products.alert.draftFailed"));
     } finally {
       setIsUpdatingProductStatus(false);
     }
@@ -2152,10 +2728,10 @@ export const MerchantApp: React.FC = () => {
           expiryDays: giftExpiryDays,
         });
         const code = result.promoCode ?? "";
-        alert(`تم إرسال كود الخصم الهدية #${code} بنجاح إلى ${giftModal.customerName}! 🎉`);
+        alert(t("merchant.gifts.alertPromoSuccess", { code, name: giftModal.customerName }));
       } else {
         if (!giftProductId) {
-          alert("الرجاء اختيار منتج صحيح");
+          alert(t("merchant.gifts.alertSelectProduct"));
           return;
         }
         const result = await sendCustomerGift({
@@ -2163,8 +2739,8 @@ export const MerchantApp: React.FC = () => {
           giftType: "product",
           productId: giftProductId,
         });
-        const productName = result.productName ?? products.find((p) => p.id === giftProductId)?.name ?? "المنتج";
-        alert(`تم إرسال هدية المنتج (${productName}) بنجاح إلى ${giftModal.customerName}! 🎉`);
+        const productName = result.productName ?? products.find((p) => p.id === giftProductId)?.name ?? t("merchant.gifts.typeProduct");
+        alert(t("merchant.gifts.alertProductSuccess", { product: productName, name: giftModal.customerName }));
       }
 
       setGiftModal({ show: false, customerId: "", customerName: "" });
@@ -2176,13 +2752,13 @@ export const MerchantApp: React.FC = () => {
     } catch (err) {
       const code = (err as { code?: string })?.code ?? "";
       if (code === "functions/permission-denied") {
-        alert("لا تملك صلاحية إرسال هدية من هذا المتجر. أعد تسجيل الدخول وحاول مجدداً.");
+        alert(t("merchant.gifts.alertPermissionDenied"));
       } else if (code === "functions/not-found") {
-        alert("تعذر العثور على الزبون أو المنتج. حدّث القائمة وحاول مرة أخرى.");
+        alert(t("merchant.gifts.alertNotFound"));
       } else if (code === "functions/unauthenticated") {
-        alert("انتهت الجلسة. سجّل الدخول مرة أخرى ثم أعد المحاولة.");
+        alert(t("merchant.gifts.alertUnauthenticated"));
       } else {
-        alert("حدث خطأ أثناء إرسال الهدية. يرجى المحاولة لاحقاً.");
+        alert(t("merchant.gifts.alertGenericError"));
       }
       console.warn("[handleSendGift]", err);
     } finally {
@@ -2198,7 +2774,7 @@ export const MerchantApp: React.FC = () => {
         'stores',
         (notification) => {
           // Foreground
-          showLocalNotification(notification.title || "إشعار جديد", notification.body || "لديك تحديث جديد في المتجر", { type: 'new_order' });
+          showLocalNotification(notification.title || t("notifications.newNotification"), notification.body || t("merchant.push.storeUpdateBody"), { type: 'new_order' });
         },
         (action) => {
           // Background Click
@@ -2262,7 +2838,7 @@ export const MerchantApp: React.FC = () => {
               setView("dashboard");
             }
           } catch {
-            showModal("error", "خطأ", "تعذر حفظ موافقتك. يرجى المحاولة مرة أخرى.");
+            showModal("error", t("common.error"), t("merchant.terms.saveFailed"));
           } finally {
             setIsSavingTerms(false);
           }
@@ -2279,6 +2855,7 @@ export const MerchantApp: React.FC = () => {
       <MerchantOnboarding 
         currentMerchant={currentMerchant}
         onComplete={async (data) => {
+          markMerchantTourEligible(currentMerchant.id);
           await updateStoreProfile(data);
           setView("dashboard");
         }}
@@ -2353,22 +2930,22 @@ export const MerchantApp: React.FC = () => {
         <aside className="hidden md:flex w-64 bg-gradient-to-b from-vibrant-purple to-deep-navy text-white flex-col fixed right-0 top-0 h-screen z-30 shadow-2xl transition-all">
           <div className="p-6 border-b border-vibrant-purple flex items-center space-x-3 space-x-reverse">
             <MahalakLogo className="h-8 w-8 shrink-0 object-contain" />
-            <div>
-              <span className="text-lg font-black block">
-                {currentMerchant.shopName}
-              </span>
-              <span className="text-[10px] text-slate-400">
-                @{currentMerchant.username}
-              </span>
-            </div>
+            <StoreIdentity
+              name={currentMerchant.shopName}
+              username={currentMerchant.username}
+              verified={isStoreVerified(currentMerchant)}
+              size="md"
+              nameClassName="text-white text-lg"
+              usernameClassName="text-slate-300 opacity-100"
+            />
           </div>
           <nav className="flex-1 p-4 space-y-2">
             {[
-              { id: "home", icon: MahalakLogoIcon, label: "الرئيسية" },
-              { id: "products", icon: Package, label: "المنتجات" },
-              { id: "orders", icon: ClipboardList, label: "الطلبات" },
-              { id: "mystore", icon: StoreIcon, label: "متجري" },
-              { id: "profile", icon: User, label: "حسابي" },
+              { id: "home", icon: MahalakLogoIcon, label: t("merchant.nav.home") },
+              { id: "products", icon: Package, label: t("merchant.nav.products") },
+              { id: "orders", icon: ClipboardList, label: t("merchant.nav.orders") },
+              { id: "mystore", icon: StoreIcon, label: t("merchant.nav.myStore") },
+              { id: "profile", icon: User, label: t("merchant.nav.account") },
             ].map((item) => (
               <button
                 key={item.id}
@@ -2390,19 +2967,19 @@ export const MerchantApp: React.FC = () => {
             className="m-4 p-3 bg-red-900/50 text-red-200 rounded-xl hover:bg-red-800 flex items-center justify-center space-x-2 space-x-reverse transition"
           >
             <LogOut size={20} />
-            <span>خروج</span>
+            <span>{t("profile.logout")}</span>
           </button>
         </aside>
 
         {/* Mobile Bottom Nav */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 merchant-nav-mobile flex justify-around p-2 z-50 select-none overflow-x-auto">
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 customer-welcome-nav flex justify-around p-2 z-50 select-none overflow-x-auto">
           <div className="max-w-4xl mx-auto w-full flex justify-around items-center">
           {[
-            { id: "home", icon: MahalakLogoIcon, label: "الرئيسية", iconSize: 24 },
-            { id: "products", icon: Package, label: "المنتجات" },
-            { id: "orders", icon: ClipboardList, label: "الطلبات" },
-            { id: "mystore", icon: StoreIcon, label: "متجري" },
-            { id: "profile", icon: User, label: "حسابي" },
+            { id: "home", icon: MahalakLogoIcon, label: t("merchant.nav.home"), iconSize: 24 },
+            { id: "products", icon: Package, label: t("merchant.nav.products") },
+            { id: "orders", icon: ClipboardList, label: t("merchant.nav.orders") },
+            { id: "mystore", icon: StoreIcon, label: t("merchant.nav.myStore") },
+            { id: "profile", icon: User, label: t("merchant.nav.account") },
           ].map((item) => {
             const active = activeTab === item.id;
             const iconSize = 'iconSize' in item ? item.iconSize : 18;
@@ -2427,17 +3004,30 @@ export const MerchantApp: React.FC = () => {
         </nav>
 
         <main className="flex-1 min-w-0 md:mr-64 p-4 md:p-6 lg:p-8 pt-0 md:pt-0 lg:pt-0 pb-24 md:pb-8 text-right w-full overflow-x-hidden">
-          {/* Header Mobile / Info Bar */}
+          {/* Header Mobile / Info Bar — z مرتفع عند فتح الإشعارات حتى لا تغطيها بطاقات الصفحة (backdrop-blur ينشئ stacking context) */}
           <div
-            className="flex justify-between items-center mb-6 merchant-brand-card p-4 rounded-b-2xl md:rounded-2xl shadow-sm border border-t-0 text-right"
-            
+            className={`flex justify-between items-center mb-6 welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 rounded-b-2xl md:rounded-2xl shadow-lg text-white text-right relative ${
+              showNotifications ? "z-[120]" : "z-20"
+            }`}
           >
             <div className="flex items-center gap-3 text-right">
               {(activeTab !== "home") && (
                 <button
                   onClick={() => {
                     if (activeTab === "mystore" && myStoreSubPage !== null) {
-                      setMyStoreSubPage(null);
+                      if (myStoreSubPage === "customers" && audienceSegment) {
+                        setAudienceSegment(null);
+                        setAudienceSearchQuery("");
+                      } else {
+                        setMyStoreSubPage(null);
+                      }
+                    } else if (activeTab === "profile" && profileSubPage !== null) {
+                      if (isProfileDirty && isProfileFormSubPage) {
+                        setPendingTab("__profile_hub__");
+                        setShowUnsavedModal(true);
+                      } else {
+                        setProfileSubPage(null);
+                      }
                     } else {
                       handleTabChange("home");
                     }
@@ -2449,22 +3039,28 @@ export const MerchantApp: React.FC = () => {
               )}
               <div className="text-right flex flex-col items-start gap-1">
                 <div className="flex items-center gap-2">
-                  <h1 className="text-sm font-black text-on-brand">
-                    {currentMerchant.shopName}
-                  </h1>
+                  <StoreIdentity
+                    name={currentMerchant.shopName}
+                    username={currentMerchant.username}
+                    verified={isStoreVerified(currentMerchant)}
+                    size="sm"
+                    nameAs="h1"
+                    nameClassName="text-white"
+                    usernameClassName="text-white/75 opacity-100"
+                  />
                   {isSubscriptionActive ? (
                     <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full relative">
                       <div className="relative flex h-2 w-2">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                       </div>
-                      <span>حساب مفعل</span>
+                      <span>{t("merchant.home.accountActive")}</span>
                     </span>
                   ) : (
                     <div className="flex flex-col items-start">
                       <span className="flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
                         <span className="w-2 h-2 bg-rose-500 rounded-full"></span>
-                        <span>غير مفعل</span>
+                        <span>{t("merchant.home.accountInactive")}</span>
                       </span>
                     </div>
                   )}
@@ -2475,12 +3071,14 @@ export const MerchantApp: React.FC = () => {
                     onClick={() => setShowSubscriptionModal(true)}
                     className="text-[9px] text-rose-500 font-bold max-w-[200px] text-right hover:underline"
                   >
-                    (المتجر لا يظهر للزبائن — اضغط لاختيار باقة الاشتراك)
+                    {t("merchant.home.storeHiddenHint")}
                   </button>
                 )}
                 {currentMerchant?.subscriptionValidUntil && currentMerchant.subscriptionExpiry !== 'Lifetime' && isSubscriptionActive && (
                   <p className="text-[9px] font-bold text-white">
-                    ينتهي في: {new Date(currentMerchant.subscriptionValidUntil).toLocaleDateString('ar-IQ')}
+                    {t("merchant.home.expiresOn", {
+                      date: new Date(currentMerchant.subscriptionValidUntil).toLocaleDateString('ar-IQ'),
+                    })}
                   </p>
                 )}
               </div>
@@ -2488,115 +3086,149 @@ export const MerchantApp: React.FC = () => {
 
             <div className="flex items-center space-x-3 space-x-reverse relative text-right">
               <button
-                onClick={handleManualSync}
-                className={`p-2.5 rounded-xl transition-all ml-2 ${isSyncing ? 'bg-slate-100 text-slate-400 animate-spin' : 'bg-slate-50 text-slate-500 hover:bg-orange-50 hover:text-orange-600'}`}
-                title="تحديث البيانات"
-              >
-                <RefreshCw size={20} />
-              </button>
-              <button
+                type="button"
                 onClick={() => {
                   if (!showNotifications && unreadNotifsCount > 0 && currentMerchant) {
                     markAllNotificationsAsRead(currentMerchant.id, "merchant");
                   }
                   setShowNotifications(!showNotifications);
                 }}
-                className="p-2.5 bg-amber-50/80 text-amber-500 rounded-full hover:bg-amber-100/70 transition relative shadow-sm border border-amber-100/40 flex items-center justify-center"
+                className={`relative p-2.5 bg-white/10 text-amber-300 hover:bg-white/20 rounded-full transition-all border flex items-center justify-center shadow-sm ${
+                  showNotifications ? "border-amber-300/60 bg-white/20" : "border-white/25"
+                }`}
               >
-                <BellRing size={20} strokeWidth={1.75} />
+                <Bell size={20} strokeWidth={1.75} />
                 {unreadNotifsCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-white shadow-sm animate-bounce">
+                  <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-rose-500 text-white text-[9px] font-black flex items-center justify-center rounded-full border-2 border-deep-navy">
                     {unreadNotifsCount}
                   </span>
                 )}
               </button>
 
               {showNotifications && (
-                <div className="absolute left-0 top-12 w-72 merchant-dropdown rounded-2xl shadow-2xl z-50 overflow-hidden animate-fade-in divide-y divide-gray-50 text-right">
-                  <div className="p-3 merchant-panel-inset flex justify-between items-center border-b border-white/10 text-right">
-                    <span className="text-xs font-black text-on-brand">
-                      التنبيهات الأخيرة
-                    </span>
-                    <span className="text-[10px] font-bold bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">
-                      {merchantNotifications.length} تنبيه
-                    </span>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto text-right">
-                    {merchantNotifications.length === 0 ? (
-                      <p className="p-8 text-center text-[10px] text-slate-400 font-bold col-span-full">
-                        لا توجد إشعارات جديدة.
-                      </p>
-                    ) : (
-                      <div className="divide-y divide-slate-50 text-right">
-                        {merchantNotifications.map((notif) => (
-                          <div key={notif.id} className="p-3 hover:bg-white/5 transition-colors text-right relative cursor-pointer" onClick={() => {
-                            if (!notif.read) markNotificationAsRead(notif.id);
-                            if (notif.type === 'order') {
-                               handleTabChange('orders');
-                            }
-                            setShowNotifications(false);
-                          }}>
-                            <div className="flex items-start justify-between gap-2">
-                              <p className={`text-base font-black mb-1 leading-snug ${!notif.read ? 'text-slate-900' : 'text-slate-700'}`}>{notif.title}</p>
-                              <div className="flex flex-col items-center gap-1.5 shrink-0">
-                                {!notif.read && <span className="w-1.5 h-1.5 rounded-full bg-vibrant-purple mt-1.5"></span>}
-                                <button
-                                  type="button"
-                                  title="حذف التنبيه"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    void deleteNotification(notif.id);
-                                  }}
-                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-colors"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
+                <>
+                  <button
+                    type="button"
+                    aria-label={t("notifications.closeAria")}
+                    className="fixed inset-0 z-[129] cursor-default bg-transparent"
+                    onClick={() => setShowNotifications(false)}
+                  />
+                  <div className="absolute left-0 top-12 z-[130] w-[min(19rem,calc(100vw-1.5rem))] bg-[#0F1830] border border-white/20 rounded-2xl shadow-2xl overflow-hidden text-white">
+                    <div className="px-3 py-2.5 border-b border-white/10 flex items-center justify-between gap-2 bg-white/5">
+                      <h3 className="text-xs font-black text-white">{t("notifications.title")}</h3>
+                      <span className="text-[9px] font-black text-white/70 bg-white/10 border border-white/15 px-2 py-0.5 rounded-full">
+                        {t("notifications.count", { count: merchantNotifications.length })}
+                      </span>
+                    </div>
+
+                    <div className="max-h-56 overflow-y-auto overscroll-contain">
+                      {merchantNotifications.length === 0 ? (
+                        <div className="px-4 py-6 text-center text-white/45">
+                          <BellOff size={22} className="mx-auto mb-1.5 opacity-40" />
+                          <p className="text-[10px] font-bold">{t("notifications.empty")}</p>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-white/10">
+                          {merchantNotifications.slice(0, 20).map((n) => (
+                            <div
+                              key={n.id}
+                              className={`px-3 py-2.5 text-right hover:bg-white/10 transition-colors cursor-pointer ${!n.read ? "bg-white/5" : ""}`}
+                              onClick={() => navigateFromNotification(n)}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  {(() => {
+                                    const display = getNotificationDisplayText(n, language, adminSettings);
+                                    return (
+                                      <>
+                                        <h4 className={`text-[11px] font-black mb-0.5 leading-snug truncate ${!n.read ? "text-white" : "text-white/75"}`}>
+                                          {display.title}
+                                        </h4>
+                                        <p className="text-[10px] text-white/50 font-medium leading-relaxed line-clamp-2">{display.message}</p>
+                                      </>
+                                    );
+                                  })()}
+                                  {n.actionLink && n.actionText && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        window.open(n.actionLink, "_blank");
+                                      }}
+                                      className="mt-1.5 text-[9px] font-bold bg-white/10 text-amber-200 border border-white/15 px-2.5 py-1 rounded-lg"
+                                    >
+                                      {n.actionText}
+                                    </button>
+                                  )}
+                                  <span className="text-[8px] text-white/35 font-bold mt-1 block">
+                                    {formatSafeDateTimeString(n.createdAt, "ar-IQ", { dateStyle: "short", timeStyle: "short" })}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center gap-1.5 shrink-0">
+                                  {!n.read && <span className="w-1.5 h-1.5 bg-[#fff700] rounded-full" />}
+                                  <button
+                                    type="button"
+                                    title={t("notifications.deleteOne")}
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      try {
+                                        await deleteNotification(n.id);
+                                        showToast("success", t("notifications.deleteOneSuccess"));
+                                      } catch {
+                                        showToast("error", t("notifications.deleteFailedTitle"), t("notifications.deleteFailedBody"));
+                                      }
+                                    }}
+                                    className="p-1 rounded-md text-white/30 hover:text-rose-300 hover:bg-rose-500/15 transition-colors"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
                               </div>
                             </div>
-                            <p className="text-sm text-slate-500 font-normal leading-relaxed">{notif.message}</p>
-                            {notif.actionLink && notif.actionText && (
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  window.open(notif.actionLink, '_blank');
-                                }}
-                                className="mt-2 text-[10px] font-bold bg-vibrant-purple/10 text-vibrant-purple px-3 py-1.5 rounded-lg w-full"
-                              >
-                                {notif.actionText}
-                              </button>
-                            )}
-                            <span className="text-[8px] text-slate-400 block mt-1">
-                              {formatSafeDateTimeString(notif.createdAt, "ar-IQ", { dateStyle: 'short', timeStyle: 'short' })}
-                            </span>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {merchantNotifications.length > 0 && (
+                      <div className="px-3 py-2 border-t border-white/10 flex items-center justify-between gap-2 bg-white/[0.03]">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!currentMerchant) return;
+                            const confirmed = await showConfirm(
+                              t("notifications.deleteAllConfirmTitle"),
+                              t("notifications.deleteAllConfirmBody"),
+                              t("notifications.deleteAll"),
+                              t("common.cancel"),
+                            );
+                            if (!confirmed.isConfirmed) return;
+                            try {
+                              const deleted = await deleteAllNotifications(currentMerchant.id, "merchant");
+                              if (deleted > 0) {
+                                showToast("success", t("notifications.deleteAllSuccess", { count: deleted }));
+                              } else {
+                                showToast("info", t("notifications.deleteAllEmpty"));
+                              }
+                            } catch {
+                              showToast("error", t("notifications.deleteFailedTitle"), t("notifications.deleteFailedBody"));
+                            }
+                          }}
+                          className="text-[9px] font-black text-rose-300/80 hover:text-rose-200 transition-colors"
+                        >
+                          {t("notifications.deleteAll")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowNotifications(false)}
+                          className="text-[9px] font-black text-white/50 hover:text-white transition-colors"
+                        >
+                          {t("common.close")}
+                        </button>
                       </div>
                     )}
                   </div>
-                  {merchantNotifications.length > 0 && (
-                    <div className="p-2.5 bg-slate-50/80 text-center">
-                      <button
-                        type="button"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (!currentMerchant) return;
-                          const confirmed = await showConfirm(
-                            'حذف كل التنبيهات؟',
-                            'سيتم حذف جميع التنبيهات نهائياً ولا يمكن استرجاعها.',
-                            'حذف الكل',
-                            'إلغاء'
-                          );
-                          if (!confirmed.isConfirmed) return;
-                          const deleted = await deleteAllNotifications(currentMerchant.id, 'merchant');
-                          if (deleted > 0) showToast('success', `تم حذف ${deleted} تنبيه`);
-                        }}
-                        className="text-[10px] font-black text-rose-500 hover:text-rose-600 transition-colors"
-                      >
-                        حذف الكل نهائياً
-                      </button>
-                    </div>
-                  )}
-                </div>
+                </>
               )}
             </div>
           </div>
@@ -2615,7 +3247,7 @@ export const MerchantApp: React.FC = () => {
                       adInterval={adminSettings.merchantAdInterval ?? adminSettings.adInterval ?? 5}
                       badgeLabel={adminSettings.adBadgeText}
                       size="full"
-                      className="w-full rounded-none"
+                      className="mx-1"
                       onAdClick={handleMerchantSponsoredAdClick}
                       defaultTitle={section.defaultTitle}
                       defaultDesc={section.defaultDesc}
@@ -2624,8 +3256,8 @@ export const MerchantApp: React.FC = () => {
                 ))}
               </div>
 
-              <div className="p-6 h-full">
-                <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
+              <div className="px-1 sm:px-2 h-full">
+                <div className="space-y-6 animate-fade-in text-right text-white" dir="rtl">
               {/* لوحة "النبض السريع" (الذكاء التجاري) */}
               {(() => {
                 const unreadOrdersCountVal = merchantOrders.filter(o => o.status === 'pending').length;
@@ -2646,41 +3278,51 @@ export const MerchantApp: React.FC = () => {
                 }).reduce((sum, o) => sum + ((o.subtotal || 0) - (o.discountSponsor === 'MERCHANT' ? (o.discountAmount || 0) : 0)), 0);
                 const avgDailyWeek = Math.round(weekSales / 7);
                 const pulsePerformanceMsg = unreadOrdersCountVal > 0 
-                  ? "يوجد طلبات جديدة بانتظار معالجتك، أداء المتجر نشط." 
+                  ? t("merchant.home.pulseActiveOrders")
                   : (todaySales > 0
                     ? (avgDailyWeek > 0 && todaySales >= avgDailyWeek
-                        ? `مبيعاتك اليوم (${todaySales.toLocaleString()} د.ع) أعلى من متوسطك اليومي للأسبوع (${avgDailyWeek.toLocaleString()} د.ع).`
-                        : `مبيعاتك اليوم ${todaySales.toLocaleString()} د.ع — استمر بالمعالجة السريعة للطلبات.`)
-                    : "استمر في إضافة منتجات جديدة لزيادة مبيعاتك وجذب الزبائن.");
+                        ? t("merchant.home.pulseTodayAboveAvg", {
+                            today: todaySales.toLocaleString(),
+                            avg: avgDailyWeek.toLocaleString(),
+                          })
+                        : t("merchant.home.pulseTodaySales", { today: todaySales.toLocaleString() }))
+                    : t("merchant.home.pulseNoSales"));
 
                 return (
                   <div
-                    className="merchant-brand-card p-6 rounded-[2rem] text-white shadow-xl relative overflow-hidden group border"
+                    className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md p-6 rounded-[2rem] text-white shadow-2xl relative overflow-hidden group"
                   >
+                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                      <Activity size={140} />
+                    </div>
+                    <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/20 to-transparent pointer-events-none" />
                     <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
                       <div className="flex items-center gap-4">
-                        <div className="p-2.5 bg-white/10 rounded-2xl shadow-sm">
+                        <div className="welcome-icon-pulse p-2.5 bg-white/15 border border-white/25 backdrop-blur-sm rounded-2xl shadow-sm">
                           <Activity size={32} className="text-[#fff700]" />
                         </div>
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-black text-xl text-[#fff700]">حالة المتجر الآن</h3>
+                            <h3 className="font-black text-xl text-white">{t("merchant.home.storePulseTitle")}</h3>
                             <span className="flex h-3 w-3 relative">
                               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#fff700] opacity-75"></span>
                               <span className="relative inline-flex rounded-full h-3 w-3 bg-[#fff700]"></span>
                             </span>
                           </div>
-                          <p className="text-sm text-white/80 font-medium leading-relaxed max-w-md">
-                            {unreadOrdersCountVal > 0 ? `لديك ${unreadOrdersCountVal} طلبات جديدة، زبائن بانتظار الرد، و` : "لا توجد طلبات جديدة حالياً، ولكن "} {pulsePerformanceMsg}
+                          <p className="text-sm text-white/75 font-medium leading-relaxed max-w-md">
+                            {unreadOrdersCountVal > 0
+                              ? t("merchant.home.pulseIntroWithOrders", { count: unreadOrdersCountVal })
+                              : t("merchant.home.pulseIntroNoOrders")}{" "}
+                            {pulsePerformanceMsg}
                           </p>
                         </div>
                       </div>
                       
                       <button 
                         onClick={() => handleTabChange("orders")} 
-                        className="bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-md active:scale-95 flex items-center gap-2 shrink-0"
+                        className="bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-brand-glow active:scale-95 flex items-center gap-2 shrink-0"
                       >
-                        الذهاب للطلبات <ChevronLeft size={16} />
+                        {t("merchant.home.goToOrders")} <ChevronLeft size={16} />
                       </button>
                     </div>
                   </div>
@@ -2691,79 +3333,82 @@ export const MerchantApp: React.FC = () => {
               {(lowStockProducts.length > 0 || outOfStockProducts.length > 0) && (
                 <div className="flex flex-col gap-3">
                   {outOfStockProducts.length > 0 && (
-                    <div className="merchant-panel-inset border border-rose-400/30 rounded-2xl p-4 flex items-start gap-4">
-                      <div className="p-2 bg-rose-500/20 rounded-xl shadow-sm text-rose-400 shrink-0">
+                    <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-rose-400/35 backdrop-blur-md rounded-[2rem] p-4 flex items-start gap-4 text-white shadow-lg relative overflow-hidden">
+                      <div className="absolute inset-0 bg-gradient-to-l from-rose-600/20 to-transparent pointer-events-none" />
+                      <div className="relative z-10 p-2 bg-rose-500/20 border border-rose-400/30 rounded-xl shadow-sm text-rose-300 shrink-0">
                         <AlertTriangle size={24} />
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-sm font-black text-rose-300 mb-1">انتباه: منتجات نفذت من المخزون!</h4>
-                        <p className="text-xs font-bold text-rose-400/80 mb-2">
-                          توجد {outOfStockProducts.length} منتجات نفذت كميتها تماماً. يرجى تحديث المخزون لتجنب رفض الطلبات.
+                      <div className="relative z-10 flex-1 min-w-0">
+                        <h4 className="text-sm font-black text-rose-200 mb-1">{t("merchant.home.stock.outOfStockTitle")}</h4>
+                        <p className="text-xs font-bold text-rose-200/80 mb-2">
+                          {t("merchant.home.stock.outOfStockBody", { count: outOfStockProducts.length })}
                         </p>
                         <div className="flex flex-wrap gap-2">
                           {outOfStockProducts.slice(0, 3).map(p => (
-                            <span key={p.id} className="text-[10px] font-bold report-stat-badge px-2 py-1 rounded-lg truncate max-w-[150px]">{p.name}</span>
+                            <span key={p.id} className="text-[10px] font-bold bg-white/10 text-white px-2 py-1 rounded-lg border border-white/15 truncate max-w-[150px]">{p.name}</span>
                           ))}
-                          {outOfStockProducts.length > 3 && <span className="text-[10px] font-bold text-rose-400">+{outOfStockProducts.length - 3} أخرى...</span>}
+                          {outOfStockProducts.length > 3 && <span className="text-[10px] font-bold text-rose-300">{t("merchant.home.stock.moreOthers", { count: outOfStockProducts.length - 3 })}</span>}
                         </div>
                       </div>
-                      <button onClick={() => handleTabChange('products')} className="shrink-0 text-xs font-black bg-rose-500 hover:bg-rose-600 text-white px-4 py-2 rounded-xl transition-all active:scale-95">تحديث الآن</button>
+                      <button onClick={() => handleTabChange('products')} className="relative z-10 shrink-0 text-xs font-black bg-rose-500 hover:bg-rose-600 text-white px-4 py-2 rounded-xl transition-all active:scale-95">{t("merchant.home.stock.updateNow")}</button>
                     </div>
                   )}
 
                   {lowStockProducts.length > 0 && (
-                    <div className="merchant-panel-inset border border-amber-400/30 rounded-2xl p-4 flex items-start gap-4">
-                      <div className="p-2 bg-amber-500/20 rounded-xl shadow-sm text-amber-400 shrink-0">
+                    <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-amber-400/35 backdrop-blur-md rounded-[2rem] p-4 flex items-start gap-4 text-white shadow-lg relative overflow-hidden">
+                      <div className="absolute inset-0 bg-gradient-to-l from-amber-500/15 to-transparent pointer-events-none" />
+                      <div className="relative z-10 p-2 bg-amber-500/20 border border-amber-400/30 rounded-xl shadow-sm text-amber-300 shrink-0">
                         <Package size={24} />
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-sm font-black text-amber-300 mb-1">تنبيه ذكي: اقتراب نفاذ المخزون</h4>
-                        <p className="text-xs font-bold text-amber-400/80 mb-2">
-                          {lowStockProducts.length} منتجات سجلت كمية أقل من 3 قطع.
+                      <div className="relative z-10 flex-1 min-w-0">
+                        <h4 className="text-sm font-black text-amber-200 mb-1">{t("merchant.home.stock.lowStockTitle")}</h4>
+                        <p className="text-xs font-bold text-amber-200/80 mb-2">
+                          {t("merchant.home.stock.lowStockBody", { count: lowStockProducts.length })}
                         </p>
                         <div className="flex flex-wrap gap-2">
                           {lowStockProducts.slice(0, 3).map(p => (
-                            <span key={p.id} className="text-[10px] font-bold bg-white/10 text-[#E8ECF4] px-2 py-1 rounded-lg border border-white/10 flex items-center gap-1">
+                            <span key={p.id} className="text-[10px] font-bold bg-white/10 text-[#E8ECF4] px-2 py-1 rounded-lg border border-white/15 flex items-center gap-1">
                               <span className="truncate max-w-[120px]">{p.name}</span>
-                              <span className="bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded-md">باقي {p.inventory}</span>
+                              <span className="bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded-md">{t("merchant.home.stock.remaining", { count: p.inventory })}</span>
                             </span>
                           ))}
-                          {lowStockProducts.length > 3 && <span className="text-[10px] font-bold text-amber-400">+{lowStockProducts.length - 3} أخرى...</span>}
+                          {lowStockProducts.length > 3 && <span className="text-[10px] font-bold text-amber-300">{t("merchant.home.stock.moreOthers", { count: lowStockProducts.length - 3 })}</span>}
                         </div>
                       </div>
-                      <button onClick={() => handleTabChange('products')} className="shrink-0 text-xs font-black bg-white/10 hover:bg-white/20 text-[#fff700] border border-white/20 px-4 py-2 rounded-xl transition-all active:scale-95 shadow-sm">إدارة المخزون</button>
+                      <button onClick={() => handleTabChange('products')} className="relative z-10 shrink-0 text-xs font-black bg-white/10 hover:bg-white/20 text-white border border-white/25 px-4 py-2 rounded-xl transition-all active:scale-95 shadow-sm">{t("merchant.home.stock.manageStock")}</button>
                     </div>
                   )}
                 </div>
               )}
 
-                </div>
-              </div>
-
-              <div className="p-6 h-full">
-                <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 sm:gap-5">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4 sm:gap-5">
                 {[
                   {
-                    label: "إجمالي الطلبات",
+                    label: t("merchant.home.stats.totalOrders"),
                     val: merchantOrders.length,
                     tab: "orders",
                     icon: <ShoppingBag size={18} className="stroke-[2.5]" />,
                   },
                   {
-                    label: "بانتظار التحضير",
+                    label: t("merchant.home.stats.pendingPrep"),
                     val: pendingOrders.length,
                     tab: "orders",
                     icon: <RefreshCw size={18} className="stroke-[2.5]" />,
                   },
                   {
-                    label: "إجمالي الزبائن",
+                    label: t("merchant.home.stats.audience"),
                     val: storeAudienceStats.total,
                     tab: "customers",
                     icon: <Users size={18} className="stroke-[2.5]" />,
                   },
                   {
-                    label: "إجمالي المبيعات",
+                    label: t("merchant.home.stats.mapVisits"),
+                    val: formatStoreVisitCount(mapVisitCount, language),
+                    tab: "home",
+                    icon: <Eye size={18} className="stroke-[2.5]" />,
+                  },
+                  {
+                    label: t("merchant.home.stats.totalSales"),
                     val:
                       merchantOrders
                         .filter((o) => o.status === "delivered")
@@ -2773,13 +3418,13 @@ export const MerchantApp: React.FC = () => {
                     icon: <TrendingUp size={18} className="stroke-[2.5]" />,
                   },
                   {
-                    label: "التقييمات",
+                    label: t("merchant.home.stats.ratings"),
                     val: currentMerchant.rating ? `${currentMerchant.rating.toFixed(1)} / 5` : "0",
                     tab: "home",
                     icon: <Star size={18} className="stroke-[2.5]" />,
                   },
                   {
-                    label: "عروض فلاش سيلز",
+                    label: t("merchant.home.stats.flashSales"),
                     val: flashSales.filter(f => f.itemStoreId === currentMerchant.id && f.status === "active").length,
                     tab: "home",
                     icon: <Zap size={18} className="stroke-[2.5]" />,
@@ -2787,22 +3432,25 @@ export const MerchantApp: React.FC = () => {
                 ].map((s, i) => (
                   <div
                     key={i}
-                    onClick={() => { if (s.tab !== 'home') handleTabChange(s.tab as any); }}
-                    className={`p-5 rounded-[2rem] border shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between group merchant-brand-card relative overflow-hidden ${s.tab !== 'home' ? 'cursor-pointer' : ''} ${s.tab === 'customers' ? 'tour-step-customers-card' : ''}`}
+                    onClick={() => {
+                      if (s.tab === "customers") openMyStoreSubPage("customers");
+                      else if (s.tab !== "home") handleTabChange(s.tab as any);
+                    }}
+                    className={`welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2rem] shadow-lg hover:bg-white/10 transition-all duration-300 flex flex-col justify-between group relative overflow-hidden text-white ${s.tab !== 'home' ? 'cursor-pointer active:scale-[0.99]' : ''} ${s.tab === 'customers' ? 'tour-step-customers-card' : ''}`}
                   >
-                    <div className="absolute -right-4 -bottom-4 w-12 h-12 rounded-full bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                    <div className="absolute -right-4 -bottom-4 w-12 h-12 rounded-full bg-vibrant-purple/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
                     <div className="flex justify-between items-start mb-3">
-                      <span className="text-[10px] font-black text-[#fff700]">
+                      <span className="text-[10px] font-black text-white/80">
                         {s.label}
                       </span>
-                      <div className="p-2 rounded-xl shrink-0 bg-white/10 text-[#fff700] transition-transform duration-300 group-hover:scale-110">
+                      <div className="p-2 rounded-xl shrink-0 bg-white/10 border border-white/20 text-[#fff700] transition-transform duration-300 group-hover:scale-110">
                         {s.icon}
                       </div>
                     </div>
 
                     <div className="relative">
-                      <span className="text-base sm:text-lg font-black tracking-tight text-brand-white">
+                      <span className="text-base sm:text-lg font-black tracking-tight text-white">
                         {s.val}
                       </span>
                     </div>
@@ -2813,24 +3461,24 @@ export const MerchantApp: React.FC = () => {
               {/* رسم بياني لأكثر المنتجات مبيعاً خلال الشهر */}
               {topSellingProductsThisMonth.length > 0 && (
                 <div
-                  className="p-6 rounded-[2rem] border shadow-sm relative overflow-hidden group merchant-brand-card"
+                  className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-6 rounded-[2rem] shadow-2xl relative overflow-hidden group text-white"
                 >
-                  <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform">
-                    <Package size={64} className="text-[#fff700]" />
+                  <div className="absolute top-0 right-0 p-4 text-white/10 group-hover:scale-110 transition-transform">
+                    <Package size={64} />
                   </div>
                   <div className="relative">
-                    <h4 className="text-lg font-black text-[#fff700] mb-6 flex items-center justify-between">
-                      <span>أكثر المنتجات مبيعاً (هذا الشهر) 📈</span>
+                    <h4 className="text-lg font-black text-white mb-6 flex items-center justify-between">
+                      <span>{t("merchant.home.topProducts.titleMonth")}</span>
                     </h4>
-                    <div className="h-64 mt-4 w-full" dir="ltr">
-                      <ResponsiveContainer width="100%" height="100%">
+                    <div className="h-64 mt-4 w-full min-w-0" dir="ltr">
+                      <SafeChartContainer className="h-full w-full min-w-0">
                         <BarChart data={topSellingProductsThisMonth} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.12)" />
                           <XAxis 
                             dataKey="name" 
                             axisLine={false} 
                             tickLine={false} 
-                            tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }}
+                            tick={{ fill: 'rgba(232,236,244,0.7)', fontSize: 10, fontWeight: 'bold' }}
                             interval={0}
                             angle={-30}
                             textAnchor="end"
@@ -2839,21 +3487,21 @@ export const MerchantApp: React.FC = () => {
                             allowDecimals={false} 
                             axisLine={false} 
                             tickLine={false} 
-                            tick={{ fill: '#64748b', fontSize: 11, fontWeight: 'bold' }} 
+                            tick={{ fill: 'rgba(232,236,244,0.7)', fontSize: 11, fontWeight: 'bold' }} 
                           />
                           <Tooltip 
-                            cursor={{ fill: '#f8fafc' }} 
-                            contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
-                            labelStyle={{ color: '#0f172a', fontWeight: 'bold', marginBottom: '4px', textAlign: 'right' }}
-                            itemStyle={{ color: '#7B3DFF', fontWeight: 'bold', textAlign: 'right' }}
+                            cursor={{ fill: 'rgba(123,61,255,0.12)' }} 
+                            contentStyle={{ borderRadius: '16px', border: '1px solid rgba(123,61,255,0.35)', background: 'rgba(11,19,32,0.95)', boxShadow: '0 0 24px -6px rgba(123,61,255,0.45)', color: '#E8ECF4' }}
+                            labelStyle={{ color: '#E8ECF4', fontWeight: 'bold', marginBottom: '4px', textAlign: 'right' }}
+                            itemStyle={{ color: '#B18CFF', fontWeight: 'bold', textAlign: 'right' }}
                           />
-                          <Bar dataKey="sold" name="الكمية المباعة" radius={[6, 6, 0, 0]}>
+                          <Bar dataKey="sold" name={t("merchant.home.topProducts.qtySold")} radius={[6, 6, 0, 0]}>
                             {topSellingProductsThisMonth.map((_, index) => (
-                              <Cell key={`cell-${index}`} fill={index === 0 ? '#7B3DFF' : '#cbd5e1'} />
+                              <Cell key={`cell-${index}`} fill={index === 0 ? '#7B3DFF' : 'rgba(177,140,255,0.45)'} />
                             ))}
                           </Bar>
                         </BarChart>
-                      </ResponsiveContainer>
+                      </SafeChartContainer>
                     </div>
                   </div>
                 </div>
@@ -2862,19 +3510,21 @@ export const MerchantApp: React.FC = () => {
               {/* الفعاليات المركزية */}
               <div className="space-y-4 pt-4 border-t border-white/10">
                 <div
-                  className="rounded-2xl border shadow-sm p-6 overflow-hidden relative text-right merchant-brand-card"
+                  className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] shadow-2xl p-6 overflow-hidden relative text-right text-white group"
                 >
-                  <div className="absolute top-0 right-0 p-4 opacity-10">
-                    <Zap size={100} className="text-[#fff700]" />
+                  <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                    <Zap size={140} />
                   </div>
+                  <div className="absolute inset-0 bg-gradient-to-l from-rose-600/25 to-transparent pointer-events-none" />
                   <div className="relative z-10 text-right">
-                    <h3 className="font-black text-2xl text-[#fff700] flex items-center space-x-2 space-x-reverse mb-2 justify-start">
-                      <Zap size={24} className="text-[#fff700]" />
-                      <span>الفعاليات المركزية (Flash Sales)</span>
+                    <h3 className="font-black text-2xl text-white flex items-center space-x-2 space-x-reverse mb-2 justify-start">
+                      <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                        <Zap size={20} fill="currentColor" className="text-[#fff700]" />
+                      </span>
+                      <span>{t("merchant.flashSales.title")}</span>
                     </h3>
                     <p className="text-xs text-white/70 max-w-sm">
-                      شارك بمنتجاتك في الفعاليات المركزية وحقق مبيعات ضخمة خلال
-                      فترة قصيرة!
+                      {t("merchant.flashSales.subtitle")}
                     </p>
                   </div>
                 </div>
@@ -2882,11 +3532,11 @@ export const MerchantApp: React.FC = () => {
                 <div className="grid grid-cols-1 gap-4">
                   {flashSales.filter((s) => s.status !== "ended" && s.status !== "paused").length === 0 ? (
                     <div
-                      className="p-12 rounded-[2rem] border border-dashed border-white/20 shadow-sm text-center merchant-brand-card"
+                      className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-dashed border-white/25 backdrop-blur-md p-12 rounded-[2rem] shadow-lg text-center text-white"
                     >
                       <Gift size={48} className="mx-auto text-[#fff700] mb-4" />
-                      <p className="font-bold text-brand-white">
-                        لا توجد فعاليات مركزية حالياً
+                      <p className="font-bold text-white/80">
+                        {t("merchant.flashSales.empty")}
                       </p>
                     </div>
                   ) : (
@@ -2902,11 +3552,13 @@ export const MerchantApp: React.FC = () => {
                         return (
                           <div
                             key={sale.id}
-                            className="merchant-brand-card rounded-[2rem] border shadow-sm p-6 text-right"
+                            className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] shadow-2xl p-6 text-right text-white relative overflow-hidden"
                           >
+                            <div className="absolute inset-0 bg-gradient-to-l from-rose-600/15 to-transparent pointer-events-none" />
+                            <div className="relative z-10">
                             <div className="flex justify-between items-start mb-4">
                               <div>
-                                <h4 className="font-black text-lg text-[#fff700]">
+                                <h4 className="font-black text-lg text-white">
                                   {sale.title}
                                 </h4>
                                 <p className="text-xs text-white/60 mt-1">
@@ -2915,20 +3567,20 @@ export const MerchantApp: React.FC = () => {
                               </div>
                               {(sale.status === "upcoming" && isUpcoming) && (
                                 <span className="px-3 py-1 bg-amber-500/20 text-amber-300 text-[10px] font-bold rounded-full border border-amber-400/30">
-                                  تبدأ قريباً
+                                  {t("merchant.flashSales.startsSoon")}
                                 </span>
                               )}
                               {(sale.status === "active" || (!isUpcoming)) && (
                                 <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded-full border border-emerald-400/30 flex items-center gap-1">
                                   <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping"></div>
-                                  فعالية نشطة الآن
+                                  {t("merchant.flashSales.activeNow")}
                                 </span>
                               )}
                             </div>
 
-                            <div className="flex gap-4 mb-6 text-[11px] font-bold text-[#E8ECF4] merchant-panel-inset p-3 rounded-xl border border-white/10">
+                            <div className="flex gap-4 mb-6 text-[11px] font-bold text-[#E8ECF4] bg-white/5 border border-white/15 p-3 rounded-xl">
                               <div>
-                                يبدأ:{" "}
+                                {t("merchant.flashSales.starts")}{" "}
                                 <span
                                   className="font-mono text-[#fff700]"
                                   dir="ltr"
@@ -2937,7 +3589,7 @@ export const MerchantApp: React.FC = () => {
                                 </span>
                               </div>
                               <div>
-                                ينتهي:{" "}
+                                {t("merchant.flashSales.ends")}{" "}
                                 <span
                                   className="font-mono text-[#fff700]"
                                   dir="ltr"
@@ -2950,15 +3602,14 @@ export const MerchantApp: React.FC = () => {
                             {sale.status === "active" &&
                               myRequests.length === 0 && (
                                 <div className="bg-rose-500/15 text-rose-300 p-3 rounded-xl text-xs font-bold mb-4 border border-rose-400/30 text-center">
-                                  لا يمكنك المشاركة لأن الفعالية قد بدأت بالفعل.
-                                  يرجى التقديم في الفعاليات القادمة مسبقاً.
+                                  {t("merchant.flashSales.tooLate")}
                                 </div>
                               )}
 
                             <div className="space-y-3">
-                              <h5 className="font-bold text-[#fff700] text-xs flex justify-between items-center pb-2 border-b border-white/10">
+                              <h5 className="font-bold text-white text-xs flex justify-between items-center pb-2 border-b border-white/10">
                                 <span>
-                                  منتجاتك المشاركة ({myRequests.length})
+                                  {t("merchant.flashSales.yourProducts", { count: myRequests.length })}
                                 </span>
                                 {(sale.status === "upcoming" && isUpcoming) && (
                                   <button
@@ -2967,16 +3618,16 @@ export const MerchantApp: React.FC = () => {
                                         flashSaleId: sale.id,
                                       })
                                     }
-                                    className="px-3 py-1 bg-white/10 text-[#fff700] rounded-lg font-bold text-[10px] hover:bg-white/20 transition border border-white/10"
+                                    className="px-3 py-1 bg-white/10 text-white rounded-lg font-bold text-[10px] hover:bg-white/20 transition border border-white/20"
                                   >
-                                    + طلب مشاركة لمنتج
+                                    {t("merchant.flashSales.joinProduct")}
                                   </button>
                                 )}
                               </h5>
 
                               {myRequests.length === 0 && (
-                                <div className="text-center text-white/50 py-4 text-xs font-bold merchant-panel-inset rounded-xl border border-dashed border-white/10">
-                                  لم يتم مشاركه لمنتج
+                                <div className="text-center text-white/50 py-4 text-xs font-bold bg-white/5 rounded-xl border border-dashed border-white/15">
+                                  {t("merchant.flashSales.noProductsJoined")}
                                 </div>
                               )}
 
@@ -2988,7 +3639,7 @@ export const MerchantApp: React.FC = () => {
                                 return (
                                   <div
                                     key={req.id}
-                                    className="flex justify-between items-center p-3 merchant-panel-inset border border-white/10 rounded-2xl shadow-sm"
+                                    className="flex justify-between items-center p-3 bg-white/5 border border-white/15 rounded-2xl shadow-sm"
                                   >
                                     <div className="flex items-center gap-3">
                                       <img
@@ -2996,16 +3647,16 @@ export const MerchantApp: React.FC = () => {
                                         className="w-10 h-10 rounded-xl object-cover border border-white/10"
                                       />
                                       <div>
-                                        <h6 className="font-black text-[11px] text-[#fff700]">
+                                        <h6 className="font-black text-[11px] text-white">
                                           {p.name}
                                         </h6>
                                         <div className="flex gap-2 text-[9px] mt-0.5">
                                           <span className="text-white/50">
-                                            أصلي:{" "}
+                                            {t("merchant.flashSales.original")}{" "}
                                             <del>{p.price.toLocaleString()}</del>
                                           </span>
                                           <span className="text-rose-300 font-black">
-                                            حالي:{" "}
+                                            {t("merchant.flashSales.current")}{" "}
                                             {req.promotionalPrice.toLocaleString()}
                                           </span>
                                         </div>
@@ -3014,23 +3665,24 @@ export const MerchantApp: React.FC = () => {
                                     <div>
                                       {req.status === "pending" && (
                                         <span className="px-2 py-1 bg-white/10 text-white/70 font-bold text-[9px] rounded uppercase border border-white/10">
-                                          قيد المراجعة
+                                          {t("merchant.flashSales.statusPending")}
                                         </span>
                                       )}
                                       {req.status === "approved" && (
                                         <span className="px-2 py-1 bg-emerald-500/20 text-emerald-300 font-bold text-[9px] rounded uppercase border border-emerald-400/30">
-                                          مقبول
+                                          {t("merchant.flashSales.statusApproved")}
                                         </span>
                                       )}
                                       {req.status === "rejected" && (
                                         <span className="px-2 py-1 bg-rose-500/20 text-rose-300 font-bold text-[9px] rounded uppercase border border-rose-400/30">
-                                          مرفوض
+                                          {t("merchant.flashSales.statusRejected")}
                                         </span>
                                       )}
                                     </div>
                                   </div>
                                 );
                               })}
+                            </div>
                             </div>
                           </div>
                         );
@@ -3046,120 +3698,155 @@ export const MerchantApp: React.FC = () => {
           {/* صفحة متجري - الواجهة الرئيسية */}
           {activeTab === "mystore" && myStoreSubPage === null && (
             <div className="space-y-6">
-              <div className="p-6 h-full overflow-y-auto">
-                <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
+              <div className="px-1 sm:px-2 h-full overflow-y-auto">
+                <div className="merchant-glass-page space-y-6 animate-fade-in text-right text-white" dir="rtl">
                   {/* رأس الصفحة */}
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center merchant-brand-card p-6 rounded-3xl shadow-sm border gap-4 relative overflow-hidden group">
-                    <div className="absolute top-0 left-0 p-4 opacity-10 group-hover:scale-110 transition-transform pointer-events-none">
-                      <StoreIcon size={80} className="text-[#fff700]" />
+                  <div className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center p-6 rounded-[2rem] shadow-2xl gap-4 relative overflow-hidden group">
+                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                      <StoreIcon size={140} />
                     </div>
+                    <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/20 to-transparent pointer-events-none" />
                     <div className="relative z-10">
-                      <h2 className="text-xl font-black text-[#fff700] font-tajawal flex items-center gap-2">
-                        <StoreIcon size={24} className="text-[#fff700]" />
-                        متجري
+                      <h2 className="text-xl font-black text-white font-tajawal flex items-center gap-2">
+                        <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                          <StoreIcon size={22} className="text-[#fff700]" />
+                        </span>
+                        {t("merchant.mystore.title")}
                       </h2>
-                      <p className="text-xs text-white/80 font-medium mt-1 font-tajawal">
-                        إدارة شاملة لتقارير متجرك وتسويقه وخدمات التوصيل
+                      <p className="text-xs text-white/75 font-medium mt-1 font-tajawal">
+                        {t("merchant.mystore.subtitle")}
                       </p>
                     </div>
                     <div className="relative z-10 flex items-center gap-2 shrink-0">
-                      <span className="text-[10px] font-bold text-[#fff700] bg-white/10 border border-white/20 px-3 py-1.5 rounded-full">
-                        {currentMerchant.shopName}
-                      </span>
+                      <div className="bg-white/10 border border-white/25 px-3 py-1.5 rounded-2xl">
+                        <StoreIdentity
+                          name={currentMerchant.shopName}
+                          username={currentMerchant.username}
+                          verified={isStoreVerified(currentMerchant)}
+                          size="xs"
+                          align="center"
+                          nameClassName="text-white"
+                          usernameClassName="text-white/75 opacity-100"
+                        />
+                      </div>
                     </div>
                   </div>
 
+                  {/* معاينة واجهة المتجر كما يراها الزبون */}
+                  <button
+                    type="button"
+                    onClick={() => setShowStorePreview(true)}
+                    className="w-full welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-gradient-to-l from-amber-500/20 via-white/5 to-vibrant-purple/20 border border-amber-300/35 backdrop-blur-md rounded-[2rem] p-5 shadow-2xl hover:bg-white/10 transition-all duration-300 group flex items-center gap-4 text-right relative overflow-hidden text-white active:scale-[0.99]"
+                  >
+                    <div className="relative z-10 w-14 h-14 rounded-2xl bg-amber-400/20 border border-amber-300/40 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shrink-0">
+                      <Eye size={28} className="text-[#fff700]" />
+                    </div>
+                    <div className="relative z-10 min-w-0 flex-1">
+                      <h3 className="text-lg font-black text-white mb-1">{t("merchant.mystore.preview.title")}</h3>
+                      <p className="text-[11px] text-white/75 leading-relaxed">
+                        {t("merchant.mystore.preview.desc")}
+                      </p>
+                    </div>
+                    <div className="relative z-10 shrink-0 rounded-xl bg-amber-400 text-slate-900 px-3 py-2 text-[10px] font-black">
+                      {t("merchant.mystore.preview.action")}
+                    </div>
+                  </button>
+
                   {/* الكروت */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     {/* كرت التقارير */}
                     <button
-                      onClick={() => setMyStoreSubPage("reports")}
-                      className="tour-step-desktop-reports tour-step-mobile-reports merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
+                      onClick={() => openMyStoreSubPage("reports")}
+                      className="tour-step-desktop-reports tour-step-mobile-reports welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-8 shadow-2xl hover:bg-white/10 transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden text-white active:scale-[0.99]"
                     >
-                      <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none flex items-center justify-center">
-                        <TrendingUp size={120} className="text-[#fff700]" />
+                      <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/15 to-transparent pointer-events-none" />
+                      <div className="absolute inset-0 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none flex items-center justify-center">
+                        <TrendingUp size={120} />
                       </div>
-                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
+                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
                         <TrendingUp size={32} className="text-[#fff700]" />
                       </div>
                       <div className="relative z-10">
-                        <h3 className="text-xl font-black text-[#fff700] mb-2">التقارير</h3>
+                        <h3 className="text-xl font-black text-white mb-2">{t("merchant.mystore.reports.title")}</h3>
                         <p className="text-xs text-white/70 leading-relaxed">
-                          تحليلات المبيعات، إحصائيات الطلبات، ومؤشرات أداء متجرك
+                          {t("merchant.mystore.reports.desc")}
                         </p>
                       </div>
-                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white/30 text-white text-sm font-black flex items-center justify-center gap-2 group-hover:from-deep-navy group-hover:to-vibrant-purple transition-all duration-300">
+                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white text-sm font-black flex items-center justify-center gap-2 shadow-brand-glow transition-all duration-300">
                         <ChevronLeft size={16} />
-                        دخول التقارير
+                        {t("merchant.mystore.reports.action")}
                       </div>
                     </button>
 
                     {/* كرت التسويق */}
                     <button
-                      onClick={() => setMyStoreSubPage("marketing")}
-                      className="tour-step-desktop-marketing tour-step-mobile-marketing merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
+                      onClick={() => openMyStoreSubPage("marketing")}
+                      className="tour-step-desktop-marketing tour-step-mobile-marketing welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-8 shadow-2xl hover:bg-white/10 transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden text-white active:scale-[0.99]"
                     >
-                      <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none flex items-center justify-center">
-                        <Megaphone size={120} className="text-[#fff700]" />
+                      <div className="absolute inset-0 bg-gradient-to-l from-rose-600/15 to-transparent pointer-events-none" />
+                      <div className="absolute inset-0 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none flex items-center justify-center">
+                        <Megaphone size={120} />
                       </div>
-                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
+                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
                         <Megaphone size={32} className="text-[#fff700]" />
                       </div>
                       <div className="relative z-10">
-                        <h3 className="text-xl font-black text-[#fff700] mb-2">التسويق</h3>
+                        <h3 className="text-xl font-black text-white mb-2">{t("merchant.mystore.marketing.title")}</h3>
                         <p className="text-xs text-white/70 leading-relaxed">
-                          أكواد الخصم، الفعاليات، مشاركة المتجر، وتتبع الزيارات
+                          {t("merchant.mystore.marketing.desc")}
                         </p>
                       </div>
-                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white/30 text-white text-sm font-black flex items-center justify-center gap-2 group-hover:from-deep-navy group-hover:to-vibrant-purple transition-all duration-300">
+                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white text-sm font-black flex items-center justify-center gap-2 shadow-brand-glow transition-all duration-300">
                         <ChevronLeft size={16} />
-                        دخول التسويق
-                      </div>
-                    </button>
-
-                    {/* كرت أكواد الخصم */}
-                    <button
-                      onClick={() => setMyStoreSubPage("promo")}
-                      className="merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
-                    >
-                      <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none flex items-center justify-center">
-                        <Gift size={120} className="text-[#fff700]" />
-                      </div>
-                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
-                        <Gift size={32} className="text-[#fff700]" />
-                      </div>
-                      <div className="relative z-10">
-                        <h3 className="text-xl font-black text-[#fff700] mb-2">أكواد الخصم</h3>
-                        <p className="text-xs text-white/70 leading-relaxed">
-                          إنشاء وإدارة أكواد الخصم الترويجية لزيادة المبيعات
-                        </p>
-                      </div>
-                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white/30 text-white text-sm font-black flex items-center justify-center gap-2 group-hover:from-deep-navy group-hover:to-vibrant-purple transition-all duration-300">
-                        <ChevronLeft size={16} />
-                        إدارة الأكواد
+                        {t("merchant.mystore.marketing.action")}
                       </div>
                     </button>
 
                     {/* كرت التوصيل */}
                     <button
-                      onClick={() => setMyStoreSubPage("delivery")}
-                      className="tour-step-desktop-delivery tour-step-mobile-delivery merchant-brand-card rounded-3xl p-8 border shadow-sm hover:shadow-lg transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden"
+                      onClick={() => openMyStoreSubPage("delivery")}
+                      className="tour-step-desktop-delivery tour-step-mobile-delivery welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-8 shadow-2xl hover:bg-white/10 transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden text-white active:scale-[0.99]"
                     >
-                      <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none flex items-center justify-center">
-                        <Truck size={120} className="text-[#fff700]" />
+                      <div className="absolute inset-0 bg-gradient-to-l from-emerald-500/15 to-transparent pointer-events-none" />
+                      <div className="absolute inset-0 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none flex items-center justify-center">
+                        <Truck size={120} />
                       </div>
-                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
+                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
                         <Truck size={32} className="text-[#fff700]" />
                       </div>
                       <div className="relative z-10">
-                        <h3 className="text-xl font-black text-[#fff700] mb-2">التوصيل</h3>
+                        <h3 className="text-xl font-black text-white mb-2">{t("merchant.mystore.delivery.title")}</h3>
                         <p className="text-xs text-white/70 leading-relaxed">
-                          إعداد مناطق وأسعار التوصيل، وتنظيم خيارات الشحن لمتجرك
+                          {t("merchant.mystore.delivery.desc")}
                         </p>
                       </div>
-                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white/30 text-white text-sm font-black flex items-center justify-center gap-2 group-hover:from-deep-navy group-hover:to-vibrant-purple transition-all duration-300">
+                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white text-sm font-black flex items-center justify-center gap-2 shadow-brand-glow transition-all duration-300">
                         <ChevronLeft size={16} />
-                        دخول التوصيل
+                        {t("merchant.mystore.delivery.action")}
+                      </div>
+                    </button>
+
+                    {/* كرت جمهوري */}
+                    <button
+                      onClick={() => openMyStoreSubPage("customers")}
+                      className="tour-step-mystore-customers welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-8 shadow-2xl hover:bg-white/10 transition-all duration-300 group flex flex-col items-center gap-5 text-center relative overflow-hidden text-white active:scale-[0.99]"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-l from-sky-500/15 to-transparent pointer-events-none" />
+                      <div className="absolute inset-0 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none flex items-center justify-center">
+                        <Users size={120} />
+                      </div>
+                      <div className="relative z-10 w-16 h-16 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
+                        <Users size={32} className="text-[#fff700]" />
+                      </div>
+                      <div className="relative z-10">
+                        <h3 className="text-xl font-black text-white mb-2">{t("merchant.mystore.audience.title")}</h3>
+                        <p className="text-xs text-white/70 leading-relaxed">
+                          {t("merchant.mystore.audience.desc")}
+                        </p>
+                      </div>
+                      <div className="relative z-10 mt-auto w-full py-3 rounded-2xl bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white text-sm font-black flex items-center justify-center gap-2 shadow-brand-glow transition-all duration-300">
+                        <ChevronLeft size={16} />
+                        {t("merchant.mystore.audience.action")}
                       </div>
                     </button>
                   </div>
@@ -3170,25 +3857,31 @@ export const MerchantApp: React.FC = () => {
 
           {(activeTab === "delivery" || (activeTab === "mystore" && myStoreSubPage === "delivery")) && (
             <div className="space-y-6">
-                <div className="p-6 h-full overflow-y-auto">
-                <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
+                <div className="px-1 sm:px-2 h-full overflow-y-auto">
+                <div className="merchant-glass-page reports-page space-y-6 animate-fade-in text-right text-white" dir="rtl">
                   {/* رأس صفحة التوصيل */}
                   <div
-                    className="flex flex-col md:flex-row justify-between items-start md:items-center merchant-brand-card p-6 rounded-3xl shadow-sm border gap-4"
+                    className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center p-6 rounded-[2rem] shadow-2xl gap-4 relative overflow-hidden group"
                   >
-                    <div>
-                      <h2 className="text-xl font-black text-[#fff700] font-tajawal flex items-center gap-2">
-                        <Truck className="text-[#fff700]" size={24} />
-                        <span>إعدادات التوصيل 🚚</span>
+                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                      <Truck size={140} />
+                    </div>
+                    <div className="absolute inset-0 bg-gradient-to-l from-emerald-500/15 to-transparent pointer-events-none" />
+                    <div className="relative z-10">
+                      <h2 className="text-xl font-black text-white font-tajawal flex items-center gap-2">
+                        <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                          <Truck className="text-[#fff700]" size={22} />
+                        </span>
+                        <span>{t("merchant.delivery.title")}</span>
                       </h2>
-                      <p className="text-xs text-white/80 font-medium mt-1 font-tajawal">
-                        تحكم بأسعار التوصيل وعروض التوصيل المجاني لكل العراق بضغطة زر.
+                      <p className="text-xs text-white/75 font-medium mt-1 font-tajawal">
+                        {t("merchant.delivery.subtitle")}
                       </p>
                     </div>
-                    <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/20 flex items-center gap-2 shrink-0">
+                    <div className="relative z-10 bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/25 flex items-center gap-2 shrink-0">
                       <span className="w-2 h-2 rounded-full bg-[#fff700] animate-pulse"></span>
-                      <span className="hidden sm:inline">تحديث حي ومباشر</span>
-                      <span className="sm:hidden">تحديث حي</span>
+                      <span className="hidden sm:inline">{t("merchant.delivery.liveUpdate")}</span>
+                      <span className="sm:hidden">{t("merchant.delivery.liveUpdateShort")}</span>
                     </div>
                   </div>
 
@@ -3200,8 +3893,8 @@ export const MerchantApp: React.FC = () => {
                 {/* خيار التوصيل المجاني الشامل لكل المحافظات */}
                 <div className="bg-white/10 border border-white/10 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
                   <div>
-                    <h5 className="text-xs font-black text-[#E8ECF4] mb-0.5">توصيل مجاني لجميع المحافظات 🌍</h5>
-                    <p className="text-[10px] font-bold text-slate-300">عند تفعيل هذا الخيار، سيتم إلغاء رسوم التوصيل لجميع الزبائن من أي محافظة.</p>
+                    <h5 className="text-xs font-black text-[#E8ECF4] mb-0.5">{t("merchant.delivery.freeAllProvinces")}</h5>
+                    <p className="text-[10px] font-bold text-slate-300">{t("merchant.delivery.freeAllProvincesDesc")}</p>
                   </div>
                   <button
                     onClick={() =>
@@ -3215,7 +3908,7 @@ export const MerchantApp: React.FC = () => {
                         : "bg-white/10 text-[#fff700] border border-white/20 hover:bg-white/20"
                     }`}
                   >
-                    <span>{profileForm.isFreeDelivery ? "مفعل (توصيل مجاني للكل) ✅" : "معطل (اعتماد التسعير المخصص) ❌"}</span>
+                    <span>{profileForm.isFreeDelivery ? t("merchant.delivery.freeAllEnabled") : t("merchant.delivery.freeAllDisabled")}</span>
                   </button>
                 </div>
 
@@ -3226,14 +3919,14 @@ export const MerchantApp: React.FC = () => {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                          <h5 className="text-xs font-black text-[#E8ECF4]">التوصيل لمحافظتي ({profileForm.province || 'محافظة المتجر'})</h5>
+                          <h5 className="text-xs font-black text-[#E8ECF4]">{t("merchant.delivery.localProvince", { province: profileForm.province || t("merchant.delivery.storeProvinceFallback") })}</h5>
                         </div>
-                        <span className="text-[9px] font-black bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full">محلي</span>
+                        <span className="text-[9px] font-black bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full">{t("merchant.delivery.localBadge")}</span>
                       </div>
 
                       <div className="space-y-2">
                         <div className="flex items-center justify-between bg-[#0B1320] p-2.5 rounded-xl border border-white/10">
-                          <span className="text-xs font-bold text-slate-300">سعر التوصيل للمحافظة:</span>
+                          <span className="text-xs font-bold text-slate-300">{t("merchant.delivery.deliveryPriceLabel")}</span>
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => {
@@ -3246,7 +3939,7 @@ export const MerchantApp: React.FC = () => {
                               -
                             </button>
                             <span className={`text-xs font-black font-mono w-16 text-center ${profileForm.localProvinceFreeDelivery ? 'line-through text-white/40' : 'text-brand-white'}`}>
-                              {profileForm.localProvinceDeliveryPrice.toLocaleString()} <span className="text-[9px]">د.ع</span>
+                              {profileForm.localProvinceDeliveryPrice.toLocaleString()} <span className="text-[9px]">{t("merchant.delivery.currency")}</span>
                             </span>
                             <button
                               onClick={() => {
@@ -3274,7 +3967,7 @@ export const MerchantApp: React.FC = () => {
                                 : "bg-white/10 text-[#fff700] border border-white/20 hover:bg-white/20"
                               }`}
                             >
-                              {pr.toLocaleString()} د.ع
+                              {pr.toLocaleString()} {t("merchant.delivery.currency")}
                             </button>
                           ))}
                         </div>
@@ -3291,7 +3984,7 @@ export const MerchantApp: React.FC = () => {
                               : "bg-white/10 text-white/60 border-white/20 hover:bg-white/20"
                           }`}
                         >
-                          <span>{profileForm.localProvinceFreeDelivery ? "مفعل: توصيل مجاني لمحافظتي ✅" : "تفعيل توصيل مجاني لمحافظتي 🆓"}</span>
+                          <span>{profileForm.localProvinceFreeDelivery ? t("merchant.delivery.localFreeEnabled") : t("merchant.delivery.localFreeDisabled")}</span>
                         </button>
                       </div>
                     </div>
@@ -3301,14 +3994,14 @@ export const MerchantApp: React.FC = () => {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                          <h5 className="text-xs font-black text-[#E8ECF4]">التوصيل للمحافظات البقية</h5>
+                          <h5 className="text-xs font-black text-[#E8ECF4]">{t("merchant.delivery.otherProvinces")}</h5>
                         </div>
-                        <span className="text-[9px] font-black bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">الكلية</span>
+                        <span className="text-[9px] font-black bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">{t("merchant.delivery.globalBadge")}</span>
                       </div>
 
                       <div className="space-y-2">
                         <div className="flex items-center justify-between bg-[#0B1320] p-2.5 rounded-xl border border-white/10">
-                          <span className="text-xs font-bold text-slate-300">السعر العام لباقي المحافظات:</span>
+                          <span className="text-xs font-bold text-slate-300">{t("merchant.delivery.otherProvincesPriceLabel")}</span>
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => {
@@ -3321,7 +4014,7 @@ export const MerchantApp: React.FC = () => {
                               -
                             </button>
                             <span className={`text-xs font-black font-mono w-16 text-center ${profileForm.otherProvincesFreeDelivery ? 'line-through text-white/40' : 'text-brand-white'}`}>
-                              {profileForm.otherProvincesDeliveryPrice.toLocaleString()} <span className="text-[9px]">د.ع</span>
+                              {profileForm.otherProvincesDeliveryPrice.toLocaleString()} <span className="text-[9px]">{t("merchant.delivery.currency")}</span>
                             </span>
                             <button
                               onClick={() => {
@@ -3349,7 +4042,7 @@ export const MerchantApp: React.FC = () => {
                                 : "bg-white/10 text-[#fff700] border border-white/20 hover:bg-white/20"
                               }`}
                             >
-                              {pr.toLocaleString()} د.ع
+                              {pr.toLocaleString()} {t("merchant.delivery.currency")}
                             </button>
                           ))}
                         </div>
@@ -3366,7 +4059,7 @@ export const MerchantApp: React.FC = () => {
                               : "bg-white/10 text-white/60 border-white/20 hover:bg-white/20"
                           }`}
                         >
-                          <span>{profileForm.otherProvincesFreeDelivery ? "مفعل: توصيل مجاني للمحافظات البقية ✅" : "تفعيل توصيل مجاني للمحافظات البقية 🆓"}</span>
+                          <span>{profileForm.otherProvincesFreeDelivery ? t("merchant.delivery.otherFreeEnabled") : t("merchant.delivery.otherFreeDisabled")}</span>
                         </button>
                       </div>
                     </div>
@@ -3377,9 +4070,9 @@ export const MerchantApp: React.FC = () => {
                 {!profileForm.isFreeDelivery && (
                   <div className="bg-white/10 border border-white/10 p-5 rounded-2xl shadow-sm space-y-4 font-sans">
                     <div>
-                      <h5 className="text-xs font-black text-[#E8ECF4]">تخصيص تسعيرة لمحافظات محددة بالاسم 📍</h5>
+                      <h5 className="text-xs font-black text-[#E8ECF4]">{t("merchant.delivery.customPricingTitle")}</h5>
                       <p className="text-[10px] font-bold text-slate-300 mt-0.5">
-                        اضغط على أي محافظة لتعيين سعر مخصص لها فوراً بدلاً من السعر العام.
+                        {t("merchant.delivery.customPricingDesc")}
                       </p>
                     </div>
 
@@ -3396,24 +4089,24 @@ export const MerchantApp: React.FC = () => {
                         if (isLocal) {
                           if (profileForm.localProvinceFreeDelivery) {
                             displayPriceStyle = "text-emerald-500 font-extrabold";
-                            displayPriceText = "مجاناً 🏠";
+                            displayPriceText = t("merchant.delivery.freeHome");
                           } else {
-                            displayPriceText = `${profileForm.localProvinceDeliveryPrice.toLocaleString()} د.ع`;
+                            displayPriceText = t("merchant.delivery.priceAmount", { price: profileForm.localProvinceDeliveryPrice.toLocaleString() });
                             displayPriceStyle = "text-brand-white font-extrabold";
                           }
                         } else if (hasCustomFree) {
                           displayPriceStyle = "text-emerald-400 font-extrabold";
-                          displayPriceText = "مجاناً ✨";
+                          displayPriceText = t("merchant.delivery.freeCustom");
                         } else if (hasCustomPrice) {
                           const pr = profileForm.provinceDeliveryPrices[prov];
-                          displayPriceText = `${pr.toLocaleString()} د.ع`;
+                          displayPriceText = t("merchant.delivery.priceAmount", { price: pr.toLocaleString() });
                           displayPriceStyle = "text-[#fff700] font-extrabold";
                         } else {
                           if (profileForm.otherProvincesFreeDelivery) {
                             displayPriceStyle = "text-emerald-500 font-medium";
-                            displayPriceText = "مجاناً (عام)";
+                            displayPriceText = t("merchant.delivery.freeGeneral");
                           } else {
-                            displayPriceText = `${profileForm.otherProvincesDeliveryPrice.toLocaleString()} د.ع (عام)`;
+                            displayPriceText = t("merchant.delivery.generalPrice", { price: profileForm.otherProvincesDeliveryPrice.toLocaleString() });
                           }
                         }
 
@@ -3444,8 +4137,8 @@ export const MerchantApp: React.FC = () => {
                           >
                             <div className="flex items-center justify-between mb-1">
                               <span className="text-[11px] font-black text-[#fff700] truncate">{prov}</span>
-                              {isLocal && <span className="text-[7.5px] font-bold bg-white/10 text-[#fff700] px-1 rounded border border-white/20">محافظتك</span>}
-                              {(hasCustomPrice || hasCustomFree) && !isLocal && <span className="text-[7.5px] font-bold bg-white/10 text-[#fff700] px-1 rounded border border-white/20">مخصص</span>}
+                              {isLocal && <span className="text-[7.5px] font-bold bg-white/10 text-[#fff700] px-1 rounded border border-white/20">{t("merchant.delivery.yourProvince")}</span>}
+                              {(hasCustomPrice || hasCustomFree) && !isLocal && <span className="text-[7.5px] font-bold bg-white/10 text-[#fff700] px-1 rounded border border-white/20">{t("merchant.delivery.custom")}</span>}
                             </div>
                             <div className={`text-[10px] ${displayPriceStyle} whitespace-nowrap`}>
                               {displayPriceText}
@@ -3468,12 +4161,12 @@ export const MerchantApp: React.FC = () => {
 
                         <div className="flex items-center gap-1.5 pb-2 border-b border-white/10">
                           <MapPin size={15} className="text-[#fff700]" />
-                          <h6 className="text-xs font-black text-[#fff700]">تعديل تسعيرة توصيل محافظة: <span className="text-brand-white font-black text-sm">{selectedCustomProvince}</span></h6>
+                          <h6 className="text-xs font-black text-[#fff700]">{t("merchant.delivery.editProvinceTitle")} <span className="text-brand-white font-black text-sm">{selectedCustomProvince}</span></h6>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
-                            <label className="block text-[10.5px] font-bold text-white/70 mb-1">توصيل مجاني لهذه المحافظة:</label>
+                            <label className="block text-[10.5px] font-bold text-white/70 mb-1">{t("merchant.delivery.freeForProvince")}</label>
                             <button
                               type="button"
                               onClick={() => setIsCustomFree(!isCustomFree)}
@@ -3483,13 +4176,13 @@ export const MerchantApp: React.FC = () => {
                                 : "bg-white/10 text-white/60 border-white/20 hover:bg-white/20"
                               }`}
                             >
-                              {isCustomFree ? "نعم، توصيل مجاني لهذه المحافظة ✅" : "لا، توصيل مدفوع ❌"}
+                              {isCustomFree ? t("merchant.delivery.freeYes") : t("merchant.delivery.freeNo")}
                             </button>
                           </div>
 
                           {!isCustomFree && (
                             <div>
-                              <label className="block text-[10.5px] font-bold text-white/70 mb-1">سعر التوصيل للمحافظة (د.ع):</label>
+                              <label className="block text-[10.5px] font-bold text-white/70 mb-1">{t("merchant.delivery.provincePriceLabel")}</label>
                               <div className="flex items-center gap-1.5">
                                 <input
                                   type="number"
@@ -3497,7 +4190,7 @@ export const MerchantApp: React.FC = () => {
                                   onChange={(e) => setEditingCustomPrice(Math.max(0, parseInt(e.target.value) || 0))}
                                   className="flex-1 border bg-[#0B1320] border-white/10 p-2 rounded-xl text-xs font-mono font-bold text-[#E8ECF4]"
                                 />
-                                <span className="text-xs font-bold text-white/60 shrink-0">د.ع</span>
+                                <span className="text-xs font-bold text-white/60 shrink-0">{t("merchant.delivery.currency")}</span>
                               </div>
                             </div>
                           )}
@@ -3516,7 +4209,7 @@ export const MerchantApp: React.FC = () => {
                                   : "bg-white/10 text-[#fff700] border border-white/20 hover:bg-white/20"
                                 }`}
                               >
-                                {v.toLocaleString()} د.ع
+                                {v.toLocaleString()} {t("merchant.delivery.currency")}
                               </button>
                             ))}
                           </div>
@@ -3545,7 +4238,7 @@ export const MerchantApp: React.FC = () => {
                             }}
                             className="flex-1 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-xl text-xs active:scale-95 transition-all shadow-sm shadow-vibrant-purple/25/20 cursor-pointer text-center"
                           >
-                            حفظ وتطبيق السعر الخاص
+                            {t("merchant.delivery.saveCustomPrice")}
                           </button>
                           
                           {(profileForm.provinceDeliveryPrices?.[selectedCustomProvince] !== undefined || profileForm.provinceFreeDelivery?.[selectedCustomProvince] !== undefined) && (
@@ -3566,7 +4259,7 @@ export const MerchantApp: React.FC = () => {
                               }}
                               className="px-3 py-2.5 bg-white/10 hover:bg-white/20 text-[#fff700] font-extrabold rounded-xl text-xs active:scale-95 transition-all border border-white/20 cursor-pointer"
                             >
-                              إلغاء السعر الخاص
+                              {t("merchant.delivery.removeCustomPrice")}
                             </button>
                           )}
                         </div>
@@ -3585,12 +4278,12 @@ export const MerchantApp: React.FC = () => {
                     {isDeliverySaving ? (
                       <>
                         <RefreshCw size={16} className="animate-spin" />
-                        <span>جاري الحفظ والتعميم...</span>
+                        <span>{t("merchant.delivery.saving")}</span>
                       </>
                     ) : (
                       <>
                         <Check size={18} />
-                        <span>حفظ جميع إعدادات التوصيل ونشرها فوراً ✅</span>
+                        <span>{t("merchant.delivery.saveBtn")}</span>
                       </>
                     )}
                   </button>
@@ -3604,8 +4297,8 @@ export const MerchantApp: React.FC = () => {
           {(activeTab === "reports" || (activeTab === "mystore" && myStoreSubPage === "reports")) && (() => {
             // Helper for Arabic weekday + short date formatting (e.g. "الجمعة 05/29")
             const getDayLabel = (date: Date) => {
-              const days = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-              const dayName = days[date.getDay()];
+              const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+              const dayName = t(`common.weekdays.${dayKeys[date.getDay()]}`);
               const month = String(date.getMonth() + 1).padStart(2, '0');
               const day = String(date.getDate()).padStart(2, '0');
               return `${dayName} (${month}/${day})`;
@@ -3783,12 +4476,12 @@ export const MerchantApp: React.FC = () => {
                 const stock = (typeof actualProduct.inventory === 'number') ? actualProduct.inventory : "غير محدود";
                 forecastInsight = {
                   type: 'forecast',
-                  title: 'توقعات الطلب 📈',
+                  title: t('merchant.reportsPage.insights.forecastTitle'),
                   icon: <TrendingUp className="text-[#fff700]" size={20} />,
                   bgColor: 'merchant-brand-card text-[#fff700]',
                   iconBg: 'bg-white/10',
                   borderClass: 'border border-white/20',
-                  message: `بناءً على مبيعات الفترة، ننصحك بتوفير كمية أكبر من (${bestProduct.name}) لتجنب نفاده. المخزون الحالي: ${stock}.`
+                  message: t('merchant.reportsPage.insights.forecastMsg', { name: bestProduct.name, stock })
                 };
               }
             }
@@ -3799,12 +4492,12 @@ export const MerchantApp: React.FC = () => {
               const p = unsoldProducts[0];
               behaviorInsight = {
                 type: 'behavior',
-                title: 'منتجات بلا مبيعات 📦',
+                title: t('merchant.reportsPage.insights.behaviorTitle'),
                 icon: <Activity className="text-[#FFF700]" size={20} />,
                 bgColor: 'merchant-brand-card text-[#fff700]',
                 iconBg: 'bg-white/10',
                 borderClass: 'border border-white/20',
-                message: `يوجد ${unsoldProducts.length} منتج منشور بدون مبيعات في الفترة المحددة (مثل: ${p.name}). راجع السعر أو الوصف أو فعّل خصماً مؤقتاً.`
+                message: t('merchant.reportsPage.insights.behaviorMsg', { count: unsoldProducts.length, name: p.name })
               };
             }
 
@@ -3812,37 +4505,35 @@ export const MerchantApp: React.FC = () => {
 
             let timingInsight = null;
             if (periodOrders.length > 0) {
-              const salesByDayName: Record<string, number> = {
-                "الأحد": 0, "الإثنين": 0, "الثلاثاء": 0, "الأربعاء": 0, "الخميس": 0, "الجمعة": 0, "السبت": 0
-              };
+              const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+              const salesByDayIdx: Record<number, number> = { 0:0, 1:0, 2:0, 3:0, 4:0, 5:0, 6:0 };
               
               periodOrders.filter(o => o.status === 'delivered').forEach(o => {
                 const d = orderDate(o.createdAt);
                 if (!d) return;
-                const days = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-                const dayName = days[d.getDay()];
                 const saleAmount = ((o.subtotal || 0) - (o.discountSponsor === 'MERCHANT' ? (o.discountAmount || 0) : 0));
-                salesByDayName[dayName] += saleAmount;
+                salesByDayIdx[d.getDay()] = (salesByDayIdx[d.getDay()] || 0) + saleAmount;
               });
 
-              let bestDay = "";
+              let bestDayIdx = -1;
               let maxSales = -1;
-              Object.entries(salesByDayName).forEach(([day, sales]) => {
+              Object.entries(salesByDayIdx).forEach(([idx, sales]) => {
                 if (sales > maxSales) {
                   maxSales = sales;
-                  bestDay = day;
+                  bestDayIdx = Number(idx);
                 }
               });
 
-              if (maxSales > 0 && bestDay) {
+              if (maxSales > 0 && bestDayIdx >= 0) {
+                const bestDayLabel = t(`common.weekdays.${dayKeys[bestDayIdx]}`);
                 timingInsight = {
                   type: 'timing',
-                  title: 'نصيحة ذكية للمبيعات 💡',
+                  title: t('merchant.reportsPage.insights.timingTitle'),
                   icon: <Lightbulb className="text-[#fff700]" size={20} />,
                   bgColor: 'merchant-brand-card text-[#fff700]',
                   iconBg: 'bg-white/10',
                   borderClass: 'border border-white/20',
-                  message: `مبيعاتك يوم ${bestDay} هي الأعلى. فكر في إضافة عروض خاصة في هذا اليوم لزيادة الأرباح!`
+                  message: t('merchant.reportsPage.insights.timingMsg', { day: bestDayLabel })
                 };
               }
             }
@@ -3855,7 +4546,7 @@ export const MerchantApp: React.FC = () => {
                 return (
                   <div className="bg-slate-900 text-white p-3 rounded-xl border border-slate-700 shadow-xl text-right font-tajawal text-xs">
                     <p className="font-bold mb-1">{payload[0].payload.dayLabel}</p>
-                    <p className="text-[#A78BFA]">المبيعات: <span className="font-black">{payload[0].value.toLocaleString()} د.ع</span></p>
+                    <p className="text-[#A78BFA]">{t('merchant.reportsPage.charts.tooltipSales', { value: payload[0].value.toLocaleString() })}</p>
                   </div>
                 );
               }
@@ -3876,40 +4567,46 @@ export const MerchantApp: React.FC = () => {
 
             return (
               <div className="space-y-6">
-              <div className="p-6 h-full overflow-y-auto">
-              <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
+              <div className="px-1 sm:px-2 h-full overflow-y-auto">
+              <div className="merchant-glass-page reports-page space-y-6 animate-fade-in text-right text-white" dir="rtl">
                 {/* 1. Header & Date Range Picker */}
                 <div
-                  className="flex flex-col md:flex-row justify-between items-start md:items-center merchant-brand-card p-6 rounded-3xl shadow-sm border gap-4"
+                  className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center p-6 rounded-[2rem] shadow-2xl gap-4 relative overflow-hidden group"
                 >
-                  <div>
-                    <h2 className="text-xl font-black text-[#fff700] font-tajawal flex items-center gap-2">
-                      <TrendingUp className="text-[#fff700]" size={24} />
-                      <span>تقارير الأداء والمبيعات 📊</span>
+                  <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                    <TrendingUp size={140} />
+                  </div>
+                  <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/20 to-transparent pointer-events-none" />
+                  <div className="relative z-10">
+                    <h2 className="text-xl font-black text-white font-tajawal flex items-center gap-2">
+                      <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                        <TrendingUp className="text-[#fff700]" size={22} />
+                      </span>
+                      <span>{t('merchant.reportsPage.title')}</span>
                     </h2>
                     <p className="text-xs text-white/80 font-medium mt-1 font-tajawal">
-                      نظرة تفصيلية على حجم تجارتك لتساعدك في التخطيط وزيادة الأرباح.
+                      {t('merchant.reportsPage.subtitle')}
                     </p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-                    <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/20 flex items-center gap-2 shrink-0">
+                  <div className="relative z-10 flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                    <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/25 flex items-center gap-2 shrink-0">
                       <span className="w-2 h-2 rounded-full bg-[#fff700] animate-pulse"></span>
                       <span className="hidden sm:inline">مبيعات الموصل فقط ضمن النطاق</span>
                       <span className="sm:hidden">موصل فقط</span>
                     </div>
 
                     <div className="relative flex-1 sm:flex-none">
-                      <select 
+                      <select
                         value={reportDateRange}
                         onChange={(e: any) => setReportDateRange(e.target.value)}
-                        className="appearance-none w-full bg-[#0B1320] border-none text-[#E8ECF4] font-bold text-sm rounded-xl px-4 py-2.5 pl-10 focus:outline-none focus:ring-2 focus:ring-vibrant-purple/40 transition-all min-w-[140px]"
+                        className="welcome-select welcome-select--sm welcome-select--with-chevron min-w-[140px]"
                       >
-                        <option value="7_days">آخر 7 أيام</option>
-                        <option value="30_days">آخر 30 يوماً</option>
-                        <option value="this_month">الشهر الحالي</option>
-                        <option value="custom">نطاق مخصص</option>
+                        <option value="7_days">{t('merchant.reportsPage.range.7days')}</option>
+                        <option value="30_days">{t('merchant.reportsPage.range.30days')}</option>
+                        <option value="this_month">{t('merchant.reportsPage.range.thisMonth')}</option>
+                        <option value="custom">{t('merchant.reportsPage.range.custom')}</option>
                       </select>
-                      <ChevronDown size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                      <ChevronDown size={16} className="welcome-select-chevron" aria-hidden />
                     </div>
                   </div>
                 </div>
@@ -3918,7 +4615,7 @@ export const MerchantApp: React.FC = () => {
                 {reportDateRange === "custom" && (
                   <div className="merchant-panel-inset p-4 rounded-2xl border border-white/10 flex flex-col sm:flex-row items-center gap-4">
                     <div className="flex-1 w-full">
-                      <label className="block text-xs font-bold text-[#fff700] mb-1">من تاريخ</label>
+                      <label className="block text-xs font-bold text-[#fff700] mb-1">{t('merchant.reportsPage.from')}</label>
                       <input 
                         type="date"
                         value={reportCustomStartDate}
@@ -3927,7 +4624,7 @@ export const MerchantApp: React.FC = () => {
                       />
                     </div>
                     <div className="flex-1 w-full">
-                      <label className="block text-xs font-bold text-[#fff700] mb-1">إلى تاريخ</label>
+                      <label className="block text-xs font-bold text-[#fff700] mb-1">{t('merchant.reportsPage.to')}</label>
                       <input 
                         type="date"
                         value={reportCustomEndDate}
@@ -3979,9 +4676,9 @@ export const MerchantApp: React.FC = () => {
                     className="p-5 rounded-[2rem] border shadow-xs hover:shadow-md transition-all duration-300 flex items-center justify-between group merchant-brand-card"
                   >
                     <div className="space-y-1">
-                      <p className="text-xs font-bold text-[#fff700]">مبيعات الفترة المحددة 💰</p>
-                      <h4 className="text-xl font-black text-[#E8ECF4]">{periodTotalSales.toLocaleString()} <span className="text-xs">د.ع</span></h4>
-                      <p className="text-[10px] text-[#FFFFFF] font-bold">الطلبات الموصلة بنجاح</p>
+                      <p className="text-xs font-bold text-[#fff700]">{t('merchant.reportsPage.kpi.salesLabel')}</p>
+                      <h4 className="text-xl font-black text-[#E8ECF4]">{periodTotalSales.toLocaleString()} <span className="text-xs">{t('common.currency')}</span></h4>
+                      <p className="text-[10px] text-[#FFFFFF] font-bold">{t('merchant.reportsPage.kpi.salesSub')}</p>
                     </div>
                     <div className="p-3.5 bg-white/10 text-[#fff700] rounded-2xl group-hover:scale-110 transition-transform">
                       <ShoppingBag size={22} className="stroke-[2.5]" />
@@ -3993,9 +4690,9 @@ export const MerchantApp: React.FC = () => {
                     className="p-5 rounded-[2rem] border shadow-xs hover:shadow-md transition-all duration-300 flex items-center justify-between group merchant-brand-card"
                   >
                     <div className="space-y-1">
-                      <p className="text-xs font-bold text-[#fff700]">إجمالي الطلبات 📦</p>
-                      <h4 className="text-xl font-black text-[#E8ECF4]">{periodTotalOrdersCount} <span className="text-xs">طلب</span></h4>
-                      <p className="text-[10px] text-[#FFFFFF] font-bold">في كافة الحالات</p>
+                      <p className="text-xs font-bold text-[#fff700]">{t('merchant.reportsPage.kpi.ordersLabel')}</p>
+                      <h4 className="text-xl font-black text-[#E8ECF4]">{periodTotalOrdersCount} <span className="text-xs">{t('merchant.reportsPage.kpi.ordersUnit')}</span></h4>
+                      <p className="text-[10px] text-[#FFFFFF] font-bold">{t('merchant.reportsPage.kpi.ordersSub')}</p>
                     </div>
                     <div className="p-3.5 bg-white/10 text-[#fff700] rounded-2xl group-hover:scale-110 transition-transform">
                       <ClipboardList size={22} className="stroke-[2.5]" />
@@ -4007,9 +4704,9 @@ export const MerchantApp: React.FC = () => {
                     className="p-5 rounded-[2rem] border shadow-xs hover:shadow-md transition-all duration-300 flex items-center justify-between group merchant-brand-card"
                   >
                     <div className="space-y-1">
-                      <p className="text-xs font-bold text-[#fff700]">معدل قيمة الطلب 📈</p>
-                      <h4 className="text-xl font-black text-[#E8ECF4]">{avgOrderValue.toLocaleString()} <span className="text-xs">د.ع</span></h4>
-                      <p className="text-[10px] text-[#FFFFFF] font-bold">لكل طلب موصل</p>
+                      <p className="text-xs font-bold text-[#fff700]">{t('merchant.reportsPage.kpi.avgLabel')}</p>
+                      <h4 className="text-xl font-black text-[#E8ECF4]">{avgOrderValue.toLocaleString()} <span className="text-xs">{t('common.currency')}</span></h4>
+                      <p className="text-[10px] text-[#FFFFFF] font-bold">{t('merchant.reportsPage.kpi.avgSub')}</p>
                     </div>
                     <div className="p-3.5 bg-white/10 text-[#fff700] rounded-2xl group-hover:scale-110 transition-transform">
                       <TrendingUp size={22} className="stroke-[2.5]" />
@@ -4021,9 +4718,9 @@ export const MerchantApp: React.FC = () => {
                     className="p-5 rounded-[2rem] border shadow-xs hover:shadow-md transition-all duration-300 flex items-center justify-between group merchant-brand-card"
                   >
                     <div className="space-y-1">
-                      <p className="text-xs font-bold text-[#fff700]">المنتجات المباعة 🛍️</p>
-                      <h4 className="text-xl font-black text-[#E8ECF4]">{totalUnitsSold} <span className="text-xs">قطعة</span></h4>
-                      <p className="text-[10px] text-[#FFFFFF] font-bold">ضمن الطلبات النشطة</p>
+                      <p className="text-xs font-bold text-[#fff700]">{t('merchant.reportsPage.kpi.unitsLabel')}</p>
+                      <h4 className="text-xl font-black text-[#E8ECF4]">{totalUnitsSold} <span className="text-xs">{t('merchant.reportsPage.kpi.unitsUnit')}</span></h4>
+                      <p className="text-[10px] text-[#FFFFFF] font-bold">{t('merchant.reportsPage.kpi.unitsSub')}</p>
                     </div>
                     <div className="p-3.5 bg-white/10 text-[#fff700] rounded-2xl group-hover:scale-110 transition-transform">
                       <Package size={22} className="stroke-[2.5]" />
@@ -4045,23 +4742,23 @@ export const MerchantApp: React.FC = () => {
                     <div className="flex-1 space-y-4 text-center md:text-right">
                       <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/20 text-[#fff700] text-xs font-bold font-mono">
                         <Award size={14} className="text-[#fff700]" />
-                        <span>ملخص أداء الطلبات</span>
+                        <span>{t('merchant.reportsPage.funnel.badge')}</span>
                       </div>
                       <h3 className="text-2xl sm:text-3xl font-black leading-tight text-[#fff700]">
-                        نسبة التوصيل <span className="text-brand-white text-4xl">{deliveryRate}%</span>
+                        {t('merchant.reportsPage.funnel.deliveryRate')} <span className="text-brand-white text-4xl">{deliveryRate}%</span>
                       </h3>
                       <p className="text-white text-sm max-w-md mx-auto md:mx-0 leading-relaxed">
-                        من أصل {periodTotalOrdersCount} طلب في الفترة
-                        {shopCategoryLabel ? <> ضمن فئة <span className="font-bold text-white bg-white/10 px-2 py-0.5 rounded-md">"{shopCategoryLabel}"</span></> : null}.
-                        المقبولة/قيد التنفيذ: {acceptedLikeCount} — المرفوضة/ملغاة: {rejectedCount}.
+                        {t('merchant.reportsPage.funnel.fromOrders', { count: periodTotalOrdersCount })}
+                        {shopCategoryLabel ? <> {t('merchant.reportsPage.funnel.withCategory')} <span className="font-bold text-white bg-white/10 px-2 py-0.5 rounded-md">"{shopCategoryLabel}"</span></> : null}.
+                        {t('merchant.reportsPage.funnel.acceptedRejected', { accepted: acceptedLikeCount, rejected: rejectedCount })}.
                       </p>
                       <div className="pt-2">
                         <span className="text-xs bg-white/10 text-white/80 px-3 py-1.5 rounded-lg border border-white/20">
                           {deliveryRate >= 70
-                            ? 'نسبة توصيل قوية — حافظ على سرعة المعالجة.'
+                            ? t('merchant.reportsPage.funnel.rateGood')
                             : periodTotalOrdersCount === 0
-                              ? 'لا توجد طلبات في هذه الفترة بعد.'
-                              : 'ركّز على قبول الطلبات وتسريع التوصيل لرفع النسبة.'}
+                              ? t('merchant.reportsPage.funnel.rateNoOrders')
+                              : t('merchant.reportsPage.funnel.rateImprove')}
                         </span>
                       </div>
                     </div>
@@ -4075,7 +4772,7 @@ export const MerchantApp: React.FC = () => {
                           </div>
                         </div>
                         <div className="text-center">
-                          <p className="text-xs text-white/60 uppercase tracking-widest mb-1 font-mono">موصّل</p>
+                          <p className="text-xs text-white/60 uppercase tracking-widest mb-1 font-mono">{t('merchant.reportsPage.funnel.delivered')}</p>
                           <p className="text-lg font-black tracking-wide text-brand-white">{deliveredOrdersCount}/{periodTotalOrdersCount}</p>
                         </div>
                       </div>
@@ -4089,7 +4786,7 @@ export const MerchantApp: React.FC = () => {
                   initial={{ opacity: 0, scale: 0.98 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ duration: 0.5, delay: 0.1, ease: "easeOut" }}
-                  className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+                  className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-w-0"
                 >
                   {/* Chart A: Daily Sales (Area Chart with gradient) */}
                   <div
@@ -4097,20 +4794,20 @@ export const MerchantApp: React.FC = () => {
                   >
                     <div className="flex justify-between items-center border-b border-white/10 pb-3">
                       <div>
-                        <h4 className="text-base font-black text-[#fff700]">منحنى المبيعات اليومية 💹</h4>
-                        <p className="text-[10px] text-[#ffffff] font-bold">حجم المبيعات الفعلي بالدينار العراقي</p>
+                        <h4 className="text-base font-black text-[#fff700]">{t('merchant.reportsPage.charts.salesTitle')}</h4>
+                        <p className="text-[10px] text-[#ffffff] font-bold">{t('merchant.reportsPage.charts.salesSub')}</p>
                       </div>
-                      <span className="text-xs font-black report-stat-badge px-2.5 py-1 rounded-lg">إجمالي: {periodTotalSales.toLocaleString()} د.ع</span>
+                      <span className="text-xs font-black report-stat-badge px-2.5 py-1 rounded-lg">{t('merchant.reportsPage.charts.salesTotal', { total: periodTotalSales.toLocaleString() })}</span>
                     </div>
 
-                    <div className="h-72 w-full">
+                    <div className="h-72 w-full min-w-0">
                       {periodTotalSales === 0 ? (
                         <div className="h-full flex flex-col justify-center items-center text-white text-xs py-10 space-y-2">
                           <ShoppingBag size={32} className="text-white stroke-[1.5]" />
-                          <span className="text-[#ffffff]">لم يتم تسجيل مبيعات موصلة خلال الفترة المحددة</span>
+                          <span className="text-[#ffffff]">{t('merchant.reportsPage.charts.salesEmpty')}</span>
                         </div>
                       ) : (
-                        <ResponsiveContainer width="100%" height="100%">
+                        <SafeChartContainer className="h-full w-full min-w-0">
                           <AreaChart data={reportChartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                             <defs>
                               <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
@@ -4135,7 +4832,7 @@ export const MerchantApp: React.FC = () => {
                             <Tooltip content={<CustomSalesTooltip />} />
                             <Area type="monotone" dataKey="sales" stroke="#7B3DFF" strokeWidth={3} fillOpacity={1} fill="url(#colorSales)" />
                           </AreaChart>
-                        </ResponsiveContainer>
+                        </SafeChartContainer>
                       )}
                     </div>
                   </div>
@@ -4146,20 +4843,20 @@ export const MerchantApp: React.FC = () => {
                   >
                     <div className="flex justify-between items-center border-b border-white/10 pb-3">
                       <div>
-                        <h4 className="text-base font-black text-[#fff700]">عدد الطلبات اليومية 📦</h4>
-                        <p className="text-[10px] text-[#ffffff] font-bold">مؤشر الإقبال وعدد المعاملات اليومية</p>
+                        <h4 className="text-base font-black text-[#fff700]">{t('merchant.reportsPage.charts.ordersTitle')}</h4>
+                        <p className="text-[10px] text-[#ffffff] font-bold">{t('merchant.reportsPage.charts.ordersSub')}</p>
                       </div>
-                      <span className="text-xs font-black report-stat-badge px-2.5 py-1 rounded-lg">إجمالي: {periodTotalOrdersCount} طلب</span>
+                      <span className="text-xs font-black report-stat-badge px-2.5 py-1 rounded-lg">{t('merchant.reportsPage.charts.ordersTotal', { count: periodTotalOrdersCount })}</span>
                     </div>
 
-                    <div className="h-72 w-full">
+                    <div className="h-72 w-full min-w-0">
                       {periodTotalOrdersCount === 0 ? (
                         <div className="h-full flex flex-col justify-center items-center text-[#ffffff] text-xs py-10 space-y-2">
                           <ClipboardList size={32} className="text-[#fff700] stroke-[1.5]" />
-                          <span className="text-[#ffffff]">لا توجد طلبات مسجلة خلال الفترة المحددة</span>
+                          <span className="text-[#ffffff]">{t('merchant.reportsPage.charts.ordersEmpty')}</span>
                         </div>
                       ) : (
-                        <ResponsiveContainer width={daysDiff > 14 ? "100%" : "100%"} height="100%">
+                        <SafeChartContainer className="h-full w-full min-w-0">
                           <BarChart data={reportChartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                             <XAxis 
@@ -4182,7 +4879,7 @@ export const MerchantApp: React.FC = () => {
                               ))}
                             </Bar>
                           </BarChart>
-                        </ResponsiveContainer>
+                        </SafeChartContainer>
                       )}
                     </div>
                   </div>
@@ -4197,14 +4894,14 @@ export const MerchantApp: React.FC = () => {
                   className="p-6 rounded-[2rem] border border-white/10 shadow-sm space-y-5 merchant-brand-card"
                 >
                   <div>
-                    <h4 className="text-base font-black text-[#fff700]">أكثر المنتجات طلباً خلال الفترة المحددة 🔥</h4>
-                    <p className="text-xs text-[#ffffff] font-medium">المنتجات الخمسة الأكثر مبيعاً ونسبة مساهمتها في مبيعاتك الإجمالية.</p>
+                    <h4 className="text-base font-black text-[#fff700]">{t('merchant.reportsPage.topProducts.title')}</h4>
+                    <p className="text-xs text-[#ffffff] font-medium">{t('merchant.reportsPage.topProducts.subtitle')}</p>
                   </div>
 
                   {topProductsData.length === 0 ? (
                     <div className="py-12 flex flex-col justify-center items-center text-white/70 text-xs gap-2 border border-dashed border-white/20 rounded-3xl">
                       <Package size={40} className="text-[#fff700] stroke-[1.5]" />
-                      <span className="text-[#ffffff]">لا توجد قسائم شراء أو منتجات مسجلة في الطلبات الأخيرة</span>
+                      <span className="text-[#ffffff]">{t('merchant.reportsPage.topProducts.empty')}</span>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
@@ -4230,7 +4927,7 @@ export const MerchantApp: React.FC = () => {
                               <div className="flex-1 min-w-0 space-y-1.5">
                                 <div className="flex justify-between items-center text-xs font-tajawal">
                                   <span className="font-bold text-brand-white truncate pl-2">{p.name}</span>
-                                  <span className="font-black text-[#fff700]">{p.quantity} قطعة</span>
+                                  <span className="font-black text-[#fff700]">{t('merchant.reportsPage.topProducts.unitsBadge', { count: p.quantity })}</span>
                                 </div>
                                 <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden">
                                   <div 
@@ -4239,8 +4936,8 @@ export const MerchantApp: React.FC = () => {
                                   />
                                 </div>
                                 <div className="flex justify-between items-center text-[10px] text-white/60 font-bold font-tajawal">
-                                  <span>مساهمة: {percentage}% من الكمية المباعة</span>
-                                  <span className="text-emerald-400">عوائد: {p.sales.toLocaleString()} د.ع</span>
+                                  <span>{t('merchant.reportsPage.topProducts.contribution', { percent: percentage })}</span>
+                                  <span className="text-emerald-400">{t('merchant.reportsPage.topProducts.revenue', { value: p.sales.toLocaleString() })}</span>
                                 </div>
                               </div>
                             </div>
@@ -4249,10 +4946,10 @@ export const MerchantApp: React.FC = () => {
                       </div>
 
                       {/* BarChart representing quantities sold */}
-                      <div className="h-64 merchant-panel-inset p-4 rounded-3xl border border-white/10 flex flex-col justify-between">
-                        <span className="text-xs font-black text-[#fff700] border-b border-white/10 pb-2">رسم بياني للكميات المباعة</span>
-                        <div className="h-48 w-full">
-                          <ResponsiveContainer width="100%" height="100%">
+                      <div className="h-64 merchant-panel-inset p-4 rounded-3xl border border-white/10 flex flex-col justify-between min-w-0">
+                        <span className="text-xs font-black text-[#fff700] border-b border-white/10 pb-2">{t('merchant.reportsPage.topProducts.chartTitle')}</span>
+                        <div className="h-48 w-full min-w-0">
+                          <SafeChartContainer className="h-full w-full min-w-0">
                             <BarChart 
                               data={topProductsData} 
                               layout="vertical"
@@ -4275,8 +4972,8 @@ export const MerchantApp: React.FC = () => {
                                     return (
                                       <div className="bg-slate-900 text-white p-3 rounded-xl border border-slate-700 shadow-xl text-right text-xs">
                                         <p className="font-bold mb-1">{payload[0].payload.name}</p>
-                                        <p className="text-[#A78BFA]">الكمية المباعة: <span className="font-black">{payload[0].value} قطعة</span></p>
-                                        <p className="text-emerald-400">إجمالي المبيعات: <span className="font-black">{payload[0].payload.sales.toLocaleString()} د.ع</span></p>
+                                        <p className="text-[#A78BFA]">{t('merchant.reportsPage.charts.tooltipSalesBar', { count: payload[0].value })}</p>
+                                        <p className="text-emerald-400">{t('merchant.reportsPage.charts.tooltipRevenue', { value: payload[0].payload.sales.toLocaleString() })}</p>
                                       </div>
                                     );
                                   }
@@ -4290,7 +4987,7 @@ export const MerchantApp: React.FC = () => {
                                 })}
                               </Bar>
                             </BarChart>
-                          </ResponsiveContainer>
+                          </SafeChartContainer>
                         </div>
                       </div>
                     </div>
@@ -4310,13 +5007,13 @@ export const MerchantApp: React.FC = () => {
                           <TrendingUp size={20} />
                         </div>
                         <div>
-                          <h3 className="font-black text-[#fff700] text-sm">توزيع المبيعات حسب التصنيفات</h3>
-                          <p className="text-[10px] text-white/70 font-bold mt-1">المبيعات الإجمالية لكل تصنيف بـ د.ع</p>
+                          <h3 className="font-black text-[#fff700] text-sm">{t('merchant.reportsPage.categorySales.title')}</h3>
+                          <p className="text-[10px] text-white/70 font-bold mt-1">{t('merchant.reportsPage.categorySales.subtitle')}</p>
                         </div>
                       </div>
                       
-                      <div className="h-72 w-full" dir="ltr">
-                        <ResponsiveContainer width="100%" height="100%">
+                      <div className="h-72 w-full min-w-0" dir="ltr">
+                        <SafeChartContainer className="h-full w-full min-w-0">
                           <BarChart
                             data={categorySalesData}
                             margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
@@ -4344,8 +5041,8 @@ export const MerchantApp: React.FC = () => {
                                   return (
                                     <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl text-right text-xs">
                                       <p className="font-bold mb-1 border-b border-slate-700 pb-1">{payload[0].payload.category}</p>
-                                      <p className="text-emerald-400 mt-2">المبيعات: <span className="font-black">{payload[0].value.toLocaleString()} د.ع</span></p>
-                                      <p className="text-[#A78BFA] mt-1">الكمية المباعة: <span className="font-black">{payload[0].payload.quantity} قطعة</span></p>
+                                      <p className="text-emerald-400 mt-2">{t('merchant.reportsPage.categorySales.tooltipSales', { value: payload[0].value.toLocaleString() })}</p>
+                                      <p className="text-[#A78BFA] mt-1">{t('merchant.reportsPage.categorySales.tooltipQty', { count: payload[0].payload.quantity })}</p>
                                     </div>
                                   );
                                 }
@@ -4359,7 +5056,7 @@ export const MerchantApp: React.FC = () => {
                               })}
                             </Bar>
                           </BarChart>
-                        </ResponsiveContainer>
+                        </SafeChartContainer>
                       </div>
                     </motion.div>
                   )}
@@ -4378,9 +5075,9 @@ export const MerchantApp: React.FC = () => {
                           <Activity size={20} />
                         </div>
                         <div>
-                          <h3 className="font-black text-[#fff700] text-sm">توقعات نفاد المخزون ⚠️</h3>
+                          <h3 className="font-black text-[#fff700] text-sm">{t('merchant.reportsPage.inventory.title')}</h3>
                           <p className="text-[10.5px] text-white/70 font-bold mt-1 leading-relaxed">
-                            المنتجات التالية معرضة للنفاد خلال أقل من 3 أسابيع بناءً على سرعة مبيعاتها الحالية. ننصحك بتجديد المخزون لتجنب خسارة الأرباح.
+                            {t('merchant.reportsPage.inventory.subtitle')}
                           </p>
                         </div>
                       </div>
@@ -4391,14 +5088,14 @@ export const MerchantApp: React.FC = () => {
                             <div className="flex flex-col gap-1.5 flex-1 min-w-0 pr-2 border-r-[3px] border-rose-400/50">
                               <span className="font-bold text-brand-white text-xs truncate" title={item.name}>{item.name}</span>
                               <div className="flex items-center gap-2 text-[10px] text-white/60 font-mono font-medium">
-                                <span>المخزون: {item.inventory}</span>
+                                <span>{t('merchant.reportsPage.inventory.stockLabel', { count: item.inventory })}</span>
                                 <span>•</span>
-                                <span>البيع: {item.salesPerDay.toFixed(1)}/يوم</span>
+                                <span>{t('merchant.reportsPage.inventory.salesPerDay', { rate: item.salesPerDay.toFixed(1) })}</span>
                               </div>
                             </div>
                             <div className="shrink-0 flex flex-col items-center justify-center bg-white/10 px-3 py-2 rounded-xl border border-rose-400/20 min-w-[70px]">
-                              <span className="text-[9px] text-white/60 font-bold mb-0.5">ينفد خلال</span>
-                              <span className="font-black text-rose-300 text-sm" dir="ltr">{item.daysToEmpty} يوم</span>
+                              <span className="text-[9px] text-white/60 font-bold mb-0.5">{t('merchant.reportsPage.inventory.runsOutIn')}</span>
+                              <span className="font-black text-rose-300 text-sm" dir="ltr">{t('merchant.reportsPage.inventory.daysUnit', { count: item.daysToEmpty })}</span>
                             </div>
                           </div>
                         ))}
@@ -4414,8 +5111,8 @@ export const MerchantApp: React.FC = () => {
 
           {activeTab === "products" && (
             <div className="space-y-6">
-              <div className="p-6 h-full overflow-y-auto">
-                <div className="space-y-8 text-right reports-page" dir="rtl">
+              <div className="px-1 sm:px-2 h-full overflow-y-auto">
+                <div className="space-y-6 animate-fade-in text-right text-white" dir="rtl">
                   {(() => {
                     const filteredProductsForView = merchantProducts.filter(
                       (p) =>
@@ -4424,39 +5121,39 @@ export const MerchantApp: React.FC = () => {
                           p.name.includes(productSearchQuery) ||
                           p.barcode?.includes(productSearchQuery)),
                     );
+                    const windowedProductsForView = filteredProductsForView.slice(
+                      0,
+                      visibleProductsLimit,
+                    );
 
                     return (
                       <>
                         {/* 1. العناوين الرئيسية في المقدمة */}
                         <div
-                          className="flex flex-col md:flex-row justify-between items-start md:items-center merchant-brand-card p-6 rounded-3xl shadow-sm border gap-4"
+                          className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center p-6 rounded-[2rem] shadow-2xl gap-4 relative overflow-hidden group text-white"
                         >
-                          <div>
-                            <h2 className="text-xl font-black text-[#fff700] font-tajawal flex items-center gap-2">
-                              <Package className="text-[#fff700]" size={24} />
-                              <span>إدارة المنتجات 📦</span>
+                          <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                            <Package size={140} />
+                          </div>
+                          <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/20 to-transparent pointer-events-none" />
+                          <div className="relative z-10">
+                            <h2 className="text-xl font-black text-white font-tajawal flex items-center gap-2">
+                              <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                                <Package className="text-[#fff700]" size={22} />
+                              </span>
+                              <span>{t('merchant.products.pageTitle')}</span>
                             </h2>
-                            <p className="text-xs text-white/80 font-medium mt-1 font-tajawal">
-                              إجمالي المنتجات الحالية: {filteredProductsForView.length} — أضف وعدّل ونظّم منتجات متجرك
+                            <p className="text-xs text-white/75 font-medium mt-1 font-tajawal">
+                              {t('merchant.products.pageSubtitle', { count: filteredProductsForView.length })}
                             </p>
                           </div>
                           
-                          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-                            <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/20 flex items-center gap-2 shrink-0">
+                          <div className="relative z-10 flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                            <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/25 flex items-center gap-2 shrink-0">
                               <span className="w-2 h-2 rounded-full bg-[#fff700] animate-pulse"></span>
-                              <span className="hidden sm:inline">تحديث حي ومباشر</span>
-                              <span className="sm:hidden">تحديث حي</span>
+                              <span className="hidden sm:inline">{t('merchant.orders.liveUpdate')}</span>
+                              <span className="sm:hidden">{t('merchant.orders.liveUpdateShort')}</span>
                             </div>
-                            <button
-                              onClick={() => {
-                                setScannerMode("inventory");
-                                setShowScanner(true);
-                              }}
-                              className="flex-1 sm:flex-none px-4 py-2.5 bg-white/10 text-[#E8ECF4] font-black rounded-2xl flex items-center justify-center space-x-2 space-x-reverse shadow-xs hover:bg-white/20 active:scale-95 transition-all text-xs border border-white/20"
-                            >
-                              <Camera size={16} />
-                              <span>الجرد الذكي</span>
-                            </button>
                             
                             <button
                               onClick={() => {
@@ -4484,17 +5181,17 @@ export const MerchantApp: React.FC = () => {
                                  setProdBrand("");
                                  setShowExtraInfo(false);
                               }}
-                              className="flex-1 sm:flex-none px-5 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl flex items-center justify-center space-x-2 space-x-reverse shadow-md shadow-slate-100 hover:shadow-lg active:scale-95 transition-all text-xs"
+                              className="flex-1 sm:flex-none px-5 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl flex items-center justify-center space-x-2 space-x-reverse shadow-brand-glow hover:shadow-lg active:scale-95 transition-all text-xs"
                             >
                               <Plus size={16} />
-                              <span>إضافة منتج جديد</span>
+                              <span>{t("merchant.products.addNew")}</span>
                             </button>
                           </div>
                         </div>
 
                         {/* 2. تبويبات الفلترة للمنتجات */}
                         <div
-                          className="flex gap-2 p-1.5 merchant-brand-card rounded-2xl border shadow-xs sticky top-0 z-10 font-bold"
+                          className="flex gap-2 p-1.5 welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl shadow-lg sticky top-0 z-10 font-bold"
                         >
                           {["published", "draft", "archived"].map((s) => (
                             <button
@@ -4502,43 +5199,47 @@ export const MerchantApp: React.FC = () => {
                               onClick={() => {
                                 setProductFilterStatus(s as any);
                                 setSelectedProductIds([]);
+                                setVisibleProductsLimit(32);
                               }}
                               className={`flex-1 py-2 rounded-xl text-[11px] font-black transition-all ${
                                 productFilterStatus === s
-                                  ? "bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white shadow-md shadow-slate-100"
-                                  : "text-white/60 hover:bg-white/10 hover:text-[#fff700]"
+                                  ? "bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white shadow-brand-glow"
+                                  : "text-white/60 hover:bg-white/10 hover:text-white"
                               }`}
                             >
                               {s === "published"
-                                ? "المنشور 🌐"
+                                ? t("merchant.products.filterPublished")
                                 : s === "draft"
-                                  ? "المسودات 📝"
-                                  : "الأرشيف 📥"}
+                                  ? t("merchant.products.filterDraft")
+                                  : t("merchant.products.filterArchived")}
                             </button>
                           ))}
                         </div>
 
                         {/* 3. شريط البحث يقع مباشرة تحت التبويبات */}
                         <div
-                          className="p-2.5 rounded-2xl border shadow-sm flex items-center gap-3 merchant-brand-card"
+                          className="p-2.5 rounded-2xl welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md shadow-lg flex items-center gap-3"
                         >
-                          <div className="p-2 merchant-icon-tile rounded-xl">
+                          <div className="p-2 bg-white/10 border border-white/20 rounded-xl text-[#fff700]">
                             <Search size={18} />
                           </div>
                           <input
                             type="text"
-                            placeholder="ابحث عن منتج بالاسم أو الباركود..."
+                            placeholder={t("merchant.products.searchPlaceholder")}
                             value={productSearchQuery}
-                            onChange={(e) => setProductSearchQuery(e.target.value)}
-                            className="w-full bg-[#0B1320] border-none rounded-xl text-xs py-2 px-4 focus:ring-2 focus:ring-vibrant-purple/40 outline-none text-[#E8ECF4] font-bold placeholder:text-slate-500"
+                            onChange={(e) => {
+                              setProductSearchQuery(e.target.value);
+                              setVisibleProductsLimit(32);
+                            }}
+                            className="w-full bg-[#0B1320]/60 border border-white/10 rounded-xl text-xs py-2 px-4 focus:ring-2 focus:ring-vibrant-purple/40 outline-none text-[#E8ECF4] font-bold placeholder:text-slate-500"
                           />
                           <button
                             onClick={() => {
                               setScannerMode("search");
                               setShowScanner(true);
                             }}
-                            className="p-2 bg-white/10 text-[#fff700] hover:bg-white/20 rounded-xl transition-all shadow-xs shrink-0 border border-white/10"
-                            title="مسح باركود للبحث"
+                            className="p-2 bg-white/10 text-[#fff700] hover:bg-white/20 rounded-xl transition-all shadow-xs shrink-0 border border-white/20"
+                            title={t("merchant.products.scanBarcode")}
                           >
                             <Camera size={18} />
                           </button>
@@ -4547,16 +5248,16 @@ export const MerchantApp: React.FC = () => {
                                   {/* 4. ترتيب المنتجات في شبكة GridView متناسقة وسهلة التصفح */}
                         {filteredProductsForView.length === 0 ? (
                           <div
-                            className="p-12 rounded-2xl border border-dashed border-white/20 text-center flex flex-col items-center justify-center merchant-brand-card"
+                            className="p-12 rounded-[2rem] welcome-card-glow welcome-card-border-glow bg-white/5 border border-dashed border-white/25 backdrop-blur-md text-center flex flex-col items-center justify-center shadow-lg text-white"
                           >
-                            <div className="p-4 merchant-icon-tile rounded-full mb-3">
+                            <div className="p-4 bg-white/10 border border-white/20 rounded-full mb-3">
                               <Package size={40} className="text-[#fff700]" />
                             </div>
-                            <h3 className="font-black text-[#fff700] text-sm mb-1">
-                              لا توجد منتجات مطابقة
+                            <h3 className="font-black text-white text-sm mb-1">
+                              {t("merchant.products.emptySearchTitle")}
                             </h3>
                             <p className="text-xs text-white/70 leading-relaxed max-w-xs font-bold">
-                              لم نجد أي منتجات تناسب حالة الفلترة المحددة أو عبارة البحث الحالية.
+                              {t("merchant.products.emptySearchHint")}
                             </p>
                           </div>
                         ) : (
@@ -4567,7 +5268,7 @@ export const MerchantApp: React.FC = () => {
                               
                               // We use availableTags to group products
                               availableTags.forEach((tag) => {
-                                const groupProducts = filteredProductsForView.filter((p) => {
+                                const groupProducts = windowedProductsForView.filter((p) => {
                                   if (p.tags && p.tags.includes(tag)) {
                                     assignedIds.add(p.id);
                                     return true;
@@ -4580,21 +5281,23 @@ export const MerchantApp: React.FC = () => {
                               });
                               
                               // Uncategorized products
-                              const uncategorized = filteredProductsForView.filter((p) => !assignedIds.has(p.id));
+                              const uncategorized = windowedProductsForView.filter((p) => !assignedIds.has(p.id));
                               if (uncategorized.length > 0) {
-                                grouped.push({ name: "منتجات أخرى فرعية أو غير مصنفة", products: uncategorized });
+                                grouped.push({ name: t('merchant.products.uncategorized'), products: uncategorized });
                               }
                               
-                              return grouped.map((group) => (
+                              return (
+                                <>
+                                  {grouped.map((group) => (
                                 <div key={group.name} className="space-y-4">
                                   {/* عنوان قسم تصنيف نوع المنتج بلمسة بنفسجية مذهلة */}
-                                  <div className="flex items-center gap-2.5 merchant-panel-inset px-4 py-2.5 rounded-2xl border border-white/10 shrink-0 w-fit">
+                                  <div className="flex items-center gap-2.5 welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/25 backdrop-blur-md px-4 py-2.5 rounded-2xl shrink-0 w-fit shadow-md">
                                     <div className="w-1.5 h-5 bg-gradient-to-b from-[#7B3DFF] to-[#0B1320] rounded-full" />
-                                    <h3 className="font-black text-[#fff700] text-xs sm:text-sm">
+                                    <h3 className="font-black text-white text-xs sm:text-sm">
                                       {group.name}
                                     </h3>
-                                    <span className="report-stat-badge text-[10px] font-black px-2 py-0.5 rounded-lg">
-                                      {group.products.length} {group.products.length > 10 ? 'منتج' : 'منتجات'}
+                                    <span className="bg-white/10 text-[#E8ECF4] border border-white/15 text-[10px] font-black px-2 py-0.5 rounded-lg">
+                                      {group.products.length}
                                     </span>
                                   </div>
 
@@ -4605,10 +5308,10 @@ export const MerchantApp: React.FC = () => {
                                       return (
                                         <div
                                           key={p.id}
-                                          className={`relative isolate merchant-brand-card rounded-2xl border flex flex-col group transition-all duration-300 hover:shadow-md ${
+                                          className={`relative isolate welcome-card-glow welcome-card-border-glow bg-white/5 border backdrop-blur-md rounded-2xl flex flex-col group transition-all duration-300 hover:bg-white/10 hover:shadow-2xl overflow-hidden text-white ${
                                             isSelected
-                                              ? "border-[#fff700] ring-2 ring-[#fff700]/30"
-                                              : "border-white/10 hover:border-white/20"
+                                              ? "border-[#fff700] ring-2 ring-[#fff700]/30 shadow-brand-glow"
+                                              : "border-white/30 hover:border-white/40"
                                           }`}
                                         >
                                           {/* صورة المنتج - شكل مربع مثالي متجاوب */}
@@ -4621,7 +5324,6 @@ export const MerchantApp: React.FC = () => {
                                                 src={p.image}
                                                 alt={p.name}
                                                 size="custom"
-                                                priority
                                                 variant="dark"
                                                 className="w-full h-full"
                                                 imageClassName="transition-transform duration-500 group-hover:scale-105"
@@ -4654,8 +5356,8 @@ export const MerchantApp: React.FC = () => {
                                                 type="button"
                                                 onClick={() => openShareModal("product", p)}
                                                 className="p-1.5 bg-black/40 backdrop-blur-sm rounded-xl text-emerald-400 shadow-md hover:bg-emerald-500/30 transition-all border border-white/20 active:scale-95 shrink-0"
-                                                title="مشاركة المنتج"
-                                                aria-label="مشاركة المنتج"
+                                                title={t('merchant.products.shareLink')}
+                                                aria-label={t('merchant.products.shareLink')}
                                               >
                                                 <Share2 size={14} />
                                               </button>
@@ -4664,7 +5366,7 @@ export const MerchantApp: React.FC = () => {
                                                   setActiveMenuProductId(activeMenuProductId === p.id ? null : p.id)
                                                 }
                                                 className="p-1.5 bg-black/40 backdrop-blur-sm rounded-xl text-[#E8ECF4] shadow-md hover:bg-white/20 hover:text-[#fff700] transition-all border border-white/20 active:scale-95 shrink-0"
-                                                title="خيارات المنتج"
+                                                title={t("merchant.products.optionsTitle")}
                                               >
                                                 <MoreVertical size={14} className="font-bold" />
                                               </button>
@@ -4677,7 +5379,7 @@ export const MerchantApp: React.FC = () => {
                                                     animate={{ opacity: 1, scale: 1, y: 0 }}
                                                     exit={{ opacity: 0, scale: 0.95, y: -5 }}
                                                     transition={{ duration: 0.15 }}
-                                                    className="absolute top-full left-0 mt-1.5 w-48 merchant-inner-card border border-white/10 rounded-2xl shadow-2xl z-20 overflow-hidden text-right"
+                                                    className="absolute top-full left-0 mt-1.5 w-48 welcome-card-glow welcome-card-border-glow bg-deep-navy/95 border border-white/30 backdrop-blur-md rounded-2xl shadow-2xl z-20 overflow-hidden text-right"
                                                   >
                                                   <div className="p-1.5 flex flex-col gap-1">
                                                     <button
@@ -4714,7 +5416,7 @@ export const MerchantApp: React.FC = () => {
                                                       className="w-full px-3 py-2 text-xs font-black text-[#E8ECF4] hover:bg-white/10 hover:text-[#fff700] rounded-xl flex items-center justify-start gap-2.5 transition"
                                                     >
                                                       <Edit size={14} className="text-[#fff700]" />
-                                                      <span>تعديل المنتج</span>
+                                                      <span>{t("merchant.products.editProduct")}</span>
                                                     </button>
 
                                                     <button
@@ -4725,7 +5427,7 @@ export const MerchantApp: React.FC = () => {
                                                       className="w-full px-3 py-2 text-xs font-black text-[#E8ECF4] hover:bg-emerald-500/15 hover:text-emerald-300 rounded-xl flex items-center justify-start gap-2.5 transition"
                                                     >
                                                       <Share2 size={14} className="text-emerald-400" />
-                                                      <span>مشاركة الرابط</span>
+                                                      <span>{t('merchant.products.shareLink')}</span>
                                                     </button>
 
                                                     {p.status !== "published" && (
@@ -4737,7 +5439,7 @@ export const MerchantApp: React.FC = () => {
                                                         className="w-full px-3 py-2 text-xs font-black text-[#E8ECF4] hover:bg-violet/20 hover:text-[#fff700] rounded-xl flex items-center justify-start gap-2.5 transition"
                                                       >
                                                         <Globe size={14} className="text-[#fff700]" />
-                                                        <span>نشر على المتجر</span>
+                                                        <span>{t('merchant.products.publishToStore')}</span>
                                                       </button>
                                                     )}
 
@@ -4750,7 +5452,7 @@ export const MerchantApp: React.FC = () => {
                                                         className="w-full px-3 py-2 text-xs font-black text-[#E8ECF4] hover:bg-amber-500/15 hover:text-amber-300 rounded-xl flex items-center justify-start gap-2.5 transition"
                                                       >
                                                         <FileText size={14} className="text-amber-400" />
-                                                        <span>نقل للمسودة</span>
+                                                        <span>{t('merchant.products.moveToDraft')}</span>
                                                       </button>
                                                     )}
 
@@ -4763,7 +5465,7 @@ export const MerchantApp: React.FC = () => {
                                                         className="w-full px-3 py-2 text-xs font-black text-[#E8ECF4] hover:bg-white/10 hover:text-[#fff700] rounded-xl flex items-center justify-start gap-2.5 transition"
                                                       >
                                                         <Archive size={14} className="text-white/60" />
-                                                        <span>نقل للأرشيف</span>
+                                                        <span>{t('merchant.products.moveToArchive')}</span>
                                                       </button>
                                                     )}
 
@@ -4777,7 +5479,7 @@ export const MerchantApp: React.FC = () => {
                                                       className="w-full px-3 py-1.5 text-xs font-black text-rose-300 hover:bg-rose-500/15 rounded-xl flex items-center justify-start gap-2.5 transition"
                                                     >
                                                       <Trash2 size={14} className="text-rose-400" />
-                                                      <span>حذف نهائي</span>
+                                                      <span>{t('merchant.products.deletePermanent')}</span>
                                                     </button>
                                                   </div>
                                                 </motion.div>
@@ -4788,7 +5490,7 @@ export const MerchantApp: React.FC = () => {
                                             {/* شارة نسبة الخصم باللون الذهبي الباذخ */}
                                             {p.discountType !== "none" && (
                                               <div className="absolute bottom-2.5 right-2.5 z-10 bg-gradient-to-l from-amber-500 to-yellow-500 text-brand-white text-[9px] font-black px-2 py-0.5 rounded-full shadow-sm">
-                                                خصم %{p.discountValue}
+                                                {t('merchant.products.discountBadge', { value: p.discountValue })}
                                               </div>
                                             )}
 
@@ -4802,10 +5504,10 @@ export const MerchantApp: React.FC = () => {
                                                     : "bg-slate-550/90 text-brand-white"
                                               }`}>
                                                 {p.status === "published"
-                                                  ? "منشور"
+                                                  ? t("merchant.products.status.published")
                                                   : p.status === "draft"
-                                                    ? "مسودة"
-                                                    : "مؤرشف"}
+                                                    ? t("merchant.products.status.draft")
+                                                    : t("merchant.products.status.archived")}
                                               </span>
                                             </div>
                                           </div>
@@ -4818,7 +5520,7 @@ export const MerchantApp: React.FC = () => {
                                             <div>
                                               {/* اسم المنتج */}
                                               <h3
-                                                className="font-black text-[#fff700] text-[11px] sm:text-xs leading-tight line-clamp-2 min-h-[2rem] hover:text-white transition-colors"
+                                                className="font-black text-white text-[11px] sm:text-xs leading-tight line-clamp-2 min-h-[2rem] hover:text-[#fff700] transition-colors"
                                                 title={p.name}
                                               >
                                                 {p.name}
@@ -4857,7 +5559,7 @@ export const MerchantApp: React.FC = () => {
                                                     size={10}
                                                     className="text-amber-400 shrink-0 mb-0.5"
                                                   />
-                                                  <span className="text-[8px] font-black text-amber-300">مجاني</span>
+                                                  <span className="text-[8px] font-black text-amber-300">{t("merchant.products.freeDelivery")}</span>
                                                 </div>
                                               )}
                                             </div>
@@ -4867,7 +5569,20 @@ export const MerchantApp: React.FC = () => {
                                     })}
                                   </div>
                                 </div>
-                              ));
+                              ))}
+                                  {filteredProductsForView.length > visibleProductsLimit && (
+                                    <div className="flex justify-center pt-2 pb-6">
+                                      <button
+                                        type="button"
+                                        onClick={() => setVisibleProductsLimit((n) => n + 32)}
+                                        className="px-5 py-2.5 rounded-2xl bg-white/10 border border-white/25 text-white text-xs font-black hover:bg-white/20 transition"
+                                      >
+                                        {t("merchant.products.loadMore", { count: filteredProductsForView.length - visibleProductsLimit })}
+                                      </button>
+                                    </div>
+                                  )}
+                                </>
+                              );
                             })()}
                           </div>
                         )}
@@ -4878,20 +5593,6 @@ export const MerchantApp: React.FC = () => {
               </div>
               
             </div>
-          )}
-
-          {/* زر المسح العائم (FAB) للجرد السريع - خارج أي div لمنع تداخل الطبقات */}
-          {activeTab === "products" && (
-            <button
-              onClick={() => {
-                setScannerMode("inventory");
-                setShowScanner(true);
-              }}
-              className="fixed bottom-24 left-6 z-[60] bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white p-4 rounded-full shadow-2xl transition-all hover:scale-105 active:scale-95"
-              title="جرد سريع"
-            >
-              <Camera size={26} />
-            </button>
           )}
 
           {/* الطلبات */}
@@ -4927,10 +5628,10 @@ export const MerchantApp: React.FC = () => {
             const handleClearInbox = async () => {
               if (!canClearInbox || isClearingInbox) return;
               const confirm = await showConfirm(
-                "تصفير القائمة",
-                `سيتم إخفاء ${clearableInboxOrders.length} طلب من هذه القائمة وصفر رقم التبويب.\nالتقارير والمحفظة وحسابات الزبائن تبقى كما هي.`,
-                "تصفير القائمة",
-                "إلغاء",
+                t("merchant.orders.clearInbox.clearBtn"),
+                t("merchant.orders.clearInbox.confirmMsg", { count: clearableInboxOrders.length }),
+                t("merchant.orders.clearInbox.clearBtn"),
+                t("common.cancel"),
               );
               if (!confirm.isConfirmed) return;
               setIsClearingInbox(true);
@@ -4944,14 +5645,14 @@ export const MerchantApp: React.FC = () => {
                 await updateStoreProfile({ inboxClearedOrderIds: nextIds });
                 showToast(
                   "success",
-                  "تم التصفير",
-                  "أُخفيت الطلبات من القائمة. التقارير والإحصاءات كما هي.",
+                  t("merchant.orders.clearInbox.clearedTitle"),
+                  t("merchant.orders.clearInbox.clearedBody"),
                 );
               } catch (e: any) {
                 showToast(
                   "error",
-                  "فشل التصفير",
-                  typeof e?.message === "string" ? e.message : "حاول مجدداً",
+                  t("merchant.orders.clearInbox.failedTitle"),
+                  typeof e?.message === "string" ? e.message : t("common.retry"),
                 );
               } finally {
                 setIsClearingInbox(false);
@@ -4980,46 +5681,64 @@ export const MerchantApp: React.FC = () => {
 
             return (
               <div className="space-y-6">
-              <div className="p-6 h-full overflow-y-auto">
-                <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
+              <div className="px-1 sm:px-2 h-full overflow-y-auto">
+                <div className="space-y-6 animate-fade-in text-right text-white" dir="rtl">
                   {/* رأس صفحة الطلبات */}
                   <div
-                    className="flex flex-col md:flex-row justify-between items-start md:items-center merchant-brand-card p-6 rounded-3xl shadow-sm border gap-4"
+                    className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center p-6 rounded-[2rem] shadow-2xl gap-4 relative overflow-hidden group text-white"
                   >
-                    <div>
-                      <h2 className="text-xl font-black text-[#fff700] font-tajawal flex items-center gap-2">
-                        <ClipboardList className="text-[#fff700]" size={24} />
-                        <span>إدارة الطلبات 📦</span>
+                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                      <ClipboardList size={140} />
+                    </div>
+                    <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/20 to-transparent pointer-events-none" />
+                    <div className="relative z-10">
+                      <h2 className="text-xl font-black text-white font-tajawal flex items-center gap-2">
+                        <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                          <ClipboardList className="text-[#fff700]" size={22} />
+                        </span>
+                        <span>{t("merchant.orders.title")}</span>
                       </h2>
-                      <p className="text-xs text-white/80 font-medium mt-1 font-tajawal">
-                        إجمالي الطلبات: {merchantOrders.length} — تتبع وإدارة جميع طلبات متجرك
+                      <p className="text-xs text-white/75 font-medium mt-1 font-tajawal">
+                        {t("merchant.orders.subtitle", { count: merchantOrders.length })}
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-                      <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/20 flex items-center gap-2 shrink-0">
+                    <div className="relative z-10 flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                      <div className="bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/25 flex items-center gap-2 shrink-0">
                         <span className="w-2 h-2 rounded-full bg-[#fff700] animate-pulse"></span>
-                        <span className="hidden sm:inline">تحديث حي ومباشر</span>
-                        <span className="sm:hidden">تحديث حي</span>
+                        <span className="hidden sm:inline">{t("merchant.orders.liveUpdate")}</span>
+                        <span className="sm:hidden">{t("merchant.orders.liveUpdateShort")}</span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerMode("order");
+                          setShowScanner(true);
+                        }}
+                        className="flex-1 sm:flex-none px-4 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl flex items-center justify-center gap-2 shadow-brand-glow hover:opacity-95 active:scale-95 transition-all text-xs"
+                      >
+                        <Camera size={16} />
+                        <span>{t("merchant.orders.scanOrderBtn")}</span>
+                      </button>
                     </div>
                   </div>
 
               {/* تتبع الطلب المحدد من الإشعارات */}
               {targetOrderId && (
-                <div className="merchant-panel-inset p-4 sm:p-5 rounded-2xl flex flex-col sm:flex-row gap-3 items-center justify-between text-right shadow-2xs min-w-0">
-                  <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
+                <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md p-4 sm:p-5 rounded-[2rem] flex flex-col sm:flex-row gap-3 items-center justify-between text-right shadow-lg min-w-0 relative overflow-hidden">
+                  <div className="absolute inset-0 bg-gradient-to-l from-amber-500/15 to-transparent pointer-events-none" />
+                  <div className="relative z-10 flex items-center gap-3 min-w-0 w-full sm:w-auto">
                     <span className="relative flex h-3 w-3 shrink-0">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#fff700] opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-3 w-3 bg-[#fff700]"></span>
                     </span>
                     <div className="min-w-0 flex-1">
-                      <span className="text-xs font-black text-[#fff700] font-tajawal block truncate" title="عرض تفاصيل الطلب المحدد من الإشعارات">عرض تفاصيل الطلب المحدد من الإشعارات</span>
-                      <span className="text-[10px] font-bold text-white/70 font-tajawal truncate block">رقم الطلب: {targetOrderId}</span>
+                      <span className="text-xs font-black text-white font-tajawal block truncate" title="عرض تفاصيل الطلب المحدد من الإشعارات">عرض تفاصيل الطلب المحدد من الإشعارات</span>
+                      <span className="text-[10px] font-bold text-white/70 font-tajawal truncate block">رقم الطلب: #{getOrderSeqId(targetOrderId)}</span>
                     </div>
                   </div>
                   <button 
                     onClick={() => setTargetOrderId(null)} 
-                    className="text-[10px] font-black text-[#E8ECF4] bg-white/10 hover:bg-white/20 px-4 py-2 rounded-2xl border border-white/20 transition-colors cursor-pointer shrink-0 w-full sm:w-auto text-center"
+                    className="relative z-10 text-[10px] font-black text-[#E8ECF4] bg-white/10 hover:bg-white/20 px-4 py-2 rounded-2xl border border-white/25 transition-colors cursor-pointer shrink-0 w-full sm:w-auto text-center"
                   >
                     إلغاء التصفية وعرض الكل
                   </button>
@@ -5027,15 +5746,15 @@ export const MerchantApp: React.FC = () => {
               )}
 
               <div
-                className="p-2.5 rounded-2xl border shadow-sm flex items-center gap-3 merchant-brand-card"
+                className="p-2.5 rounded-2xl welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md shadow-lg flex items-center gap-3"
               >
-                <div className="p-2 merchant-icon-tile rounded-xl">
+                <div className="p-2 bg-white/10 border border-white/20 rounded-xl text-[#fff700]">
                   <Search size={18} />
                 </div>
                 <input
                   type="text"
-                  placeholder="بحث برقم الطلب، اسم الزبون، أو رقم الزبون (#0001)..."
-                  className="w-full bg-[#0B1320] border-none text-[#E8ECF4] rounded-xl py-2 px-4 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-vibrant-purple/40 placeholder:text-slate-500"
+                  placeholder={t("merchant.orders.searchPlaceholder")}
+                  className="w-full bg-[#0B1320]/60 border border-white/10 text-[#E8ECF4] rounded-xl py-2 px-4 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-vibrant-purple/40 placeholder:text-slate-500"
                   value={orderSearchQuery}
                   onChange={(e) => setOrderSearchQuery(e.target.value)}
                 />
@@ -5043,25 +5762,25 @@ export const MerchantApp: React.FC = () => {
 
               {/* شريط الفرز المطور */}
               <div
-                className="flex gap-1 sm:gap-2 p-1.5 sm:p-2 rounded-2xl shadow-xs border overflow-x-auto no-scrollbar w-full relative min-w-0 snap-x merchant-brand-card font-bold"
+                className="flex gap-1 sm:gap-2 p-1.5 sm:p-2 rounded-2xl welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md shadow-lg overflow-x-auto no-scrollbar w-full relative min-w-0 snap-x font-bold"
               >
                 {[
-                  { id: "pending", label: "جديد", count: pendingOrders.length },
+                  { id: "pending", label: t("merchant.orders.tabs.new"), count: pendingOrders.length },
                   {
                     id: "accepted",
-                    label: "تجهيز",
+                    label: t("merchant.orders.tabs.preparing"),
                     count: merchantOrders.filter((o) => o.status === "accepted")
                       .length,
                   },
                   {
                     id: "shipped",
-                    label: "مع المندوب",
+                    label: t("merchant.orders.tabs.withCourier"),
                     count: merchantOrders.filter((o) => o.status === "shipped")
                       .length,
                   },
                   {
                     id: "delivered",
-                    label: "تم الاستلام",
+                    label: t("merchant.orders.tabs.delivered"),
                     count: merchantOrders.filter(
                       (o) =>
                         o.status === "delivered" &&
@@ -5070,7 +5789,7 @@ export const MerchantApp: React.FC = () => {
                   },
                   {
                     id: "returned",
-                    label: "مرتجع",
+                    label: t("merchant.orders.tabs.returned"),
                     count: merchantOrders.filter(
                       (o) =>
                         (o.status === "returned" || o.status === "replaced") &&
@@ -5079,7 +5798,7 @@ export const MerchantApp: React.FC = () => {
                   },
                   {
                     id: "rejected",
-                    label: "مرفوض / ملغي",
+                    label: t("merchant.orders.tabs.rejected"),
                     count: merchantOrders.filter(
                       (o) =>
                         (o.status === "rejected" || o.status === "cancelled") &&
@@ -5095,8 +5814,8 @@ export const MerchantApp: React.FC = () => {
                     }}
                     className={`flex-1 shrink-0 snap-center min-w-max px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[10px] font-black transition-all border border-transparent ${
                       orderFilter === f.id && !targetOrderId
-                        ? "bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white shadow-md shadow-slate-100"
-                        : "text-white/60 hover:bg-white/10 hover:text-[#fff700]"
+                        ? "bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white shadow-brand-glow"
+                        : "text-white/60 hover:bg-white/10 hover:text-white"
                     }`}
                   >
                     {f.label} <span className={`inline-flex items-center justify-center min-w-[20px] h-5 rounded-md px-1 ml-1 ${orderFilter === f.id && !targetOrderId ? 'bg-white/20' : 'bg-white/10 text-[#E8ECF4]'}`}>{f.count}</span>
@@ -5105,28 +5824,29 @@ export const MerchantApp: React.FC = () => {
               </div>
 
               {canClearInbox && (
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 merchant-panel-inset border border-white/15 rounded-2xl p-4">
-                  <div className="text-right min-w-0">
-                    <p className="text-xs font-black text-[#fff700]">تصفير قائمة هذا القسم</p>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 welcome-card-glow welcome-card-border-glow bg-white/5 border border-rose-400/30 backdrop-blur-md rounded-[2rem] p-4 shadow-lg relative overflow-hidden">
+                  <div className="absolute inset-0 bg-gradient-to-l from-rose-600/15 to-transparent pointer-events-none" />
+                  <div className="relative z-10 text-right min-w-0">
+                    <p className="text-xs font-black text-white">{t("merchant.orders.clearInbox.title")}</p>
                     <p className="text-[10px] text-white/65 font-bold mt-1 leading-relaxed">
-                      يخفي الطلبات الظاهرة هنا ويصفر رقم التبويب ({clearableInboxOrders.length}). التقارير والمحفظة لا تتأثر.
+                      {t("merchant.orders.clearInbox.body", { count: clearableInboxOrders.length })}
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={handleClearInbox}
                     disabled={isClearingInbox}
-                    className="shrink-0 px-5 py-3 rounded-xl bg-white/10 hover:bg-rose-500/20 border border-rose-400/30 text-rose-200 font-black text-xs flex items-center justify-center gap-2 transition disabled:opacity-60"
+                    className="relative z-10 shrink-0 px-5 py-3 rounded-xl bg-white/10 hover:bg-rose-500/20 border border-rose-400/30 text-rose-200 font-black text-xs flex items-center justify-center gap-2 transition disabled:opacity-60"
                   >
                     {isClearingInbox ? (
                       <>
                         <Loader2 size={16} className="animate-spin" />
-                        جاري التصفير...
+                        {t("merchant.orders.clearInbox.clearing")}
                       </>
                     ) : (
                       <>
                         <Trash2 size={16} />
-                        تصفير القائمة
+                        {t("merchant.orders.clearInbox.clearBtn")}
                       </>
                     )}
                   </button>
@@ -5135,50 +5855,41 @@ export const MerchantApp: React.FC = () => {
 
               {displayOrdersList.length === 0 ? (
                 <div
-                  className="py-20 text-center rounded-[3rem] border border-dashed border-white/20 merchant-brand-card"
+                  className="py-20 text-center rounded-[2rem] welcome-card-glow welcome-card-border-glow bg-white/5 border border-dashed border-white/25 backdrop-blur-md shadow-lg text-white"
                 >
                   <ClipboardList
                     size={48}
                     className="mx-auto mb-4 opacity-60 text-[#fff700]"
                   />
-                  <p className="font-bold text-brand-white">
+                  <p className="font-bold text-white/80">
                     {(orderFilter === "delivered" || orderFilter === "returned" || orderFilter === "rejected") &&
                     merchantOrders.some(
                       (o) =>
                         matchesFilter(o) &&
                         !isOrderShownInMerchantInbox(o, clearedOrderIds),
                     )
-                      ? "تم تصفير هذه القائمة — الطلبات ما زالت محسوبة في التقارير"
-                      : "لا توجد طلبات في هذا القسم حالياً"}
+                      ? t("merchant.orders.clearInbox.clearedEmpty")
+                      : t("merchant.orders.clearInbox.emptySection")}
                   </p>
                 </div>
               ) : (
-                <motion.div 
-                   className="flex flex-col gap-4 w-full"
-                   initial="hidden"
-                   animate="visible"
-                   variants={{
-                     hidden: { opacity: 0 },
-                     visible: {
-                       opacity: 1,
-                       transition: { staggerChildren: 0.05 }
-                     }
-                   }}
-                >
-                  {displayOrdersList.map((o) => (
-                      <motion.div
-                        key={o.id}
-                        variants={{
-                           hidden: { opacity: 0, y: 10 },
-                           visible: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
-                        }}
-                        className="merchant-brand-card rounded-[2rem] border shadow-xs hover:shadow-md transition-all duration-300 hover:-translate-y-0.5 overflow-hidden flex flex-col min-w-0 w-full"
+                <VirtualizedList
+                  items={displayOrdersList}
+                  estimateSize={280}
+                  overscan={4}
+                  maxHeight="72vh"
+                  getItemKey={(o) => o.id}
+                  className="w-full"
+                  renderItem={(o) => (
+                      <div className="pb-4 w-full">
+                      <div
+                        className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] shadow-lg hover:bg-white/10 hover:shadow-2xl transition-all duration-300 overflow-hidden flex flex-col min-w-0 w-full text-white"
                       >
                         {/* ترويسة الفاتورة مدمجة لتوفير المساحة */}
-                        <div className="p-3 sm:p-4 border-b border-white/10 bg-white/5 flex flex-wrap justify-between items-center gap-3 min-w-0 w-full">
+                        <div className="p-3 sm:p-4 border-b border-white/15 bg-white/5 flex flex-wrap justify-between items-center gap-3 min-w-0 w-full">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center flex-wrap gap-2 mb-1">
-                              <span className="text-[10px] report-stat-badge px-2 py-0.5 rounded-md font-black whitespace-nowrap shrink-0 flex items-center gap-1">
+                              <span className="text-[10px] bg-white/10 text-[#E8ECF4] border border-white/15 px-2 py-0.5 rounded-md font-black whitespace-nowrap shrink-0 flex items-center gap-1">
                                 <span>#{getOrderSeqId(o.id)}</span>
                                 <CopyButton text={getOrderSeqId(o.id)} size={9} />
                               </span>
@@ -5186,12 +5897,12 @@ export const MerchantApp: React.FC = () => {
                                 {formatSafeDateTimeString(o.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}
                               </span>
                             </div>
-                            <h3 className="text-sm font-black text-[#fff700] flex items-center gap-1 truncate" title={o.customerName}>
+                            <h3 className="text-sm font-black text-white flex items-center gap-1 truncate" title={o.customerName}>
                               <span>{o.customerName}</span>
                               <CopyButton text={o.customerName} size={10} />
                               {o.returnReason?.includes("استبدال") && (
                                 <span className="mr-2 inline-block text-[9px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-400/30 whitespace-nowrap shrink-0">
-                                  استبدال 🔄
+                                  {t("merchant.orders.card.replacement")}
                                 </span>
                               )}
                             </h3>
@@ -5206,12 +5917,12 @@ export const MerchantApp: React.FC = () => {
                             </div>
                           </div>
                           
-                          <div className="text-left shrink-0 merchant-panel-inset p-2 rounded-xl border border-white/10 shadow-sm">
+                          <div className="text-left shrink-0 bg-white/5 border border-white/15 p-2 rounded-xl shadow-sm">
                             <div className="text-[8px] font-black text-white/50 uppercase mb-0.5">
-                              الإجمالي
+                              {t("merchant.orders.card.total")}
                             </div>
                             <div className="text-sm font-black text-[#fff700]">
-                              {(o.total || 0).toLocaleString()} <span className="text-[9px] font-bold">د.ع</span>
+                              {(o.total || 0).toLocaleString()} <span className="text-[9px] font-bold">{t("merchant.delivery.currency")}</span>
                             </div>
                           </div>
                         </div>
@@ -5220,10 +5931,10 @@ export const MerchantApp: React.FC = () => {
                         <div className="flex flex-col md:flex-row min-w-0 w-full">
                           {/* المنتجات والتفاصيل */}
                           <div className="flex-1 p-3 sm:p-4 min-w-0">
-                            <div className="flex items-start gap-2 mb-3 merchant-panel-inset p-2 rounded-xl border border-white/10 min-w-0">
+                            <div className="flex items-start gap-2 mb-3 bg-white/5 border border-white/15 p-2 rounded-xl min-w-0">
                               <MapPin size={14} className="text-[#fff700] mt-0.5 shrink-0" />
                               <div className="min-w-0 flex-1">
-                                <p className="text-[9px] font-black text-white/50 mb-0.5">التوصيل</p>
+                                <p className="text-[9px] font-black text-white/50 mb-0.5">{t("merchant.orders.card.delivery")}</p>
                                 <p className="text-[10px] font-bold text-[#E8ECF4] whitespace-normal break-words" title={`${o.customerProvince} - ${o.customerAddress}`}>
                                   {o.customerProvince} - {o.customerAddress}
                                 </p>
@@ -5237,19 +5948,38 @@ export const MerchantApp: React.FC = () => {
                                       <div className="absolute inset-0 z-[400] bg-transparent"></div>
                                     </div>
                                     <div className="flex gap-2">
-                                      <button 
-                                        onClick={(e) => { e.preventDefault(); openNativeMapApp((o as any).customerLat, (o as any).customerLng, 'google'); }}
-                                        className="flex-1 flex items-center justify-center gap-1 text-[8px] font-black bg-white/10 border border-white/20 text-[#E8ECF4] px-2 py-2 rounded-lg shadow-sm hover:bg-white/20 transition-colors"
+                                      <button
+                                        type="button"
+                                        onClick={async (e) => {
+                                          e.preventDefault();
+                                          const lat = Number((o as any).customerLat);
+                                          const lng = Number((o as any).customerLng);
+                                          if (!lat || !lng) {
+                                            showToast("error", t("merchant.orders.map.shareLocation"), t("merchant.orders.map.noCoordinates"));
+                                            return;
+                                          }
+                                          const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+                                          const address = `${o.customerProvince || ""} - ${o.customerAddress || ""}`.trim();
+                                          const title = t("merchant.orders.map.shareLocationTitle");
+                                          const body = t("merchant.orders.map.shareLocationText", {
+                                            orderId: getOrderSeqId(o.id),
+                                            address,
+                                          });
+                                          const text = `${body}\n${mapsUrl}`;
+
+                                          setShareText(text);
+                                          setShareConfig({ type: "location", data: { url: mapsUrl } });
+
+                                          const result = await tryNativeShare({ title, text, url: mapsUrl });
+                                          if (result === "shared" || result === "cancelled") return;
+
+                                          // على الويب أو عند تعذر مشاركة النظام: قائمة واتساب والتطبيقات
+                                          setShowShareModal(true);
+                                        }}
+                                        className="flex-1 flex items-center justify-center gap-1.5 text-[10px] font-black bg-white/10 border border-white/20 text-[#E8ECF4] px-2 py-2.5 rounded-lg shadow-sm hover:bg-white/20 transition-colors"
                                       >
-                                        <MapPin size={10} className="text-red-400" />
-                                        Maps
-                                      </button>
-                                      <button 
-                                        onClick={(e) => { e.preventDefault(); openNativeMapApp((o as any).customerLat, (o as any).customerLng, 'waze'); }}
-                                        className="flex-1 flex items-center justify-center gap-1 text-[8px] font-black bg-white/10 border border-white/20 text-[#00a9e0] px-2 py-2 rounded-lg shadow-sm hover:bg-white/20 transition-colors"
-                                      >
-                                        <Car size={10} />
-                                        Waze
+                                        <Share2 size={12} className="text-[#fff700]" />
+                                        {t("merchant.orders.map.shareLocation")}
                                       </button>
                                     </div>
                                   </div>
@@ -5258,8 +5988,8 @@ export const MerchantApp: React.FC = () => {
                             </div>
                             
                             
-                            <p className="text-[9px] font-black text-[#fff700] mb-2 border-r-2 border-white/20 pr-2">
-                              المنتجات
+                            <p className="text-[9px] font-black text-white/80 mb-2 border-r-2 border-white/20 pr-2">
+                              {t("merchant.orders.card.products")}
                             </p>
                             <div className="space-y-1.5 max-h-[100px] overflow-y-auto no-scrollbar pr-1">
                               {o.items.map((it, idx) => (
@@ -5284,33 +6014,33 @@ export const MerchantApp: React.FC = () => {
 
                             <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5 min-w-0">
                                 <div className="flex justify-between items-center text-[9px]">
-                                    <span className="font-bold text-white/60">سعر المنتجات:</span>
-                                    <span className="font-black text-[#E8ECF4]">{(o.subtotal || 0).toLocaleString()} د.ع</span>
+                                    <span className="font-bold text-white/60">{t("merchant.orders.card.productsPrice")}</span>
+                                    <span className="font-black text-[#E8ECF4]">{(o.subtotal || 0).toLocaleString()} {t("merchant.delivery.currency")}</span>
                                 </div>
                                 <div className="flex justify-between items-center text-[9px]">
-                                    <span className="font-bold text-white/60">سعر التوصيل:</span>
-                                    <span className="font-black text-[#E8ECF4]">{(o.deliveryPrice || 0).toLocaleString()} د.ع</span>
+                                    <span className="font-bold text-white/60">{t("merchant.orders.card.deliveryPrice")}</span>
+                                    <span className="font-black text-[#E8ECF4]">{(o.deliveryPrice || 0).toLocaleString()} {t("merchant.delivery.currency")}</span>
                                 </div>
                                 {(o.discountAmount || 0) > 0 && (
                                     <div className="flex justify-between items-center text-[9px]">
                                         <div className="flex items-center gap-1.5">
-                                            <span className="font-bold text-emerald-400">الخصم:</span>
+                                            <span className="font-bold text-emerald-400">{t("merchant.orders.card.discount")}</span>
                                             <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold ${
                                               o.discountSponsor === 'ADMIN' 
                                                 ? 'bg-blue-500/20 text-blue-300 border border-blue-400/30' 
                                                 : 'bg-purple-500/20 text-purple-300 border border-purple-400/30'
                                             }`}>
-                                              {o.discountSponsor === 'ADMIN' ? 'تطبيق محلك' : 'المتجر'}
+                                              {o.discountSponsor === 'ADMIN' ? t("merchant.orders.card.sponsoredByApp") : t("merchant.orders.card.sponsoredByStore")}
                                             </span>
                                         </div>
-                                        <span className="font-black text-emerald-400">- {(o.discountAmount || 0).toLocaleString()} د.ع</span>
+                                        <span className="font-black text-emerald-400">- {(o.discountAmount || 0).toLocaleString()} {t("merchant.delivery.currency")}</span>
                                     </div>
                                 )}
                             </div>
 
                             {(o.rejectionReason || o.returnReason || o.status === "cancelled") && (
                               <div className="mt-3 p-2 bg-rose-500/15 rounded-lg border border-rose-400/30 text-[9px] font-bold text-rose-300 truncate">
-                                {o.status === "cancelled" ? "ألغاه الزبون خلال مهلة الإلغاء ⚠️" : o.rejectionReason ? `رفض: ${o.rejectionReason}` : `إرجاع/استبدال: ${o.returnReason}`}
+                                {o.status === "cancelled" ? t("merchant.orders.card.cancelledByCustomer") : o.rejectionReason ? t("merchant.orders.card.rejectionPrefix", { reason: o.rejectionReason }) : t("merchant.orders.card.returnPrefix", { reason: o.returnReason ?? "" })}
                               </div>
                             )}
                           </div>
@@ -5322,17 +6052,17 @@ export const MerchantApp: React.FC = () => {
                                 <button 
                                   onClick={() => void runOrderStatusUpdate(o.id, "accepted")}
                                   disabled={updatingOrderId === o.id} 
-                                  className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-xl shadow-[0_4px_12px_rgba(153,82,255,0.25)] hover:shadow-[0_8px_20px_rgba(153,82,255,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
+                                  className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-xl shadow-brand-glow font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                                 >
                                   <Check className="group-hover:scale-125 transition-transform duration-300 shrink-0" size={16} /> 
-                                  <span>قبول الطلب</span>
+                                  <span>{t("merchant.orders.actions.accept")}</span>
                                 </button>
                                 <button 
                                   onClick={() => setActionModal({ show: true, orderId: o.id, type: "rejected" })} 
                                   className="group flex-1 py-2.5 bg-white/10 text-rose-300 border border-rose-400/30 hover:border-rose-400/50 hover:bg-rose-500/15 rounded-xl font-bold text-[11px] sm:text-xs flex items-center justify-center gap-2 shadow-xs hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                                 >
                                   <X className="group-hover:rotate-90 transition-transform duration-300 shrink-0" size={16} /> 
-                                  <span>رفض الطلب</span>
+                                  <span>{t("merchant.orders.actions.reject")}</span>
                                 </button>
                               </>
                             )}
@@ -5343,7 +6073,7 @@ export const MerchantApp: React.FC = () => {
                                 className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl shadow-[0_4px_12px_rgba(245,158,11,0.25)] hover:shadow-[0_8px_20px_rgba(245,158,11,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                               >
                                 <Truck className="group-hover:translate-x-1 transition-transform duration-300 shrink-0" size={16} /> 
-                                <span>شحن الطلب 🚚</span>
+                                <span>{t("merchant.orders.actions.ship")}</span>
                               </button>
                             )}
                             {o.status === "shipped" && (
@@ -5354,7 +6084,7 @@ export const MerchantApp: React.FC = () => {
                                   className="relative overflow-hidden group flex-1 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-xl shadow-[0_4px_12px_rgba(16,185,129,0.25)] hover:shadow-[0_8px_20px_rgba(16,185,129,0.35)] font-black text-[11px] sm:text-xs flex items-center justify-center gap-2 hover:scale-[1.03] active:scale-[0.97] transition-all duration-300 w-full min-w-[100px] cursor-pointer"
                                 >
                                   <CheckCircle className="group-hover:scale-125 transition-transform duration-300 shrink-0" size={16} /> 
-                                  <span>تم الاستلام ✅</span>
+                                  <span>{t("merchant.orders.actions.delivered")}</span>
                                 </button>
                                 <div className="flex gap-2 w-full flex-wrap sm:flex-nowrap">
                                   <button 
@@ -5362,14 +6092,14 @@ export const MerchantApp: React.FC = () => {
                                     className="group flex-1 py-2 bg-white/10 text-[#E8ECF4] border border-white/20 rounded-xl font-bold text-[10px] hover:bg-white/20 hover:border-white/30 active:scale-95 transition-all flex items-center justify-center gap-1 min-w-[70px] cursor-pointer"
                                   >
                                     <RefreshCw size={12} className="group-hover:rotate-180 transition-transform duration-500 shrink-0 text-amber-400" /> 
-                                    <span>تبديل</span>
+                                    <span>{t("merchant.orders.actions.replace")}</span>
                                   </button>
                                   <button 
                                     onClick={() => handleReturnOrder(o.id)} 
                                     className="group flex-1 py-2 bg-white/10 text-rose-300 border border-rose-400/30 rounded-xl font-bold text-[10px] hover:bg-rose-500/15 hover:border-rose-400/50 active:scale-95 transition-all flex items-center justify-center gap-1 min-w-[70px] cursor-pointer"
                                   >
                                     <RefreshCw size={12} className="group-hover:-rotate-90 transition-transform shrink-0" /> 
-                                    <span>إرجاع</span>
+                                    <span>{t("merchant.orders.actions.return")}</span>
                                   </button>
                                 </div>
                               </>
@@ -5381,21 +6111,23 @@ export const MerchantApp: React.FC = () => {
                                 className="group w-full py-2 bg-white/10 text-[#fff700] hover:bg-white/20 rounded-xl font-extrabold text-[10.5px] flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-95 transition-all cursor-pointer border border-white/10"
                               >
                                 <Printer size={14} className="text-[#fff700] group-hover:scale-110 transition-transform duration-300 shrink-0" /> 
-                                <span className="truncate">ملصق شحن</span>
+                                <span className="truncate">{t("merchant.orders.actions.printLabel")}</span>
                               </button>
                               <button 
                                 onClick={() => handleWhatsAppShare(o)}
-                                className="group w-full py-2 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-400/30 hover:border-emerald-400/50 rounded-xl font-extrabold text-[10.5px] flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-95 transition-all cursor-pointer"
+                                disabled={isSharingInvoice}
+                                className="group w-full py-2 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-400/30 hover:border-emerald-400/50 rounded-xl font-extrabold text-[10.5px] flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-95 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-wait"
                               >
                                 <MessageCircle size={14} className="text-emerald-400 group-hover:scale-110 transition-transform duration-300 shrink-0" /> 
-                                <span className="truncate">مشاركة عبر الواتساب</span>
+                                <span className="truncate">{t("merchant.orders.actions.shareWhatsApp")}</span>
                               </button>
                             </div>
                           </div>
                         </div>
-                      </motion.div>
-                    ))}
-                </motion.div>
+                      </div>
+                      </div>
+                  )}
+                />
               )}
                 </div>
               </div>
@@ -5405,76 +6137,43 @@ export const MerchantApp: React.FC = () => {
 
 
 
-          {/* أكواد الخصم — صفحة مستقلة */}
-          {activeTab === "mystore" && myStoreSubPage === "promo" && (
-            <div className="space-y-6">
-              <div className="p-6 h-full overflow-y-auto">
-                <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center merchant-brand-card p-6 rounded-3xl shadow-sm border gap-4 relative overflow-hidden group">
-                    <div className="absolute top-0 left-0 p-4 opacity-10 group-hover:scale-110 transition-transform pointer-events-none">
-                      <Gift size={80} className="text-[#fff700]" />
-                    </div>
-                    <div className="relative z-10">
-                      <h2 className="text-xl font-black text-[#fff700] font-tajawal flex items-center gap-2">
-                        <Gift className="text-[#fff700]" size={24} />
-                        <span>أكواد الخصم 🎫</span>
-                      </h2>
-                      <p className="text-xs text-white/80 font-medium mt-1 font-tajawal max-w-md">
-                        أنشئ أكواد خصم مخصصة، حدّد الجمهور المستهدف، وتابع استخدامها لحظياً.
-                      </p>
-                    </div>
-                  </div>
-
-                  <MerchantPromoCodesManager
-                    storeId={currentMerchant.id}
-                    promos={merchantPromos}
-                    allPromoCodes={promoCodes}
-                    createPromoCode={createPromoCode}
-                    togglePromoCodeStatus={togglePromoCodeStatus}
-                    deletePromoCode={deletePromoCode}
-                    modalOpen={promoModal}
-                    onModalOpenChange={setPromoModal}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* التسويق (Marketing) */}
           {(activeTab === "marketing" || (activeTab === "mystore" && myStoreSubPage === "marketing")) && (
             <div className="space-y-6">
-              <div className="p-6 h-full overflow-y-auto">
-                <div className="space-y-8 animate-fade-in text-right reports-page" dir="rtl">
+              <div className="px-1 sm:px-2 h-full overflow-y-auto">
+                <div className="merchant-glass-page reports-page space-y-6 animate-fade-in text-right text-white" dir="rtl">
                   {/* Marketing Header */}
                   <div
-                    className="flex flex-col md:flex-row justify-between items-start md:items-center merchant-brand-card p-6 rounded-3xl shadow-sm border gap-4 relative overflow-hidden group"
+                    className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center p-6 rounded-[2rem] shadow-2xl gap-4 relative overflow-hidden group"
                   >
-                    <div className="absolute top-0 left-0 p-4 opacity-10 group-hover:scale-110 transition-transform pointer-events-none">
-                      <Megaphone size={80} className="text-[#fff700]" />
+                    <div className="absolute -top-10 -right-10 text-white/10 group-hover:scale-110 transition-transform duration-500 pointer-events-none">
+                      <Megaphone size={140} />
                     </div>
+                    <div className="absolute inset-0 bg-gradient-to-l from-rose-600/20 to-transparent pointer-events-none" />
                     <div className="relative z-10">
-                      <h2 className="text-xl font-black text-[#fff700] font-tajawal flex items-center gap-2">
-                        <Megaphone className="text-[#fff700]" size={24} />
-                        <span>أدوات التسويق 📣</span>
+                      <h2 className="text-xl font-black text-white font-tajawal flex items-center gap-2">
+                        <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 backdrop-blur-sm rounded-xl">
+                          <Megaphone className="text-[#fff700]" size={22} />
+                        </span>
+                        <span>{t('merchant.marketingPage.title')}</span>
                       </h2>
-                      <p className="text-xs text-white/80 font-medium mt-1 font-tajawal max-w-md">
-                        صمم عروضك المرئية، أنشئ أكواد الخصم، وشارك متجرك لجلب زبائن جدد.
+                      <p className="text-xs text-white/75 font-medium mt-1 font-tajawal max-w-md">
+                        {t('merchant.marketingPage.subtitle')}
                       </p>
                     </div>
-                    <div className="relative z-10 bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/20 flex items-center gap-2 shrink-0">
+                    <div className="relative z-10 bg-white/10 text-[#E8ECF4] text-xs font-bold px-4 py-2.5 rounded-xl border border-white/25 flex items-center gap-2 shrink-0">
                       <span className="w-2 h-2 rounded-full bg-[#fff700] animate-pulse"></span>
-                      <span className="hidden sm:inline">تحديث حي ومباشر</span>
-                      <span className="sm:hidden">تحديث حي</span>
+                      <span className="hidden sm:inline">{t('merchant.orders.liveUpdate')}</span>
+                      <span className="sm:hidden">{t('merchant.orders.liveUpdateShort')}</span>
                     </div>
                   </div>
 
                   {/* KPI Cards */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                     {[
-                      { label: "أكواد الخصم النشطة", val: merchantPromos.filter((p) => p.status === "active").length, icon: <Gift size={18} className="stroke-[2.5]" /> },
-                      { label: "زيارات روابط المشاركة", val: marketingShareStats.totalVisits, icon: <Activity size={18} className="stroke-[2.5]" /> },
-                      { label: "منتجات منشورة", val: merchantProducts.filter((p) => p.status === "published").length, icon: <Package size={18} className="stroke-[2.5]" /> },
-                      { label: "فعاليات فلاش سيلز", val: flashSales.filter((s) => s.status !== "ended" && s.status !== "paused").length, icon: <Zap size={18} className="stroke-[2.5]" /> },
+                      { label: t('merchant.marketingPage.kpi.promoCodes'), val: merchantPromos.filter((p) => p.status === "active").length, icon: <Gift size={18} className="stroke-[2.5]" /> },
+                      { label: t('merchant.marketingPage.kpi.publishedProducts'), val: merchantProducts.filter((p) => p.status === "published").length, icon: <Package size={18} className="stroke-[2.5]" /> },
+                      { label: t('merchant.marketingPage.kpi.flashSales'), val: flashSales.filter((s) => s.status !== "ended" && s.status !== "paused").length, icon: <Zap size={18} className="stroke-[2.5]" /> },
                     ].map((s, i) => (
                       <div key={i} className="p-5 rounded-[2rem] border shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between group merchant-brand-card relative overflow-hidden">
                         <div className="flex items-center justify-between mb-2">
@@ -5506,20 +6205,20 @@ export const MerchantApp: React.FC = () => {
                           <div>
                             <h3 className="text-lg font-black text-[#fff700] flex items-center gap-2">
                               <Percent size={20} className="text-[#fff700]" />
-                              خصم شامل على المنتجات
+                              {t("merchant.marketingPage.bulk.title")}
                             </h3>
                             <p className="text-xs text-white/70 mt-1 max-w-lg">
-                              طبّق نسبة خصم واحدة على جميع منتجاتك دفعة واحدة — مثالي للعروض الموسمية وتصفية المخزون.
+                              {t("merchant.marketingPage.bulk.subtitle")}
                             </p>
                           </div>
                           <span className="text-[10px] font-bold text-[#fff700] bg-white/10 border border-white/20 px-3 py-1.5 rounded-full shrink-0">
-                            {bulkTargets.length} منتج في النطاق
+                            {t("merchant.marketingPage.bulk.scopeCount", { count: bulkTargets.length })}
                           </span>
                         </div>
 
                         <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-4 merchant-panel-inset border border-white/10 p-4 rounded-2xl">
                           <div className="space-y-1.5">
-                            <label className="text-xs font-bold text-[#fff700]">نسبة الخصم (%)</label>
+                            <label className="text-xs font-bold text-[#fff700]">{t("merchant.marketingPage.bulk.discountLabel")}</label>
                             <input
                               type="number"
                               min={1}
@@ -5527,11 +6226,11 @@ export const MerchantApp: React.FC = () => {
                               value={bulkStoreDiscountPercent}
                               onChange={(e) => setBulkStoreDiscountPercent(Number(e.target.value))}
                               className="w-full bg-[#0B1320] border border-white/10 rounded-xl px-4 py-3 text-sm font-black text-[#fff700] focus:ring-2 focus:ring-vibrant-purple/40"
-                              placeholder="مثال: 20"
+                              placeholder={t("merchant.marketingPage.bulk.discountPlaceholder")}
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-xs font-bold text-[#fff700]">نطاق التطبيق</label>
+                            <label className="text-xs font-bold text-[#fff700]">{t("merchant.marketingPage.bulk.scopeLabel")}</label>
                             <select
                               value={bulkStoreDiscountScope}
                               onChange={(e) =>
@@ -5539,31 +6238,31 @@ export const MerchantApp: React.FC = () => {
                                   e.target.value as "published" | "all" | "draft" | "archived",
                                 )
                               }
-                              className="w-full bg-[#0B1320] border border-white/10 rounded-xl px-4 py-3 text-sm font-medium text-[#E8ECF4] focus:ring-2 focus:ring-vibrant-purple/40"
+                              className="welcome-select welcome-select--sm"
                             >
-                              <option value="published">المنتجات المنشورة فقط</option>
-                              <option value="all">كل المنتجات</option>
-                              <option value="draft">المسودات فقط</option>
-                              <option value="archived">الأرشيف فقط</option>
+                              <option value="published">{t("merchant.marketingPage.bulk.scopePublished")}</option>
+                              <option value="all">{t("merchant.marketingPage.bulk.scopeAll")}</option>
+                              <option value="draft">{t("merchant.marketingPage.bulk.scopeDraft")}</option>
+                              <option value="archived">{t("merchant.marketingPage.bulk.scopeArchived")}</option>
                             </select>
                           </div>
                         </div>
 
                         <div className="relative z-10 grid grid-cols-1 sm:grid-cols-3 gap-3">
                           <div className="merchant-panel-inset border border-white/10 rounded-xl p-3 text-center">
-                            <p className="text-[9px] text-white/60 font-bold">منتجات مستهدفة</p>
+                            <p className="text-[9px] text-white/60 font-bold">{t("merchant.marketingPage.bulk.statsTarget")}</p>
                             <p className="text-lg font-black text-brand-white mt-1">{bulkTargets.length}</p>
                           </div>
                           <div className="merchant-panel-inset border border-white/10 rounded-xl p-3 text-center">
-                            <p className="text-[9px] text-white/60 font-bold">بخصم حالياً</p>
+                            <p className="text-[9px] text-white/60 font-bold">{t("merchant.marketingPage.bulk.statsDiscounted")}</p>
                             <p className="text-lg font-black text-[#fff700] mt-1">{discountedInScope}</p>
                           </div>
                           <div className="merchant-panel-inset border border-white/10 rounded-xl p-3 text-center">
-                            <p className="text-[9px] text-white/60 font-bold">معاينة (أول منتج)</p>
+                            <p className="text-[9px] text-white/60 font-bold">{t("merchant.marketingPage.bulk.statsPreview")}</p>
                             {sample && previewFinal !== null ? (
                               <p className="text-xs font-black text-brand-white mt-1 leading-snug">
                                 <span className="line-through text-white/50 block">{sample.price.toLocaleString()}</span>
-                                <span className="text-[#fff700]">{previewFinal.toLocaleString()} د.ع</span>
+                                <span className="text-[#fff700]">{previewFinal.toLocaleString()} {t("common.currency")}</span>
                               </p>
                             ) : (
                               <p className="text-xs text-white/50 mt-1">—</p>
@@ -5583,7 +6282,7 @@ export const MerchantApp: React.FC = () => {
                             ) : (
                               <Percent size={18} />
                             )}
-                            تطبيق الخصم على الكل
+                            {t("merchant.marketingPage.bulk.applyBtn")}
                           </button>
                           <button
                             type="button"
@@ -5592,75 +6291,64 @@ export const MerchantApp: React.FC = () => {
                             className="flex-1 py-3 rounded-2xl bg-white/10 border border-white/20 text-[#E8ECF4] text-sm font-black flex items-center justify-center gap-2 hover:bg-white/15 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <RefreshCw size={18} />
-                            إلغاء الخصم من الكل
+                            {t("merchant.marketingPage.bulk.removeBtn")}
                           </button>
                         </div>
                       </div>
                     );
                   })()}
 
-                  {/* مشاركة المتجر */}
-                  <div className="merchant-brand-card p-6 rounded-[2.5rem] border shadow-sm relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform pointer-events-none">
-                      <Share2 size={64} className="text-[#fff700]" />
-                    </div>
-                    <div className="relative z-10">
-                      <h4 className="text-lg font-black text-[#fff700] mb-2 flex items-center gap-2">
-                        <Share2 size={20} className="text-[#fff700]" />
-                        شارك متجرك 📣
-                      </h4>
-                      <div className="flex items-center gap-1.5 mb-3 bg-[#0B1320] border border-white/10 p-2.5 rounded-xl text-xs font-mono text-[#E8ECF4] select-all max-w-md">
-                        <span className="truncate">{buildStoreShareUrl(currentMerchant?.id || "")}</span>
-                        <CopyButton text={buildStoreShareUrl(currentMerchant?.id || "")} size={11} className="shrink-0" />
-                      </div>
-                      <p className="text-xs text-brand-white mb-5 leading-relaxed max-w-lg">
-                        شارك رابط متجرك على واتساب، إنستغرام، أو تيك توك لجذب متابعين جدد وزيادة مبيعاتك.
-                      </p>
-                      <button
-                        onClick={() => openShareModal("store", currentMerchant)}
-                        className="w-full sm:w-auto px-8 py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl font-black text-sm shadow-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-                      >
-                        <Share2 size={18} />
-                        مشاركة رابط المتجر
-                      </button>
-                    </div>
-                  </div>
-
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Suspense fallback={<div className="rounded-[2rem] p-6 h-48 bg-white/5 animate-pulse" />}>
                   <PromoBannerBuilderLazy
                     storeId={currentMerchant.id}
                     initialData={{
-                      title: currentMerchant.promoBanner?.title || "عرض خاص!",
+                      title: currentMerchant.promoBanner?.title || t("merchant.banner.defaultTitle"),
                       subtitle:
                         currentMerchant.promoBanner?.subtitle ||
-                        "خصم 20% على جميع المنتجات لفترة محدودة",
+                        t("merchant.banner.defaultSubtitle"),
                       backgroundColor: currentMerchant.promoBanner?.backgroundColor || "#7B3DFF",
                       textColor: currentMerchant.promoBanner?.textColor || "#ffffff",
                       isActive: currentMerchant.promoBanner?.isActive || false,
                     }}
                     onSave={handlePromoBannerSave}
                     onToggleActive={async (active) => {
-                      const next = {
-                        title: currentMerchant.promoBanner?.title || "عرض خاص!",
-                        subtitle:
-                          currentMerchant.promoBanner?.subtitle ||
-                          "خصم 20% على جميع المنتجات لفترة محدودة",
-                        backgroundColor: currentMerchant.promoBanner?.backgroundColor || "#7B3DFF",
-                        textColor: currentMerchant.promoBanner?.textColor || "#ffffff",
-                        isActive: active,
-                      };
-                      await updateStoreProfile({ promoBanner: next });
-                      if (currentMerchant?.id) {
-                        await addNotification({
-                          userId: currentMerchant.id,
-                          role: "merchant",
-                          title: active ? "تم تفعيل البانر" : "تم إيقاف البانر",
-                          message: active
-                            ? "تم تفعيل عرض البانر في متجرك"
-                            : "تم إيقاف عرض البانر مؤقتاً",
-                          type: "system",
-                        });
+                      try {
+                        const next = {
+                          title: currentMerchant.promoBanner?.title || t("merchant.banner.defaultTitle"),
+                          subtitle:
+                            currentMerchant.promoBanner?.subtitle ||
+                            t("merchant.banner.defaultSubtitle"),
+                          backgroundColor: currentMerchant.promoBanner?.backgroundColor || "#7B3DFF",
+                          textColor: currentMerchant.promoBanner?.textColor || "#ffffff",
+                          isActive: active,
+                        };
+                        await updateStoreProfile({ promoBanner: next });
+                        showToast(
+                          "success",
+                          active ? t("merchant.banner.toggleOnTitle") : t("merchant.banner.toggleOffTitle"),
+                          active ? t("merchant.banner.toggleOnBody") : t("merchant.banner.toggleOffBody"),
+                        );
+                        if (currentMerchant?.id) {
+                          const bannerKey = active ? "merchant.bannerOn" : "merchant.bannerOff";
+                          const bannerContent = buildNotificationContent(
+                            adminSettings as Record<string, unknown>,
+                            bannerKey,
+                          );
+                          if (bannerContent) {
+                            await addNotification({
+                              userId: currentMerchant.id,
+                              role: "merchant",
+                              title: bannerContent.title,
+                              message: bannerContent.message,
+                              type: "system",
+                              templateKey: bannerKey,
+                              ...notificationDeliveryFields(adminSettings as Record<string, unknown>, bannerKey),
+                            });
+                          }
+                        }
+                      } catch {
+                        showToast("error", t("merchant.banner.toggleFailedTitle"), t("merchant.banner.toggleFailedBody"));
                       }
                     }}
                   />
@@ -5674,9 +6362,9 @@ export const MerchantApp: React.FC = () => {
                   <div className="relative z-10">
                     <h3 className="text-lg font-black text-[#fff700] mb-1 flex items-center gap-2">
                       <div className="p-2 bg-white/10 rounded-xl"><Share2 size={18} className="text-[#fff700]" /></div>
-                      الربط مع وسائل التواصل
+                      {t("merchant.marketingPage.share.title")}
                     </h3>
-                    <p className="text-xs text-white/80 font-medium">شارك رابط متجرك أو رابط منتج محدد مباشرة على قصص الإنستغرام، واتساب، أو تيك توك.</p>
+                    <p className="text-xs text-white/80 font-medium">{t("merchant.marketingPage.share.subtitle")}</p>
                   </div>
 
                   <div className="space-y-4 relative z-10">
@@ -5684,12 +6372,12 @@ export const MerchantApp: React.FC = () => {
                       <div className="flex items-center gap-3 w-full sm:w-auto">
                         <div className="p-3 merchant-icon-tile rounded-xl shrink-0"><StoreIcon size={22} /></div>
                         <div>
-                          <h4 className="font-bold text-sm text-[#fff700]">مشاركة المتجر كاملاً</h4>
-                          <p className="text-xs text-white/70 max-w-xs mt-1 leading-relaxed">شارك رابط متجرك الرسمي مع متابعيك لدعوتهم لتصفح جميع منتجاتك.</p>
+                          <h4 className="font-bold text-sm text-[#fff700]">{t("merchant.marketingPage.share.storeTitle")}</h4>
+                          <p className="text-xs text-white/70 max-w-xs mt-1 leading-relaxed">{t("merchant.marketingPage.share.storeSubtitle")}</p>
                         </div>
                       </div>
                       <button onClick={() => openShareModal("store", currentMerchant)} className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-xl font-bold text-xs shadow-md active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0">
-                        <Share2 size={14} /> مشاركة الرابط
+                        <Share2 size={14} /> {t("merchant.marketingPage.share.shareBtn")}
                       </button>
                     </div>
 
@@ -5697,127 +6385,39 @@ export const MerchantApp: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <div className="p-2 merchant-icon-tile rounded-xl shrink-0"><Package size={16} /></div>
                         <div>
-                          <h4 className="font-bold text-sm text-[#fff700]">مشاركة منتج معين</h4>
-                          <p className="text-xs text-white/70 mt-0.5">اختر منتجاً لتسويقه بشكل مخصص وشاركه كحالة (Story).</p>
+                          <h4 className="font-bold text-sm text-[#fff700]">{t("merchant.marketingPage.share.productTitle")}</h4>
+                          <p className="text-xs text-white/70 mt-0.5">{t("merchant.marketingPage.share.productSubtitle")}</p>
                         </div>
                       </div>
                       <div className="flex flex-col gap-2">
-                        <select value={marketingSelectedProductId} onChange={(e) => setMarketingSelectedProductId(e.target.value)} className="w-full bg-[#0B1320] border border-white/10 rounded-xl px-4 py-3 text-sm font-medium text-[#E8ECF4] focus:ring-2 focus:ring-vibrant-purple/40">
-                          <option value="">-- اختر منتجاً للمشاركة --</option>
+                        <select value={marketingSelectedProductId} onChange={(e) => setMarketingSelectedProductId(e.target.value)} className="welcome-select welcome-select--sm">
+                          <option value="">{t("merchant.marketingPage.share.selectProduct")}</option>
                           {products.filter(p => p.status === 'published').map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}
                         </select>
                         <button disabled={!marketingSelectedProductId} onClick={() => { const p = products.find(p => p.id === marketingSelectedProductId); if (p) openShareModal("product", p); }} className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 border active:scale-95 ${marketingSelectedProductId ? "bg-gradient-to-r from-vibrant-purple to-deep-navy border-white text-white hover:opacity-90" : "bg-white/10 text-white/40 border-white/10 cursor-not-allowed"}`}>
-                          <Share2 size={16} /> مشاركة المنتج المحدد
+                          <Share2 size={16} /> {t("merchant.marketingPage.share.shareProductBtn")}
                         </button>
                       </div>
                     </div>
 
-                    <div className="merchant-panel-inset border border-white/10 p-4 rounded-2xl space-y-3">
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 bg-white/10 rounded-xl shrink-0"><Activity size={18} className="text-[#fff700]" /></div>
-                        <div>
-                          <h5 className="text-xs font-bold text-[#fff700]">ملخص تتبع الزيارات</h5>
-                          <p className="text-[10px] text-white/60">يُحسب كل نقرة على رابط مشاركة مرة واحدة لكل جلسة زائر.</p>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 text-center">
-                        <div className="merchant-brand-card rounded-xl p-2.5 border border-white/10">
-                          <p className="text-[9px] text-white/60 font-bold">إجمالي</p>
-                          <p className="text-sm font-black text-brand-white">{marketingShareStats.totalVisits}</p>
-                        </div>
-                        <div className="merchant-brand-card rounded-xl p-2.5 border border-white/10">
-                          <p className="text-[9px] text-white/60 font-bold">المتجر</p>
-                          <p className="text-sm font-black text-brand-white">{marketingShareStats.storeLinkVisits}</p>
-                        </div>
-                        <div className="merchant-brand-card rounded-xl p-2.5 border border-white/10">
-                          <p className="text-[9px] text-white/60 font-bold">المنتجات</p>
-                          <p className="text-sm font-black text-brand-white">{marketingShareStats.productLinkVisits}</p>
-                        </div>
-                      </div>
-                    </div>
                   </div>
                 </div>
 
-              </div>
-
-                <Suspense fallback={<div className="rounded-[2rem] p-6 h-48 bg-white/5 animate-pulse" />}>
-                  <StoreThemeEditorLazy
-                    currentMerchant={currentMerchant}
-                    onSave={async (theme) => {
-                      await updateStoreProfile({ storeTheme: theme });
-                    }}
-                  />
-                </Suspense>
-
-              {/* تتبع الزيارات من روابط المشاركة */}
-              <div className="merchant-brand-card rounded-[2rem] p-6 border shadow-sm space-y-5 relative overflow-hidden group">
-                <div className="absolute top-0 left-0 p-4 opacity-10 pointer-events-none">
-                  <Activity size={72} className="text-[#fff700]" />
-                </div>
-                <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-black text-[#fff700] flex items-center gap-2">
-                      <Activity size={20} className="text-[#fff700]" />
-                      تتبع الزيارات من روابط المشاركة
-                    </h3>
-                    <p className="text-xs text-white/70 mt-1">
-                      كل رابط تشاركه يتضمن معامل تتبع تلقائي. عند فتح الزبائن للرابط تُسجَّل الزيارة هنا.
-                    </p>
-                  </div>
-                  <span className="text-[10px] font-bold text-[#fff700] bg-white/10 border border-white/20 px-3 py-1.5 rounded-full shrink-0">
-                    تحديث مباشر
-                  </span>
-                </div>
-
-                <div className="relative z-10 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {[
-                    { label: "إجمالي الزيارات", value: marketingShareStats.totalVisits, hint: "من جميع روابط المشاركة" },
-                    { label: "زيارات رابط المتجر", value: marketingShareStats.storeLinkVisits, hint: "فتح صفحة المتجر" },
-                    { label: "زيارات روابط المنتجات", value: marketingShareStats.productLinkVisits, hint: "فتح صفحة منتج محدد" },
-                  ].map((item) => (
-                    <div key={item.label} className="merchant-panel-inset border border-white/10 rounded-2xl p-4">
-                      <p className="text-[10px] font-bold text-[#fff700]">{item.label}</p>
-                      <p className="text-2xl font-black text-brand-white mt-1">{item.value}</p>
-                      <p className="text-[10px] text-white/60 mt-1">{item.hint}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="relative z-10">
-                  <h4 className="text-sm font-black text-[#fff700] mb-3">أكثر المنتجات زيارة عبر المشاركة</h4>
-                  {getTopSharedProducts(marketingShareStats, merchantProducts).length === 0 ? (
-                    <div className="text-center py-8 rounded-2xl border border-dashed border-white/20 merchant-panel-inset">
-                      <Share2 size={28} className="mx-auto text-[#fff700] mb-2 opacity-80" />
-                      <p className="text-xs font-bold text-brand-white">لا توجد زيارات مسجّلة بعد</p>
-                      <p className="text-[10px] text-white/60 mt-1">شارك رابط متجرك أو أحد منتجاتك لبدء تتبع الزيارات.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {getTopSharedProducts(marketingShareStats, merchantProducts).map((row, idx) => (
-                        <div key={row.id} className="flex items-center justify-between gap-3 merchant-panel-inset border border-white/10 rounded-xl p-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-6 h-6 rounded-lg bg-white/10 text-[#fff700] text-[10px] font-black flex items-center justify-center shrink-0">{idx + 1}</span>
-                            <span className="text-xs font-bold text-brand-white truncate">{row.name}</span>
-                          </div>
-                          <span className="text-xs font-black text-[#fff700] shrink-0">{row.visits} زيارة</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
 
               {/* أكواد الخصم */}
-              <MerchantPromoCodesManager
-                storeId={currentMerchant.id}
-                promos={merchantPromos}
-                allPromoCodes={promoCodes}
-                createPromoCode={createPromoCode}
-                togglePromoCodeStatus={togglePromoCodeStatus}
-                deletePromoCode={deletePromoCode}
-                modalOpen={promoModal}
-                onModalOpenChange={setPromoModal}
-              />
+              <Suspense fallback={<DashboardChunkFallback label="جارٍ تحميل أكواد الخصم..." />}>
+                <MerchantPromoCodesManager
+                  storeId={currentMerchant.id}
+                  promos={merchantPromos}
+                  allPromoCodes={promoCodes}
+                  createPromoCode={createPromoCode}
+                  togglePromoCodeStatus={togglePromoCodeStatus}
+                  deletePromoCode={deletePromoCode}
+                  modalOpen={promoModal}
+                  onModalOpenChange={setPromoModal}
+                />
+              </Suspense>
 
 
               {/* الفعاليات المركزية */}
@@ -5825,16 +6425,16 @@ export const MerchantApp: React.FC = () => {
                 <div className="rounded-[2rem] border shadow-sm p-6 overflow-hidden relative text-right merchant-brand-card group">
                   <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform pointer-events-none"><Zap size={100} className="text-[#fff700]" /></div>
                   <div className="relative z-10">
-                    <h3 className="font-black text-2xl text-[#fff700] flex items-center gap-2 mb-2"><Zap size={24} className="text-[#fff700]" /><span>الفعاليات المركزية (Flash Sales)</span></h3>
-                    <p className="text-xs text-white/70 max-w-sm">شارك بمنتجاتك في الفعاليات المركزية وحقق مبيعات ضخمة خلال فترة قصيرة!</p>
+                    <h3 className="font-black text-2xl text-[#fff700] flex items-center gap-2 mb-2"><Zap size={24} className="text-[#fff700]" /><span>{t("merchant.flashSales.title")}</span></h3>
+                    <p className="text-xs text-white/70 max-w-sm">{t("merchant.flashSales.subtitle")}</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 gap-4">
                   {flashSales.filter((s) => s.status !== "ended" && s.status !== "paused").length === 0 ? (
                     <div className="p-12 rounded-[2rem] border border-dashed border-white/20 shadow-sm text-center merchant-brand-card">
                       <Gift size={48} className="mx-auto text-[#fff700] mb-4" />
-                      <p className="font-bold text-brand-white">لا توجد فعاليات مركزية حالياً</p>
-                      <p className="text-xs text-white/60 mt-2">تابع الإشعارات — ستُعلَم عند إطلاق فعالية جديدة.</p>
+                      <p className="font-bold text-brand-white">{t("merchant.flashSales.empty")}</p>
+                      <p className="text-xs text-white/60 mt-2">{t("merchant.flashSales.emptyHint")}</p>
                     </div>
                   ) : (
                     flashSales.filter((s) => s.status !== "ended" && s.status !== "paused").map((sale) => {
@@ -5847,24 +6447,24 @@ export const MerchantApp: React.FC = () => {
                               <h4 className="font-black text-lg text-[#fff700]">{sale.title}</h4>
                               <p className="text-xs text-white/60 mt-1">{sale.description}</p>
                             </div>
-                            {(sale.status === "upcoming" && isUpcoming) && <span className="px-3 py-1 bg-amber-500/20 text-amber-300 text-[10px] font-bold rounded-full border border-amber-400/30 shrink-0">تبدأ قريباً</span>}
-                            {(sale.status === "active" || !isUpcoming) && <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded-full border border-emerald-400/30 flex items-center gap-1 shrink-0"><div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping"></div>فعالية نشطة</span>}
+                            {(sale.status === "upcoming" && isUpcoming) && <span className="px-3 py-1 bg-amber-500/20 text-amber-300 text-[10px] font-bold rounded-full border border-amber-400/30 shrink-0">{t("merchant.flashSales.startsSoon")}</span>}
+                            {(sale.status === "active" || !isUpcoming) && <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded-full border border-emerald-400/30 flex items-center gap-1 shrink-0"><div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping"></div>{t("merchant.flashSales.activeNow")}</span>}
                           </div>
                           <div className="flex flex-wrap gap-4 mb-6 text-[11px] font-bold text-[#E8ECF4] merchant-panel-inset p-3 rounded-xl border border-white/10">
-                            <div>يبدأ: <span className="font-mono text-[#fff700]" dir="ltr">{formatSafeDateTimeString(sale.startTime)}</span></div>
-                            <div>ينتهي: <span className="font-mono text-[#fff700]" dir="ltr">{formatSafeDateTimeString(sale.endTime)}</span></div>
+                            <div>{t("merchant.flashSales.starts")} <span className="font-mono text-[#fff700]" dir="ltr">{formatSafeDateTimeString(sale.startTime)}</span></div>
+                            <div>{t("merchant.flashSales.ends")} <span className="font-mono text-[#fff700]" dir="ltr">{formatSafeDateTimeString(sale.endTime)}</span></div>
                           </div>
                           {sale.status === "active" && myRequests.length === 0 && (
-                            <div className="bg-rose-500/15 text-rose-300 p-3 rounded-xl text-xs font-bold mb-4 border border-rose-400/30 text-center">لا يمكنك المشاركة لأن الفعالية قد بدأت. تقدّم مسبقاً في الفعاليات القادمة.</div>
+                            <div className="bg-rose-500/15 text-rose-300 p-3 rounded-xl text-xs font-bold mb-4 border border-rose-400/30 text-center">{t("merchant.flashSales.tooLate")}</div>
                           )}
                           <div className="space-y-3">
                             <h5 className="font-bold text-[#fff700] text-xs flex justify-between items-center pb-2 border-b border-white/10">
-                              <span>منتجاتك المشاركة ({myRequests.length})</span>
+                              <span>{t("merchant.flashSales.yourProducts", { count: myRequests.length })}</span>
                               {(sale.status === "upcoming" && isUpcoming) && (
-                                <button onClick={() => setJoinFlashSaleData({ flashSaleId: sale.id })} className="px-3 py-1 bg-white/10 text-[#fff700] rounded-lg font-bold text-[10px] hover:bg-white/20 transition border border-white/10">+ طلب مشاركة لمنتج</button>
+                                <button onClick={() => setJoinFlashSaleData({ flashSaleId: sale.id })} className="px-3 py-1 bg-white/10 text-[#fff700] rounded-lg font-bold text-[10px] hover:bg-white/20 transition border border-white/10">{t("merchant.flashSales.joinProduct")}</button>
                               )}
                             </h5>
-                            {myRequests.length === 0 && <div className="text-center text-white/50 py-4 text-xs font-bold merchant-panel-inset rounded-xl border border-dashed border-white/10">لم يتم مشاركة أي منتج بعد</div>}
+                            {myRequests.length === 0 && <div className="text-center text-white/50 py-4 text-xs font-bold merchant-panel-inset rounded-xl border border-dashed border-white/10">{t("merchant.flashSales.noProductsJoined")}</div>}
                             {myRequests.map((req) => {
                               const p = products.find((prod) => prod.id === req.productId);
                               if (!p) return null;
@@ -5875,15 +6475,15 @@ export const MerchantApp: React.FC = () => {
                                     <div>
                                       <h6 className="font-black text-[11px] text-[#fff700]">{p.name}</h6>
                                       <div className="flex gap-2 text-[9px] mt-0.5">
-                                        <span className="text-white/50">أصلي: <del>{p.price.toLocaleString()}</del></span>
-                                        <span className="text-rose-300 font-black">حالي: {req.promotionalPrice.toLocaleString()}</span>
+                                        <span className="text-white/50">{t("merchant.flashSales.original")} <del>{p.price.toLocaleString()}</del></span>
+                                        <span className="text-rose-300 font-black">{t("merchant.flashSales.current")} {req.promotionalPrice.toLocaleString()}</span>
                                       </div>
                                     </div>
                                   </div>
                                   <div>
-                                    {req.status === "pending" && <span className="px-2 py-1 bg-white/10 text-white/70 font-bold text-[9px] rounded uppercase border border-white/10">قيد المراجعة</span>}
-                                    {req.status === "approved" && <span className="px-2 py-1 bg-emerald-500/20 text-emerald-300 font-bold text-[9px] rounded uppercase border border-emerald-400/30">مقبول</span>}
-                                    {req.status === "rejected" && <span className="px-2 py-1 bg-rose-500/20 text-rose-300 font-bold text-[9px] rounded uppercase border border-rose-400/30">مرفوض</span>}
+                                    {req.status === "pending" && <span className="px-2 py-1 bg-white/10 text-white/70 font-bold text-[9px] rounded uppercase border border-white/10">{t("merchant.flashSales.statusPending")}</span>}
+                                    {req.status === "approved" && <span className="px-2 py-1 bg-emerald-500/20 text-emerald-300 font-bold text-[9px] rounded uppercase border border-emerald-400/30">{t("merchant.flashSales.statusApproved")}</span>}
+                                    {req.status === "rejected" && <span className="px-2 py-1 bg-rose-500/20 text-rose-300 font-bold text-[9px] rounded uppercase border border-rose-400/30">{t("merchant.flashSales.statusRejected")}</span>}
                                   </div>
                                 </div>
                               );
@@ -5901,423 +6501,536 @@ export const MerchantApp: React.FC = () => {
             </div>
           )}
 
-          {/* قائمة الزبائن والمتابعين */}
-          {activeTab === "customers" && (
-            <div className="space-y-5 animate-in fade-in duration-300">
-              <div
-                className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
-              >
-                <div className="p-5 flex items-center gap-3" dir="rtl">
-                  <div className="p-2.5 bg-white/10 text-violet rounded-xl shrink-0">
-                    <Users size={22} />
-                  </div>
-                  <div className="text-right min-w-0">
-                    <h2 className="font-black text-[#E8ECF4] text-base">قائمة زبائني</h2>
-                    <p className="text-[10px] text-slate-300 font-bold">
-                      إدارة المتابعين وإرسال الهدايا والخصومات
+          {/* جمهوري ضمن متجري */}
+          {activeTab === "mystore" && myStoreSubPage === "customers" && (
+            <div className="merchant-glass-page space-y-4 animate-fade-in px-1 pb-20">
+              <div className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2rem] shadow-2xl relative overflow-hidden text-white">
+                <div className="absolute inset-0 bg-gradient-to-l from-sky-500/15 to-transparent pointer-events-none" />
+                <div className="relative z-10 flex items-center gap-3">
+                  <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 rounded-xl">
+                    <Users className="text-[#fff700]" size={20} />
+                  </span>
+                  <div>
+                    <h2 className="text-lg font-black text-white">
+                      {audienceSegment
+                        ? t(`merchant.audience.${audienceSegment === "pastBuyers" ? "pastBuyers" : audienceSegment}`)
+                        : t("merchant.audience.title")}
+                    </h2>
+                    <p className="text-[10px] text-white/70 font-bold">
+                      {audienceSegment
+                        ? t("merchant.audience.listBySegment")
+                        : t("merchant.audience.pickSegment")}
                     </p>
                   </div>
                 </div>
               </div>
-
-              <StoreAudiencePanel
-                storeId={currentMerchant.id}
-                customers={customers}
-                orders={orders}
-                searchQuery={audienceSearchQuery}
-                onSearchQueryChange={setAudienceSearchQuery}
-                getCustomerSeqId={getCustomerSeqId}
-                onSelectCustomer={setSelectedAudienceId}
-                onSendGift={openAudienceGift}
-                onNotifyFollowers={() => setShowNotificationModal(true)}
-              />
+              <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-4 sm:p-6 shadow-lg text-white">
+                <Suspense fallback={<DashboardChunkFallback label="جارٍ تحميل جمهوري..." />}>
+                  <StoreAudiencePanel
+                    storeId={currentMerchant.id}
+                    customers={customers}
+                    orders={orders}
+                    searchQuery={audienceSearchQuery}
+                    onSearchQueryChange={setAudienceSearchQuery}
+                    getCustomerSeqId={getCustomerSeqId}
+                    onSelectCustomer={setSelectedAudienceId}
+                    onSendGift={openAudienceGift}
+                    activeSegment={audienceSegment}
+                    onSegmentChange={setAudienceSegment}
+                  />
+                </Suspense>
+              </div>
             </div>
           )}
 
-          {/* حسابي */}
+          {/* حسابي — قائمة + صفحات فرعية مثل تطبيق محلك */}
           {activeTab === "profile" && (
-            <div className="space-y-6">
-              <div className="p-6 h-full overflow-y-auto">
-                <div className="space-y-3">
-                  {/* رأس صفحة حسابي */}
-                  <div
-                    className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
-                  >
-                    <div className="w-full p-4 flex items-center justify-between gap-3" dir="rtl">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className="p-2 bg-white/10 text-violet rounded-xl shrink-0">
-                          <User size={20} />
-                        </div>
-                        <div className="text-right min-w-0">
-                          <h2 className="font-black text-[#E8ECF4] text-sm">حسابي</h2>
-                          <p className="text-[10px] text-slate-300 font-bold">
-                            إدارة بيانات المتجر والمحفظة والإعدادات
-                          </p>
-                        </div>
+            <div className="space-y-6 animate-fade-in px-1">
+              <div className="merchant-glass-page space-y-4 pb-20">
+              {profileSubPage === null && (
+              <>
+              {/* بطاقة المتجر الرئيسية */}
+              <div className="welcome-card-glow welcome-card-shimmer welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden text-center group">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-violet/10 rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-700"></div>
+                <div className="relative z-10">
+                  <div className="relative inline-block mb-4">
+                    {profileForm.logo || currentMerchant.logo ? (
+                      <img
+                        src={profileForm.logo || currentMerchant.logo}
+                        alt={currentMerchant.shopName}
+                        className="w-20 h-20 rounded-[1.8rem] object-cover shadow-xl shadow-violet/20 border-4 border-white/40"
+                      />
+                    ) : (
+                      <div className="w-20 h-20 rounded-[1.8rem] bg-vibrant-purple flex items-center justify-center text-white text-2xl font-black shadow-xl shadow-violet/20 border-4 border-white/40">
+                        {(currentMerchant.shopName || currentMerchant.ownerName || "م").charAt(0)}
                       </div>
-                      <div className="w-5 shrink-0" aria-hidden />
-                    </div>
+                    )}
                   </div>
-              
-              {/* Wallet Section component */}
-              <div
-                className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
-              >
-                <button
-                  onClick={() => toggleSection('wallet')}
-                  className="w-full p-4 flex items-center justify-between gap-3 transition-colors hover:bg-white/5"
-                  dir="rtl"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="p-2 bg-white/10 text-sky-400 rounded-xl shrink-0">
-                      <Wallet size={20} />
-                    </div>
-                    <div className="text-right min-w-0">
-                      <h3 className="font-black text-[#E8ECF4] text-sm">المحفظة المالية</h3>
-                      <p className="text-[10px] text-slate-300 font-bold">إدارة الرصيد والحوالات</p>
-                    </div>
+                  <StoreIdentity
+                    name={currentMerchant.shopName}
+                    username={currentMerchant.username}
+                    verified={isStoreVerified(currentMerchant)}
+                    size="lg"
+                    align="center"
+                    nameAs="h2"
+                    nameClassName="text-white text-xl"
+                    usernameClassName="welcome-btn-pulse mt-1 px-4 py-1 bg-white/10 border border-white/30 backdrop-blur-md rounded-2xl text-white text-[11px] font-black opacity-100"
+                  />
+                  <p className="text-[11px] text-white/70 font-bold mt-2 mb-2">{currentMerchant.ownerName}</p>
+                  <div className="flex items-center justify-center gap-1.5 select-none">
+                    <Phone size={10} className="text-white" />
+                    <span className="text-white font-black text-[10px] tracking-widest">{currentMerchant.phone}</span>
                   </div>
-                  {expandedSections.wallet ? <ChevronUp size={20} className="text-slate-300 shrink-0" /> : <ChevronDown size={20} className="text-slate-300 shrink-0" />}
-                </button>
-                {expandedSections.wallet && (
-                  <div className="p-4 border-t border-white/10">
-                    <MerchantWallet currentMerchant={currentMerchant as Store} />
-                  </div>
-                )}
+                </div>
               </div>
 
-              {/* Personal Information Section */}
-              <div
-                className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
+              <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => openProfileSubPage("storeInfo")}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
               >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <User size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.storeInfo")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.storeInfoHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openProfileSubPage("location")}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <MapPin size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.storeLocation")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.storeLocationHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openProfileSubPage("wallet")}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <Wallet size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.walletFinance")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.walletFinanceHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openProfileSubPage("verification")}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-sky-500 group-hover:text-white transition-colors">
+                    <BadgeCheck size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white flex items-center gap-1.5">
+                      {t("profile.verification.title")}
+                      {isStoreVerified(currentMerchant) && (
+                        <VerifiedBadge size={14} className="shrink-0" />
+                      )}
+                    </span>
+                    <span className="text-[10px] text-white/70 font-bold">
+                      {isStoreVerified(currentMerchant)
+                        ? currentMerchant.verificationType === 'lifetime' || currentMerchant.verificationExpiresAt === 'Lifetime'
+                          ? t("profile.verification.lifetimeActive")
+                          : t("profile.verification.activeUntil", { date: currentMerchant.verificationExpiresAt || '—' })
+                        : t("profile.verification.activateHint")}
+                    </span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setShowPasswordChange(true); setPwStep(1); }}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <Shield size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.changePassword")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.passwordHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowQRMenu(true)}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <Camera size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.qr")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.qrHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <a
+                href={`https://wa.me/${SUPPORT_WHATSAPP_NUMBER}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <MessageCircle size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.support")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.supportHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </a>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowAboutUs(true);
+                }}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <StoreIcon size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.about")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.aboutHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowPrivacyPolicy(true);
+                }}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <FileText size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.privacy")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.privacyHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openProfileSubPage("settings")}
+                className="w-full text-right welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm flex items-center justify-between hover:bg-white/10 transition-colors group"
+                dir="rtl"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-white/10 border border-white/20 text-white/80 rounded-2xl group-hover:bg-vibrant-purple group-hover:text-white transition-colors">
+                    <Settings size={20} />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-black text-white block">{t("profile.accountSettings")}</span>
+                    <span className="text-[10px] text-white/70 font-bold">{t("profile.accountSettingsHint")}</span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-white group-hover:translate-x-1 transition-transform" />
+              </button>
+              </div>
+
+              <div className="pt-2 space-y-3">
                 <button
-                  onClick={() => toggleSection('personalInfo')}
-                  className="w-full p-4 flex items-center justify-between gap-3 transition-colors hover:bg-white/5"
-                  dir="rtl"
+                  onClick={handleLogout}
+                  className="w-full py-5 bg-rose-500/10 text-rose-200 rounded-[2rem] font-black text-sm flex items-center justify-center gap-3 border border-rose-400/30 backdrop-blur-md hover:bg-rose-600 hover:text-white hover:border-rose-600 transition-all shadow-sm active:scale-95"
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="p-2 bg-white/10 text-violet rounded-xl shrink-0">
-                      <User size={20} />
-                    </div>
-                    <div className="text-right min-w-0">
-                      <h3 className="font-black text-[#E8ECF4] text-sm">البيانات الشخصية</h3>
-                      <p className="text-[10px] text-slate-300 font-bold">
-                        تعديل معلومات المتجر وبيانات الاتصال
-                      </p>
+                  <LogOut size={20} />
+                  <span>{t("merchant.common.logoutFull")}</span>
+                </button>
+              </div>
+              </>
+              )}
+
+              {profileSubPage === "storeInfo" && (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2rem] shadow-2xl relative overflow-hidden text-white">
+                    <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/15 to-transparent pointer-events-none" />
+                    <div className="relative z-10 flex items-center gap-3">
+                      <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 rounded-xl">
+                        <User className="text-[#fff700]" size={20} />
+                      </span>
+                      <div>
+                        <h2 className="text-lg font-black text-white">{t("profile.storeInfo")}</h2>
+                        <p className="text-[10px] text-white/70 font-bold">{t("merchant.profileForm.storeInfoSubtitle")}</p>
+                      </div>
                     </div>
                   </div>
-                  {expandedSections.personalInfo ? <ChevronUp size={20} className="text-slate-300 shrink-0" /> : <ChevronDown size={20} className="text-slate-300 shrink-0" />}
-                </button>
-                {expandedSections.personalInfo && (
-                  <div className="p-6 space-y-4">
+
+                  <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 sm:p-6 space-y-4 text-white shadow-lg">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-bold text-white mb-1">
-                          اسم المالك *
-                        </label>
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.ownerName")}</label>
                         <input
                           type="text"
                           value={profileForm.ownerName}
-                          onChange={(e) =>
-                            handleProfileFormChange({ ownerName: e.target.value })
-                          }
-                          className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm text-[#f4f1f1]"
+                          onChange={(e) => handleProfileFormChange({ ownerName: e.target.value })}
+                          className="w-full bg-white/5 border border-white/20 p-2.5 rounded-2xl text-sm text-white focus:ring-2 focus:ring-vibrant-purple/40 outline-none"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-white mb-1">
-                          اسم المتجر *
-                        </label>
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.shopName")}</label>
                         <input
                           type="text"
                           value={profileForm.shopName}
-                          onChange={(e) =>
-                            handleProfileFormChange({ shopName: e.target.value })
-                          }
-                          className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm text-[#f4f1f1]"
+                          onChange={(e) => handleProfileFormChange({ shopName: e.target.value })}
+                          className="w-full bg-white/5 border border-white/20 p-2.5 rounded-2xl text-sm text-white focus:ring-2 focus:ring-vibrant-purple/40 outline-none"
                         />
                       </div>
-
                       <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-white mb-1">
-                          صنف المتجر *
-                        </label>
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.category")}</label>
                         <select
                           value={profileForm.category}
-                          onChange={(e) =>
-                            handleProfileFormChange({ category: e.target.value })
-                          }
-                          className="w-full p-2.5 rounded-2xl text-sm input-brand"
+                          onChange={(e) => handleProfileFormChange({ category: e.target.value })}
+                          className="welcome-select welcome-select--sm"
                         >
                           {STORE_CATEGORIES.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
-                            </option>
+                            <option key={c.id} value={c.id}>{getStoreCategoryFullLabel(c.id)}</option>
                           ))}
                         </select>
                       </div>
-
                       <div>
-                        <label className="block text-xs font-bold text-white mb-1">
-                          رقم الهاتف
-                        </label>
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.phone")}</label>
                         <input
                           type="tel"
                           value={currentMerchant.phone}
                           disabled
-                          className="w-full border bg-slate-50 p-2.5 rounded-2xl text-sm text-slate-400 font-mono mb-2"
+                          className="w-full bg-white/5 border border-white/15 p-2.5 rounded-2xl text-sm text-white/50 font-mono mb-2"
                         />
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input type="checkbox" checked={profileForm.showPhone} onChange={(e) => handleProfileFormChange({ showPhone: e.target.checked })} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                          <span className="text-xs">إظهار عند الزبون</span>
+                          <span className="text-xs text-white/70">{t("merchant.common.showToCustomer")}</span>
                         </label>
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-white mb-1">
-                          اسم المستخدم (يمكن تغييره مرة كل 30 يوماً)
-                        </label>
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.username")}</label>
                         <input
                           type="text"
                           value={profileForm.username}
                           onChange={(e) => handleProfileFormChange({ username: e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, "") })}
-                          className="w-full p-2.5 rounded-2xl text-sm font-mono input-brand"
+                          className="w-full bg-white/5 border border-white/20 p-2.5 rounded-2xl text-sm font-mono text-white focus:ring-2 focus:ring-vibrant-purple/40 outline-none"
                           dir="ltr"
                         />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-white mb-1">
-                          المحافظة *
-                        </label>
-                        <select
-                          value={profileForm.province}
-                          onChange={(e) =>
-                            handleProfileFormChange({ province: e.target.value })
-                          }
-                          className="w-full p-2.5 rounded-2xl text-sm input-brand"
-                        >
-                          {provinces.map((p) => (
-                            <option key={p.id} value={p.name}>
-                              {p.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-white mb-1">
-                          المنطقة / الحي *
-                        </label>
-                        <input
-                          type="text"
-                          value={profileForm.area}
-                          onChange={(e) =>
-                            handleProfileFormChange({ area: e.target.value })
-                          }
-                          className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm text-white mb-2"
-                        />
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input type="checkbox" checked={profileForm.showArea} onChange={(e) => handleProfileFormChange({ showArea: e.target.checked })} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                          <span className="text-xs">إظهار عند الزبون</span>
-                        </label>
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-white mb-1">
-                          أقرب نقطة دالة *
-                        </label>
-                        <input
-                          type="text"
-                          value={profileForm.landmark}
-                          onChange={(e) =>
-                            handleProfileFormChange({ landmark: e.target.value })
-                          }
-                          className="w-full border border-slate-200 p-2.5 rounded-2xl text-sm text-white mb-2"
-                        />
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input type="checkbox" checked={profileForm.showLandmark} onChange={(e) => handleProfileFormChange({ showLandmark: e.target.checked })} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                          <span className="text-xs">إظهار عند الزبون</span>
-                        </label>
-                      </div>
-                      <div className="md:col-span-2 mt-2">
-                        <MerchantLocationPicker
-                          onLocationSelect={(lat, lng) =>
-                            handleProfileFormChange({ lat, lng })
-                          }
-                          initialLat={profileForm.lat}
-                          initialLng={profileForm.lng}
-                          label="تحديد الموقع على الخريطة (إجباري)"
-                          height="h-48"
-                          required={true}
-                        />
-                        <label className="flex items-center gap-2 cursor-pointer mt-2">
-                          <input type="checkbox" checked={profileForm.showMap} onChange={(e) => handleProfileFormChange({ showMap: e.target.checked })} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                          <span className="text-xs">إظهار عند الزبون</span>
-                        </label>
                       </div>
                     </div>
                     <div className="max-w-[120px] mx-auto">
                       <ImageUploader
                         value={profileForm.logo}
                         onChange={(url) => handleProfileFormChange({ logo: url })}
-                        label="لوغو المحل (اختياري)"
+                        label={t("merchant.profileForm.logoOptional")}
                         labelClassName="block text-xs font-black text-white mb-1"
                       />
                     </div>
                     <button
-                      onClick={() => {
-                        setShowPasswordChange(true);
-                        setPwStep(1);
-                      }}
-                      className="w-full py-2.5 bg-slate-100 text-gray-700 font-bold rounded-2xl flex items-center justify-center space-x-2 space-x-reverse"
-                    >
-                      <Shield size={16} />
-                      <span>تغيير كلمة المرور</span>
-                    </button>
-                    <button
-                      onClick={() => setShowQRMenu(true)}
-                      className="w-full py-2.5 bg-slate-50 text-slate-700 font-bold rounded-2xl flex items-center justify-center space-x-2 space-x-reverse"
-                    >
-                      <Camera size={16} />
-                      <span>الهوية الرقمية (QR)</span>
-                    </button>
-
-                    <button
-                      onClick={handleSaveProfile}
+                      onClick={() => void handleSaveProfile("storeInfo")}
                       disabled={isSavingProfile}
-                      className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-lg flex items-center justify-center space-x-2 space-x-reverse disabled:opacity-70"
+                      className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-brand-glow flex items-center justify-center space-x-2 space-x-reverse disabled:opacity-70"
                     >
                       {isSavingProfile ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
-                      <span>{isSavingProfile ? 'جاري الحفظ...' : 'حفظ التعديلات'}</span>
+                      <span>{isSavingProfile ? t("merchant.common.saving") : t("merchant.common.saveChanges")}</span>
                     </button>
                   </div>
-                )}
-              </div>
-
-              {/* Customers Section */}
-              <div
-                className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
-              >
-                <button
-                  onClick={() => toggleSection('customers')}
-                  className="w-full p-4 flex items-center justify-between gap-3 transition-colors hover:bg-white/5"
-                  dir="rtl"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="p-2 bg-white/10 text-violet rounded-xl shrink-0">
-                      <Users size={20} />
-                    </div>
-                    <div className="text-right min-w-0">
-                      <h3 className="font-black text-[#E8ECF4] text-sm">قائمة زبائني</h3>
-                      <p className="text-[10px] text-slate-300 font-bold">
-                        إدارة المتابعين وإرسال الهدايا والخصومات
-                      </p>
-                    </div>
-                  </div>
-                  {expandedSections.customers ? <ChevronUp size={20} className="text-slate-300 shrink-0" /> : <ChevronDown size={20} className="text-slate-300 shrink-0" />}
-                </button>
-                {expandedSections.customers && (
-                  <div className="p-4 sm:p-6 merchant-panel-inset border-t border-white/10">
-                    <StoreAudiencePanel
-                      storeId={currentMerchant.id}
-                      customers={customers}
-                      orders={orders}
-                      searchQuery={audienceSearchQuery}
-                      onSearchQueryChange={setAudienceSearchQuery}
-                      getCustomerSeqId={getCustomerSeqId}
-                      onSelectCustomer={setSelectedAudienceId}
-                      onSendGift={openAudienceGift}
-                      onNotifyFollowers={() => setShowNotificationModal(true)}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div
-                className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
-              >
-                <a
-                  href={`https://wa.me/${SUPPORT_WHATSAPP_NUMBER}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full p-4 flex items-center justify-between gap-3 transition-colors hover:bg-white/5"
-                  dir="rtl"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="p-2 bg-white/10 text-green-400 rounded-xl shrink-0">
-                      <Phone size={20} />
-                    </div>
-                    <div className="text-right min-w-0">
-                      <h3 className="font-black text-[#E8ECF4] text-sm">الدعم الفني</h3>
-                      <p className="text-[10px] text-slate-300 font-bold">تواصل معنا عبر واتساب</p>
-                    </div>
-                  </div>
-                  <ChevronLeft size={20} className="text-slate-300 shrink-0" />
-                </a>
-              </div>
-
-              <div
-                className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
-              >
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowAboutUs(true);
-                  }}
-                  className="w-full p-4 flex items-center justify-between gap-3 transition-colors hover:bg-white/5"
-                  dir="rtl"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="p-2 bg-white/10 text-violet rounded-xl shrink-0">
-                      <StoreIcon size={20} />
-                    </div>
-                    <div className="text-right min-w-0">
-                      <h3 className="font-black text-[#E8ECF4] text-sm">من نحن</h3>
-                      <p className="text-[10px] text-slate-300 font-bold">تعرف على منصة محلك</p>
-                    </div>
-                  </div>
-                  <ChevronLeft size={20} className="text-slate-300 shrink-0" />
-                </button>
-              </div>
-
-              <div
-                className="rounded-2xl border shadow-sm overflow-hidden text-right merchant-brand-card"
-              >
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowPrivacyPolicy(true);
-                  }}
-                  className="w-full p-4 flex items-center justify-between gap-3 transition-colors hover:bg-white/5"
-                  dir="rtl"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="p-2 bg-white/10 text-violet rounded-xl shrink-0">
-                      <FileText size={20} />
-                    </div>
-                    <div className="text-right min-w-0">
-                      <h3 className="font-black text-[#E8ECF4] text-sm">سياسة الخصوصية</h3>
-                      <p className="text-[10px] text-slate-300 font-bold">كيف نجمع ونستخدم بياناتك</p>
-                    </div>
-                  </div>
-                  <ChevronLeft size={20} className="text-slate-300 shrink-0" />
-                </button>
-              </div>
-
-              <DeleteAccountSection
-                variant="merchant"
-                accountLabel={`حساب التاجر: ${currentMerchant?.name || ""}`}
-                onConfirmDelete={() => deleteUserAccountSecure("merchant")}
-              />
-
-              <button
-                onClick={handleLogout}
-                className="w-full py-4 bg-red-50 text-red-500 font-bold rounded-2xl border border-red-100 flex items-center justify-center space-x-2 space-x-reverse"
-              >
-                <LogOut size={20} />
-                <span>تسجيل الخروج</span>
-              </button>
                 </div>
+              )}
+
+              {profileSubPage === "location" && (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2rem] shadow-2xl relative overflow-hidden text-white">
+                    <div className="absolute inset-0 bg-gradient-to-l from-emerald-500/15 to-transparent pointer-events-none" />
+                    <div className="relative z-10 flex items-center gap-3">
+                      <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 rounded-xl">
+                        <MapPin className="text-[#fff700]" size={20} />
+                      </span>
+                      <div>
+                        <h2 className="text-lg font-black text-white">{t("profile.storeLocation")}</h2>
+                        <p className="text-[10px] text-white/70 font-bold">{t("merchant.profileForm.locationSubtitle")}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 sm:p-6 space-y-4 text-white shadow-lg">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.province")}</label>
+                        <select
+                          value={profileForm.province}
+                          onChange={(e) => handleProfileFormChange({ province: e.target.value })}
+                          className="welcome-select welcome-select--sm"
+                        >
+                          {provinces.map((p) => (
+                            <option key={p.id} value={p.name}>{getProvinceLabel(p)}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.area")}</label>
+                        <input
+                          type="text"
+                          value={profileForm.area}
+                          onChange={(e) => handleProfileFormChange({ area: e.target.value })}
+                          className="w-full bg-white/5 border border-white/20 p-2.5 rounded-2xl text-sm text-white mb-2 focus:ring-2 focus:ring-vibrant-purple/40 outline-none"
+                        />
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={profileForm.showArea} onChange={(e) => handleProfileFormChange({ showArea: e.target.checked })} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
+                          <span className="text-xs text-white/70">{t("merchant.common.showToCustomer")}</span>
+                        </label>
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-white/80 mb-1">{t("merchant.profileForm.landmark")}</label>
+                        <input
+                          type="text"
+                          value={profileForm.landmark}
+                          onChange={(e) => handleProfileFormChange({ landmark: e.target.value })}
+                          className="w-full bg-white/5 border border-white/20 p-2.5 rounded-2xl text-sm text-white mb-2 focus:ring-2 focus:ring-vibrant-purple/40 outline-none"
+                        />
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={profileForm.showLandmark} onChange={(e) => handleProfileFormChange({ showLandmark: e.target.checked })} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
+                          <span className="text-xs text-white/70">{t("merchant.common.showToCustomer")}</span>
+                        </label>
+                      </div>
+                      <div className="md:col-span-2 mt-2">
+                        <MerchantLocationPicker
+                          onLocationSelect={(lat, lng) => handleProfileFormChange({ lat, lng })}
+                          initialLat={profileForm.lat}
+                          initialLng={profileForm.lng}
+                          label={t("merchant.profileForm.mapPickerLabel")}
+                          height="h-48"
+                          required={true}
+                        />
+                        <label className="flex items-center gap-2 cursor-pointer mt-2">
+                          <input type="checkbox" checked={profileForm.showMap} onChange={(e) => handleProfileFormChange({ showMap: e.target.checked })} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
+                          <span className="text-xs text-white/70">{t("merchant.common.showToCustomer")}</span>
+                        </label>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => void handleSaveProfile("location")}
+                      disabled={isSavingProfile}
+                      className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-brand-glow flex items-center justify-center space-x-2 space-x-reverse disabled:opacity-70"
+                    >
+                      {isSavingProfile ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
+                      <span>{isSavingProfile ? t("merchant.common.saving") : t("merchant.common.saveChanges")}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {profileSubPage === "wallet" && (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2rem] shadow-2xl relative overflow-hidden text-white">
+                    <div className="absolute inset-0 bg-gradient-to-l from-sky-500/15 to-transparent pointer-events-none" />
+                    <div className="relative z-10 flex items-center gap-3">
+                      <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 rounded-xl">
+                        <Wallet className="text-[#fff700]" size={20} />
+                      </span>
+                      <div>
+                        <h2 className="text-lg font-black text-white">{t("profile.walletFinance")}</h2>
+                        <p className="text-[10px] text-white/70 font-bold">{t("merchant.profileForm.walletSubtitle")}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="welcome-card-glow welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-4 shadow-lg text-white">
+                    <Suspense fallback={<DashboardChunkFallback label={t("merchant.common.loadingWallet")} />}>
+                      <MerchantWallet
+                        currentMerchant={currentMerchant as Store}
+                        payoutRequests={payoutRequests}
+                        requestPayout={requestPayout}
+                        updateStoreProfile={updateStoreProfile}
+                      />
+                    </Suspense>
+                  </div>
+                </div>
+              )}
+
+              {profileSubPage === "verification" && (
+                <MerchantVerificationPage
+                  store={currentMerchant as Store}
+                  adminSettings={adminSettings as Record<string, unknown>}
+                  supportWhatsApp={resolveSupportWhatsApp(adminSettings?.whatsappNumber)}
+                />
+              )}
+
+              {profileSubPage === "settings" && (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md p-5 rounded-[2rem] shadow-2xl relative overflow-hidden text-white">
+                    <div className="absolute inset-0 bg-gradient-to-l from-vibrant-purple/15 to-transparent pointer-events-none" />
+                    <div className="relative z-10 flex items-center gap-3">
+                      <span className="welcome-icon-pulse p-2 bg-white/15 border border-white/25 rounded-xl">
+                        <Settings className="text-[#fff700]" size={20} />
+                      </span>
+                      <div>
+                        <h2 className="text-lg font-black text-white">{t("profile.accountSettings")}</h2>
+                        <p className="text-[10px] text-white/70 font-bold">{t("profile.accountSettingsHint")}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="welcome-card-border-glow bg-white/5 border border-white/30 backdrop-blur-md rounded-[2rem] p-5 shadow-sm" dir="rtl">
+                    <LanguageSwitcher variant="row" />
+                  </div>
+
+                  <DeleteAccountSection
+                    variant="glass"
+                    accountLabel={t("merchant.common.merchantAccount", { name: currentMerchant?.name || currentMerchant?.shopName || "" })}
+                    onConfirmDelete={() => deleteUserAccountSecure("merchant")}
+                  />
+                </div>
+              )}
+
               </div>
             </div>
           )}
@@ -6326,10 +7039,10 @@ export const MerchantApp: React.FC = () => {
         {/* Modal: طلب مشاركة في الفعالية */}
         {joinFlashSaleData && (
           <div className="fixed inset-0 bg-deep-navy/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-scale-in">
+            <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-scale-in text-white">
               <div className="flex justify-between items-center mb-4 pb-3 border-b">
                 <h3 className="font-black text-violet flex items-center gap-2">
-                  <Zap size={18} className="text-yellow-500" /> المشاركة بمنتج
+                  <Zap size={18} className="text-yellow-500" /> {t("merchant.flashSales.joinModal.title")}
                 </h3>
                 <button onClick={() => setJoinFlashSaleData(null)}>
                   <X size={20} className="text-slate-400 hover:text-vibrant-purple" />
@@ -6347,7 +7060,7 @@ export const MerchantApp: React.FC = () => {
 
                   const promPrice = parseInt(joinPromotionalPrice);
                   if (!promPrice || promPrice >= matchedProduct.price) {
-                    alert("يجب أن يكون السعر الترويجي أقل من السعر الأصلي!");
+                    alert(t("merchant.flashSales.joinModal.promoPriceInvalid"));
                     return;
                   }
 
@@ -6360,12 +7073,16 @@ export const MerchantApp: React.FC = () => {
                       promotionalPrice: promPrice,
                       status: "pending",
                     });
-                    alert("تم إرسال طلب المشاركة بنجاح! ننتظر موافقة الإدارة.");
+                    showToast("success", t("merchant.flashSales.joinSuccessTitle"), t("merchant.flashSales.joinSuccessBody"));
                     setJoinFlashSaleData(null);
                     setJoinProductId("");
                     setJoinPromotionalPrice("");
-                  } catch {
-                    showToast("error", "فشل الطلب", "تعذر إرسال طلب المشاركة. حاول مرة أخرى.");
+                  } catch (err: unknown) {
+                    const message =
+                      err instanceof Error && err.message && !err.message.startsWith('{')
+                        ? err.message
+                        : t("merchant.flashSales.joinFailedBody");
+                    showToast("error", t("merchant.flashSales.joinFailedTitle"), message);
                   } finally {
                     setIsJoiningFlashSale(false);
                   }
@@ -6374,11 +7091,11 @@ export const MerchantApp: React.FC = () => {
               >
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">
-                    اختر المنتج المراد المشاركة به
+                    {t("merchant.flashSales.pickProduct")}
                   </label>
                   {merchantProducts.length === 0 ? (
                     <div className="text-red-500 text-xs font-bold p-2 bg-red-50 rounded">
-                      لا تملك أي منتجات حالياً. أضف منتجاً أولاً.
+                      {t("merchant.flashSales.joinModal.noProducts")}
                     </div>
                   ) : (
                     <select
@@ -6388,14 +7105,14 @@ export const MerchantApp: React.FC = () => {
                         setJoinProductId(e.target.value);
                         setJoinPromotionalPrice(""); // reset price
                       }}
-                      className="w-full border border-slate-200 p-3 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-slate-500"
+                      className="welcome-select welcome-select--lg"
                     >
                       <option value="" disabled>
-                        -- اختر المنتج --
+                        {t("merchant.flashSales.joinModal.selectProduct")}
                       </option>
                       {merchantProducts.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} (السعر الأصلي: {p.price})
+                          {p.name} ({t("merchant.flashSales.joinModal.originalPrice", { price: p.price })})
                         </option>
                       ))}
                     </select>
@@ -6405,14 +7122,14 @@ export const MerchantApp: React.FC = () => {
                 {joinProductId && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">
-                      السعر الترويجي الحصري (أقل من السعر الأصلي)
+                      {t("merchant.flashSales.joinModal.promoPriceLabel")}
                     </label>
                     <input
                       type="number"
                       required
                       value={joinPromotionalPrice}
                       onChange={(e) => setJoinPromotionalPrice(e.target.value)}
-                      placeholder="مثال: 15000"
+                      placeholder={t("merchant.flashSales.joinModal.promoPricePlaceholder")}
                       className="w-full border border-slate-200 p-3 rounded-2xl text-sm font-bold text-rose-600 outline-none focus:ring-2 focus:ring-slate-500"
                     />
                     {merchantProducts.find((p) => p.id === joinProductId) &&
@@ -6420,7 +7137,7 @@ export const MerchantApp: React.FC = () => {
                         merchantProducts.find((p) => p.id === joinProductId)!
                           .price && (
                         <p className="text-[10px] text-red-500 mt-1 font-bold">
-                          السعر الترويجي يجب أن يكون أقل من السعر الأصلي!
+                          {t("merchant.flashSales.joinModal.promoPriceTooHigh")}
                         </p>
                       )}
                   </div>
@@ -6439,7 +7156,7 @@ export const MerchantApp: React.FC = () => {
                   }
                   className="w-full py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-2xl shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed mt-2"
                 >
-                  {isJoiningFlashSale ? 'جاري الإرسال...' : 'إرسال الطلب للموافقة'}
+                  {isJoiningFlashSale ? t("merchant.common.sending") : t("merchant.flashSales.joinModal.submitBtn")}
                 </button>
               </form>
             </div>
@@ -6454,20 +7171,20 @@ export const MerchantApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl relative"
+                className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl relative text-white"
               >
                 <div className="p-6">
                   <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
                     <AlertTriangle size={32} />
                   </div>
                   <h3 className="text-xl font-black text-center text-violet mb-2">
-                    تأكيد الحذف
+                    {t("merchant.products.deleteConfirm.title")}
                   </h3>
                   <p className="text-center text-sm text-slate-600 mb-6 font-bold leading-relaxed">
-                    هل أنت متأكد من حذف المنتج "{deleteConfirm.name}" نهائياً؟
+                    {t("merchant.products.deleteConfirm.body", { name: deleteConfirm.name })}
                     <br />
                     <span className="text-red-500 text-xs">
-                      لا يمكن التراجع عن هذه العملية!
+                      {t("merchant.products.deleteConfirm.irrevocable")}
                     </span>
                   </p>
 
@@ -6477,7 +7194,7 @@ export const MerchantApp: React.FC = () => {
                       disabled={isDeletingProduct}
                       className="flex-1 py-3 bg-red-600 text-white font-black rounded-2xl shadow-lg hover:bg-red-700 transition disabled:opacity-70"
                     >
-                      {isDeletingProduct ? 'جاري الحذف...' : 'نعم، احذف'}
+                      {isDeletingProduct ? t("merchant.products.deleteConfirm.deleting") : t("merchant.products.deleteConfirm.confirmBtn")}
                     </button>
                     <button
                       onClick={() =>
@@ -6485,7 +7202,7 @@ export const MerchantApp: React.FC = () => {
                       }
                       className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl hover:bg-slate-200 transition"
                     >
-                      إلغاء
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </div>
@@ -6502,7 +7219,7 @@ export const MerchantApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl relative text-right"
+                className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl relative text-right text-white"
                 dir="rtl"
               >
                 <div className="p-6">
@@ -6510,17 +7227,17 @@ export const MerchantApp: React.FC = () => {
                     <AlertTriangle size={32} />
                   </div>
                   <h3 className="text-xl font-black text-center text-violet mb-2">
-                    {blockConfirm.isBlocked ? "إلغاء حظر الزبون" : "حظر الزبون"}
+                    {blockConfirm.isBlocked ? t("merchant.confirms.block.unblockTitle") : t("merchant.confirms.block.blockTitle")}
                   </h3>
                   <p className="text-center text-sm text-slate-600 mb-6 font-bold leading-relaxed font-sans">
                     {blockConfirm.isBlocked 
-                      ? `هل تريد بالتأكيد إلغاء الحظر عن الزبون "${blockConfirm.name}"؟` 
-                      : `هل أنت متأكد من حظر الزبون "${blockConfirm.name}"؟`}
+                      ? t("merchant.confirms.block.unblockBody", { name: blockConfirm.name })
+                      : t("merchant.confirms.block.blockBody", { name: blockConfirm.name })}
                     <br />
                     <span className="text-slate-400 text-xs font-normal block mt-1">
                       {blockConfirm.isBlocked 
-                        ? "سيتمكن الزبون من رؤية متجرك وطلب منتجاتك مرة أخرى." 
-                        : "لن يتمكن الزبون من رؤية متجرك أو عمل طلبات جديدة."}
+                        ? t("merchant.confirms.block.unblockEffect")
+                        : t("merchant.confirms.block.blockEffect")}
                     </span>
                   </p>
 
@@ -6535,19 +7252,19 @@ export const MerchantApp: React.FC = () => {
                             !blockConfirm.isBlocked,
                           );
                           if (!ok) {
-                            alert("تعذر تحديث حالة الحظر. حاول مجدداً.");
+                            alert(t("merchant.confirms.block.updateFailed"));
                             return;
                           }
-                          alert(blockConfirm.isBlocked ? "تم إلغاء حظر الزبون بنجاح! ✅" : "تم حظر الزبون من متجرك بنجاح! 🚫");
+                          alert(blockConfirm.isBlocked ? t("merchant.confirms.block.unblockSuccess") : t("merchant.confirms.block.blockSuccess"));
                         } catch (err) {
-                          alert("❌ حدث خطأ أثناء تعديل حالة الحظر");
+                          alert(t("merchant.confirms.block.updateError"));
                         } finally {
                           setBlockConfirm({ show: false, customerId: "", name: "", isBlocked: false });
                         }
                       }}
                       className={`flex-1 py-3 ${blockConfirm.isBlocked ? 'bg-emerald-600 hover:bg-emerald-700 animate-pulse' : 'bg-red-600 hover:bg-red-700'} text-white font-black rounded-2xl shadow-lg transition`}
                     >
-                      {blockConfirm.isBlocked ? "نعم، إلغاء الحظر" : "نعم، حظر الزبون"}
+                      {blockConfirm.isBlocked ? t("merchant.confirms.block.confirmUnblock") : t("merchant.confirms.block.confirmBlock")}
                     </button>
                     <button
                       type="button"
@@ -6556,7 +7273,7 @@ export const MerchantApp: React.FC = () => {
                       }
                       className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl hover:bg-slate-200 transition"
                     >
-                      إلغاء
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </div>
@@ -6568,16 +7285,16 @@ export const MerchantApp: React.FC = () => {
         {/* Modal: إضافة/تعديل منتج */}
         {prodModal.show && (
           <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-6 sm:p-8 shadow-2xl h-[90vh] overflow-y-auto animate-scale-in text-right">
+            <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2.5rem] w-full max-w-lg p-6 sm:p-8 shadow-2xl h-[90vh] overflow-y-auto animate-scale-in text-right text-white">
               {/* رأس المودال الإحترافي */}
               <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
                 <div>
                   <h3 className="text-lg sm:text-xl font-black text-violet flex items-center gap-2">
                     <span className="w-2.5 h-6 bg-vibrant-purple rounded-full block"></span>
-                    {prodModal.mode === "add" ? "إضافة منتج جديد" : "تعديل بيانات المنتج"}
+                    {prodModal.mode === "add" ? t("merchant.products.form.addTitle") : t("merchant.products.form.editTitle")}
                   </h3>
                   <p className="text-[10px] text-slate-400 font-bold mt-1">
-                    يرجى تعبئة تفاصيل المنتج المعروض بدقة لضمان أفضل تجربة مع الزبون
+                    {t("merchant.products.form.subtitle")}
                   </p>
                 </div>
                 <button
@@ -6596,12 +7313,12 @@ export const MerchantApp: React.FC = () => {
               >
                 {/* 1. صورة المنتج في المقدمة كما تطلب تجربة المستخدم UX */}
                 <div className="bg-slate-50/50 p-4 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center gap-2">
-                  <span className="text-xs font-black text-slate-500 mb-1">صورة المنتج الرئيسية *</span>
+                  <span className="text-xs font-black text-slate-500 mb-1">{t("merchant.products.form.mainImage")}</span>
                   <div className="w-full max-w-[200px] mx-auto bg-white rounded-2xl p-2 shadow-xs flex flex-col items-center">
                     <ImageUploader
                       value={prodImage}
                       onChange={setProdImage}
-                      label="أضف صورة جذابة"
+                      label={t("merchant.products.form.addImageLabel")}
                     />
                     <button
                       type="button"
@@ -6611,11 +7328,11 @@ export const MerchantApp: React.FC = () => {
                       className="mt-2.5 py-2 px-3 bg-violet-50 hover:bg-violet-100 border border-violet-100 text-violet hover:text-violet-900 text-[10px] font-black rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-xs w-full"
                     >
                       <Sparkles size={12} className="animate-pulse text-vibrant-purple" />
-                      <span>تفريغ ميزات الكاميرا مجاناً ✨</span>
+                      <span>{t("merchant.products.form.bgRemoverBtn")}</span>
                     </button>
                   </div>
                   <p className="text-[9px] text-slate-400 font-bold text-center">
-                    الصور ذات الخلفية البيضاء أو الواضحة تزيد المبيعات بنسبة 40%
+                    {t("merchant.products.form.imageTip")}
                   </p>
                 </div>
 
@@ -6623,27 +7340,27 @@ export const MerchantApp: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-black text-slate-755 mb-2 mr-1">
-                      اسم المنتج *
+                      {t("merchant.products.form.name")}
                     </label>
                     <input
                       type="text"
                       value={prodName}
                       onChange={(e) => setProdName(e.target.value)}
                       required
-                      placeholder="مثال: ساعة يد رجالية فاخرة"
+                      placeholder={t("merchant.products.form.namePlaceholder")}
                       className="w-full border border-slate-200 px-4 py-3.5 rounded-2xl text-sm font-bold text-violet focus:bg-white focus:ring-2 focus:ring-slate-500 focus:border-slate-500 outline-none transition-all shadow-xs"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-black text-slate-755 mb-2 mr-1">
-                      السعر للزبون (د.ع) *
+                      {t("merchant.products.form.price")}
                     </label>
                     <input
                       type="number"
                       value={prodPrice || ""}
                       onChange={(e) => setProdPrice(parseInt(e.target.value) || 0)}
                       required
-                      placeholder="مثال: 25000"
+                      placeholder={t("merchant.products.form.pricePlaceholder")}
                       className="w-full border border-slate-200 px-4 py-3.5 rounded-2xl text-sm font-black text-violet focus:bg-white focus:ring-2 focus:ring-slate-500 focus:border-slate-500 outline-none transition-all shadow-xs"
                     />
                   </div>
@@ -6652,12 +7369,12 @@ export const MerchantApp: React.FC = () => {
                 {/* 3. الوصف */}
                 <div>
                   <label className="block text-xs font-black text-slate-755 mb-2 mr-1">
-                    وصف المنتج وتفاصيله
+                    {t("merchant.products.form.description")}
                   </label>
                   <textarea
                     value={prodDesc}
                     onChange={(e) => setProdDesc(e.target.value)}
-                    placeholder="اكتب تفاصيل المنتج ومميزاته ومواد التصنيع هنا..."
+                    placeholder={t("merchant.products.form.descriptionPlaceholder")}
                     className="w-full border border-slate-200 p-4 rounded-2xl text-sm font-medium text-slate-700 h-24 focus:bg-white focus:ring-2 focus:ring-slate-500 focus:border-slate-500 outline-none transition-all shadow-xs leading-relaxed"
                   />
                 </div>
@@ -6667,14 +7384,14 @@ export const MerchantApp: React.FC = () => {
                   {/* الباركود */}
                   <div>
                     <label className="block text-xs font-black text-slate-755 mb-2 mr-1">
-                      رمز الباركود (اختياري)
+                      {t("merchant.products.form.barcode")}
                     </label>
                     <div className="flex gap-2">
                       <input
                         type="text"
                         value={prodBarcode}
                         onChange={(e) => setProdBarcode(e.target.value)}
-                        placeholder="امسح او اكتب يدوياً"
+                        placeholder={t("merchant.products.form.barcodePlaceholder")}
                         className="w-full border border-slate-200 px-4 py-3 rounded-2xl text-xs font-mono text-slate-700 outline-none focus:ring-2 focus:ring-slate-500 focus:border-slate-500 shadow-xs"
                       />
                       <button
@@ -6685,7 +7402,7 @@ export const MerchantApp: React.FC = () => {
                           setShowScanner(true);
                         }}
                         className="px-3 bg-violet-55 border border-slate-100 hover:bg-slate-100 text-violet-755 rounded-2xl flex items-center justify-center active:scale-95 transition shadow-xs"
-                        title="ماسح الباركود بالكاميرا"
+                        title={t("merchant.products.form.barcodeScannerTitle")}
                       >
                         <Camera size={18} />
                       </button>
@@ -6695,7 +7412,7 @@ export const MerchantApp: React.FC = () => {
                   {/* الكمية المتوفرة (اختياري) */}
                   <div>
                     <label className="block text-xs font-black text-slate-755 mb-2 mr-1">
-                      الكمية المتوفرة (اختياري)
+                      {t("merchant.products.form.inventory")}
                     </label>
                     <input
                       type="number"
@@ -6705,10 +7422,10 @@ export const MerchantApp: React.FC = () => {
                         setProdInventory(v === "" ? "" : parseInt(v) || 0);
                       }}
                       className="w-full border border-slate-200 px-4 py-3 rounded-2xl text-sm font-black text-violet focus:ring-2 focus:ring-slate-500 outline-none focus:border-slate-500 shadow-xs"
-                      placeholder="جاهز للتوريد بكميات ضخمة"
+                      placeholder={t("merchant.products.form.inventoryPlaceholder")}
                     />
                     <span className="text-[9px] text-emerald-600 font-bold block mt-1 mr-1">
-                      💡 اتركه فارغاً ليظهر كمنتج "متاح بكميات كبيرة"
+                      {t("merchant.products.form.inventoryHint")}
                     </span>
                   </div>
                 </div>
@@ -6716,13 +7433,13 @@ export const MerchantApp: React.FC = () => {
                 {/* عرض خاص */}
                 <div>
                   <label className="block text-xs font-black text-slate-755 mb-2 mr-1">
-                    عرض ترويجي خاص لشد الأنظار (اختياري)
+                    {t("merchant.products.form.specialOffer")}
                   </label>
                   <input
                     type="text"
                     value={prodSpecialOffer}
                     onChange={(e) => setProdSpecialOffer(e.target.value)}
-                    placeholder="مثال: اشتري 2 واحصل على قطعة مجاناً 🎁"
+                    placeholder={t("merchant.products.form.specialOfferPlaceholder")}
                     className="w-full border border-slate-200 px-4 py-3.5 rounded-2xl text-sm text-green-700 font-black focus:ring-2 focus:ring-green-500 outline-none shadow-xs"
                   />
                 </div>
@@ -6739,7 +7456,7 @@ export const MerchantApp: React.FC = () => {
                     }`}
                   >
                     <Truck size={16} />
-                    {prodIsFreeDelivery ? "المنتج معفى من أجور التوصيل للزبون 🎉" : "عرض المنتج مع توصيل مجاني؟"}
+                    {prodIsFreeDelivery ? t("merchant.products.form.freeDeliveryOn") : t("merchant.products.form.freeDeliveryOff")}
                   </button>
                 </div>
 
@@ -6748,7 +7465,7 @@ export const MerchantApp: React.FC = () => {
                   {/* الخصومات */}
                   <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 flex flex-col justify-between gap-2 shadow-xs">
                     <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 mb-1">
-                      <Ticket size={14} className="text-violet" /> تطبيق خصم مباشر
+                      <Ticket size={14} className="text-violet" /> {t("merchant.products.form.discountSection")}
                     </h4>
                     <select
                       value={prodDiscountType}
@@ -6756,18 +7473,18 @@ export const MerchantApp: React.FC = () => {
                         setProdDiscountType(e.target.value as any);
                         setProdDiscountValue(0);
                       }}
-                      className="w-full border border-slate-200 p-2.5 rounded-2xl text-xs bg-white text-violet font-bold outline-none"
+                      className="welcome-select welcome-select--sm"
                     >
-                      <option value="none">بدون خصم</option>
-                      <option value="percent">خصم نسبة (%)</option>
-                      <option value="amount">خصم مبلغ ثابت (د.ع)</option>
+                      <option value="none">{t("merchant.products.form.discountNone")}</option>
+                      <option value="percent">{t("merchant.products.form.discountPercent")}</option>
+                      <option value="amount">{t("merchant.products.form.discountAmount")}</option>
                     </select>
                     {prodDiscountType !== "none" && (
                       <input
                         type="number"
                         value={prodDiscountValue || ""}
                         onChange={(e) => setProdDiscountValue(parseInt(e.target.value) || 0)}
-                        placeholder={prodDiscountType === "percent" ? "مثال: 15" : "مثال: 5000"}
+                        placeholder={prodDiscountType === "percent" ? t("merchant.products.form.discountPercentPlaceholder") : t("merchant.products.form.discountAmountPlaceholder")}
                         className="w-full border border-slate-200 p-2.5 rounded-2xl text-xs font-black text-slate-700 outline-none"
                       />
                     )}
@@ -6777,7 +7494,7 @@ export const MerchantApp: React.FC = () => {
                   {availableTags.length > 0 && (
                     <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-2 shadow-xs">
                       <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5">
-                        <span className="w-1.5 h-3 bg-slate-600 rounded-full"></span> الكلمات التصنيفية
+                        <span className="w-1.5 h-3 bg-slate-600 rounded-full"></span> {t("merchant.products.form.tagsSection")}
                       </h4>
                       <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
                         {availableTags.map((tag) => (
@@ -6811,8 +7528,8 @@ export const MerchantApp: React.FC = () => {
                     className="w-full px-4 py-3.5 bg-slate-50 hover:bg-slate-100/80 flex justify-between items-center transition-all text-right"
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-black text-on-brand">📋 معلومات إضافية متقدمة</span>
-                      <span className="text-[9px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">اختياري</span>
+                      <span className="text-xs font-black text-on-brand">{t("merchant.products.form.extraInfo")}</span>
+                      <span className="text-[9px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">{t("common.optional")}</span>
                     </div>
                     <div>
                       {showExtraInfo ? <ChevronUp size={16} className="text-slate-500" /> : <ChevronDown size={16} className="text-slate-500" />}
@@ -6824,12 +7541,12 @@ export const MerchantApp: React.FC = () => {
                       {/* اللون والمقاس */}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-[11px] font-bold text-slate-600 mb-1.5">اللون</label>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1.5">{t("merchant.products.form.color")}</label>
                           <input
                             type="text"
                             value={prodColor}
                             onChange={(e) => setProdColor(e.target.value)}
-                            placeholder="مثال: أسود ملكي"
+                            placeholder={t("merchant.products.form.colorPlaceholder")}
                             className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-violet focus:ring-1 focus:ring-slate-500 outline-none"
                           />
                           <div className="flex flex-wrap gap-1 mt-1.5">
@@ -6847,12 +7564,12 @@ export const MerchantApp: React.FC = () => {
                         </div>
 
                         <div>
-                          <label className="block text-[11px] font-bold text-slate-600 mb-1.5">المقاس / الحجم</label>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1.5">{t("merchant.products.form.size")}</label>
                           <input
                             type="text"
                             value={prodSize}
                             onChange={(e) => setProdSize(e.target.value)}
-                            placeholder="مثال: XL أو 42"
+                            placeholder={t("merchant.products.form.sizePlaceholder")}
                             className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-violet focus:ring-1 focus:ring-slate-500 outline-none"
                           />
                           <div className="flex flex-wrap gap-1 mt-1.5">
@@ -6872,35 +7589,35 @@ export const MerchantApp: React.FC = () => {
 
                       {/* القياسات: الطول، العرض، الوزن */}
                       <div>
-                        <label className="block text-[11px] font-black text-slate-700 mb-2">قياسات المنتج المادية</label>
+                        <label className="block text-[11px] font-black text-slate-700 mb-2">{t("merchant.products.form.dimensions")}</label>
                         <div className="grid grid-cols-3 gap-2">
                           <div>
-                            <span className="text-[9px] text-slate-400 font-bold block mb-1">الطول (سم)</span>
+                            <span className="text-[9px] text-slate-400 font-bold block mb-1">{t("merchant.products.form.length")}</span>
                             <input
                               type="text"
                               value={prodLength}
                               onChange={(e) => setProdLength(e.target.value)}
-                              placeholder="مثال: 15"
+                              placeholder={t("merchant.products.form.lengthPlaceholder")}
                               className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-right outline-none"
                             />
                           </div>
                           <div>
-                            <span className="text-[9px] text-slate-400 font-bold block mb-1">العرض (سم)</span>
+                            <span className="text-[9px] text-slate-400 font-bold block mb-1">{t("merchant.products.form.width")}</span>
                             <input
                               type="text"
                               value={prodWidth}
                               onChange={(e) => setProdWidth(e.target.value)}
-                              placeholder="مثال: 30"
+                              placeholder={t("merchant.products.form.widthPlaceholder")}
                               className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-right outline-none"
                             />
                           </div>
                           <div>
-                            <span className="text-[9px] text-slate-400 font-bold block mb-1">الوزن</span>
+                            <span className="text-[9px] text-slate-400 font-bold block mb-1">{t("merchant.products.form.weight")}</span>
                             <input
                               type="text"
                               value={prodWeight}
                               onChange={(e) => setProdWeight(e.target.value)}
-                              placeholder="مثال: 500 غرام"
+                              placeholder={t("merchant.products.form.weightPlaceholder")}
                               className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-right outline-none"
                             />
                           </div>
@@ -6911,34 +7628,34 @@ export const MerchantApp: React.FC = () => {
                       <div className="border-t border-slate-100 pt-3 space-y-3">
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">الماركة / براند</label>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">{t("merchant.products.form.brand")}</label>
                             <input
                               type="text"
                               value={prodBrand}
                               onChange={(e) => setProdBrand(e.target.value)}
-                              placeholder="مثال: Apple"
+                              placeholder={t("merchant.products.form.brandPlaceholder")}
                               className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-violet outline-none"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">مدة الضمان</label>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">{t("merchant.products.form.warranty")}</label>
                             <input
                               type="text"
                               value={prodWarranty}
                               onChange={(e) => setProdWarranty(e.target.value)}
-                              placeholder="مثال: سنة واحدة"
+                              placeholder={t("merchant.products.form.warrantyPlaceholder")}
                               className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-violet outline-none"
                             />
                           </div>
                         </div>
 
                         <div>
-                          <label className="block text-[11px] font-bold text-slate-600 mb-1">حالة المنتج</label>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1">{t("merchant.products.form.condition")}</label>
                           <input
                             type="text"
                             value={prodCondition}
                             onChange={(e) => setProdCondition(e.target.value)}
-                            placeholder="مثال: أصلي ممتاز ومختوم"
+                            placeholder={t("merchant.products.form.conditionPlaceholder")}
                             className="w-full border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-violet outline-none"
                           />
                         </div>
@@ -6955,7 +7672,7 @@ export const MerchantApp: React.FC = () => {
                     disabled={isSavingProduct}
                     className="w-full py-4 px-6 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black text-sm rounded-2xl shadow-lg shadow-slate-100 hover:shadow-xl hover:shadow-slate-200 transition-all flex items-center justify-center gap-2 disabled:opacity-70"
                   >
-                    <span>{isSavingProduct ? 'جاري الحفظ...' : '🚀 حفظ المنتج ونشره مباشرة'}</span>
+                    <span>{isSavingProduct ? t("merchant.common.saving") : t("merchant.products.form.savePublish")}</span>
                   </button>
                   <button
                     type="submit"
@@ -6963,7 +7680,7 @@ export const MerchantApp: React.FC = () => {
                     disabled={isSavingProduct}
                     className="w-full py-4 px-6 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm rounded-2xl transition-all flex items-center justify-center gap-2 disabled:opacity-70"
                   >
-                    <span>{isSavingProduct ? 'جاري الحفظ...' : '💾 حفظ المنتج كمسودة مؤقتة'}</span>
+                    <span>{isSavingProduct ? t("merchant.common.saving") : t("merchant.products.form.saveDraft")}</span>
                   </button>
                 </div>
               </form>
@@ -6974,7 +7691,7 @@ export const MerchantApp: React.FC = () => {
         {/* Modal: Bulk Edit */}
         {showBulkEditModal && (
           <div className="fixed inset-0 bg-deep-navy/50 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
-            <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl animate-scale-in text-right">
+            <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl animate-scale-in text-right text-white">
               <div className="flex justify-between items-center mb-8 pb-4 border-b border-slate-100">
                 <div>
                   <h3 className="font-black text-xl text-violet">
@@ -7112,10 +7829,15 @@ export const MerchantApp: React.FC = () => {
         {/* Modal: Scanner */}
         {showScanner && (
           <div className="fixed inset-0 bg-deep-navy/80 backdrop-blur-sm z-[60] flex flex-col items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-white rounded-2xl overflow-hidden shadow-2xl animate-fade-in relative">
+            <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl animate-fade-in relative text-white">
               <div className="p-4 border-b flex justify-between items-center bg-slate-50">
                 <h3 className="font-black text-violet flex items-center gap-2">
-                  <Camera size={18} /> {scannerMode === "search" ? "بحث بالباركود" : "الجرد الذكي"}
+                  <Camera size={18} />{" "}
+                  {scannerMode === "order"
+                    ? t("merchant.orders.scanOrderTitle")
+                    : scannerMode === "search"
+                      ? "بحث بالباركود"
+                      : "الجرد الذكي"}
                 </h3>
                 <button
                   onClick={() => setShowScanner(false)}
@@ -7130,10 +7852,40 @@ export const MerchantApp: React.FC = () => {
                   className="w-full h-auto mx-auto rounded-2xl overflow-hidden"
                 ></div>
                 <p className="text-center text-xs text-slate-500 mt-4 font-bold">
-                  وجه الكاميرا نحو باركود المنتج
-                  <br />
-                  {scannerMode === "search" ? "سيتم كتابة الباركود في شريط البحث للعثور عليه" : "سيتم فتح صفحة المنتج تلقائياً للتعديل"}
+                  {scannerMode === "order" ? (
+                    t("merchant.orders.scanOrderHint")
+                  ) : (
+                    <>
+                      وجه الكاميرا نحو باركود المنتج
+                      <br />
+                      {scannerMode === "search"
+                        ? "سيتم كتابة الباركود في شريط البحث للعثور عليه"
+                        : "سيتم فتح صفحة المنتج تلقائياً للتعديل"}
+                    </>
+                  )}
                 </p>
+                {scannerMode === "order" && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={isScanningOrderFile}
+                      onClick={() => orderGalleryInputRef.current?.click()}
+                      className="mt-4 w-full py-3 bg-white/10 hover:bg-white/20 border border-white/25 text-white font-black rounded-2xl flex items-center justify-center gap-2 text-xs transition active:scale-95 disabled:opacity-60"
+                    >
+                      <ImageIcon size={16} />
+                      <span>{t("merchant.orders.scanOrderFromGallery")}</span>
+                    </button>
+                    <input
+                      ref={orderGalleryInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        void handleScanOrderFromGallery(e.target.files?.[0]);
+                      }}
+                    />
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -7146,15 +7898,15 @@ export const MerchantApp: React.FC = () => {
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="bg-white w-full max-w-sm rounded-[3rem] shadow-2xl overflow-hidden text-right p-8 border border-slate-100"
+              className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-sm rounded-[3rem] shadow-2xl overflow-hidden text-right p-8 text-white"
             >
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-black text-violet">
                   {actionModal.type === "rejected"
-                    ? "رفض الطلب ❌"
+                    ? t("merchant.orders.actionModal.rejectTitle")
                     : actionModal.type === "returned"
-                      ? "إرجاع الطلب ↩️"
-                      : "استبدال الطلب 🔄"}
+                      ? t("merchant.orders.actionModal.returnTitle")
+                      : t("merchant.orders.actionModal.replaceTitle")}
                 </h3>
                 <button
                   onClick={() => {
@@ -7169,18 +7921,15 @@ export const MerchantApp: React.FC = () => {
 
               <div className="space-y-3">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
-                  اختر السبب أو اكتبه:
+                  {t("merchant.orders.actionModal.pickReason")}
                 </p>
 
                 {actionModal.type === "rejected"
-                  ? [
-                      "نفذ المخزون",
-                      "المنطقة خارج التغطية",
-                      "خطأ في السعر",
-                      "رقم الهاتف غير متاح",
-                    ].map((r) => (
+                  ? (["outOfStock", "outOfCoverage", "priceError", "phoneUnavailable"] as const).map((key) => {
+                      const r = t(`merchant.orders.actionModal.rejectReasons.${key}`);
+                      return (
                       <button
-                        key={r}
+                        key={key}
                         onClick={() => {
                           void runOrderStatusUpdate(actionModal.orderId, "rejected", r);
                           setActionModal({ ...actionModal, show: false });
@@ -7190,22 +7939,16 @@ export const MerchantApp: React.FC = () => {
                       >
                         {r}
                       </button>
-                    ))
+                    );})
                   : (actionModal.type === "returned"
-                        ? [
-                            "المنتج معيب",
-                            "الزبون غير مقتنع",
-                            "مشكلة في المقاس/اللون",
-                            "تأخر في التوصيل",
-                          ]
-                        : [
-                            "استبدال مقاس/لون",
-                            "استبدال منتج معيب",
-                            "منتج مختلف عن الصورة",
-                          ]
-                    ).map((r) => (
+                        ? (["defective", "unconvinced", "sizeColor", "deliveryDelay"] as const)
+                        : (["sizeColor", "defective", "differentImage"] as const)
+                    ).map((key) => {
+                      const reasonNs = actionModal.type === "returned" ? "returnReasons" : "replaceReasons";
+                      const r = t(`merchant.orders.actionModal.${reasonNs}.${key}`);
+                      return (
                       <button
-                        key={r}
+                        key={key}
                         onClick={() => {
                           void runOrderStatusUpdate(
                             actionModal.orderId,
@@ -7219,16 +7962,16 @@ export const MerchantApp: React.FC = () => {
                       >
                         {r}
                       </button>
-                    ))}
+                    );})}
 
                 <div className="pt-4 border-t border-slate-100 mt-2">
                   <p className="text-[10px] font-black text-slate-400 mb-2">
-                    سبب خاص:
+                    {t("merchant.orders.actionModal.customReason")}
                   </p>
                   <textarea
                     value={customReason}
                     onChange={(e) => setCustomReason(e.target.value)}
-                    placeholder="اكتب السبب هنا..."
+                    placeholder={t("merchant.orders.actionModal.customReasonPlaceholder")}
                     className="w-full bg-slate-50 border border-slate-100 p-3 rounded-2xl text-xs font-bold outline-none focus:ring-1 focus:ring-slate-500 min-h-[80px]"
                   />
                   <button
@@ -7244,7 +7987,7 @@ export const MerchantApp: React.FC = () => {
                     }}
                     className="w-full mt-3 py-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-xl font-black text-xs disabled:opacity-50 shadow-lg shadow-slate-100"
                   >
-                    {updatingOrderId === actionModal.orderId ? 'جاري التحديث...' : 'تأكيد الإجراء'}
+                    {updatingOrderId === actionModal.orderId ? t("merchant.common.updating") : t("merchant.orders.actionModal.confirmAction")}
                   </button>
                 </div>
               </div>
@@ -7258,10 +8001,10 @@ export const MerchantApp: React.FC = () => {
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="bg-white w-full max-w-md rounded-[3rem] shadow-2xl overflow-hidden text-right flex flex-col max-h-[85vh] border border-slate-100"
+              className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-md rounded-[3rem] shadow-2xl overflow-hidden text-right flex flex-col max-h-[85vh] text-white"
             >
               <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
-                <h3 className="text-xl font-black text-violet">استبدال المنتج 🔄</h3>
+                <h3 className="text-xl font-black text-violet">{t("merchant.orders.replacementModal.title")}</h3>
                 <button
                   onClick={() => {
                     setReplacementModal({ ...replacementModal, show: false });
@@ -7276,7 +8019,7 @@ export const MerchantApp: React.FC = () => {
 
               <div className="p-8 overflow-y-auto no-scrollbar space-y-6">
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">المنتجات الأصلية في الطلب:</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">{t("merchant.orders.replacementModal.originalItems")}</p>
                   <div className="flex flex-wrap gap-2">
                     {replacementModal.originalItems.map((item, idx) => {
                       const originalProduct = products.find(p => p.id === item.productId);
@@ -7299,13 +8042,13 @@ export const MerchantApp: React.FC = () => {
                 </div>
 
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">ابحث عن منتج بديل:</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">{t("merchant.orders.replacementModal.searchReplacement")}</p>
                   <div className="relative">
                     <input
                       type="text"
                       value={replacementSearch}
                       onChange={(e) => setReplacementSearch(e.target.value)}
-                      placeholder="ابحث بالاسم، الوصف، أو السعر..."
+                      placeholder={t("merchant.orders.replacementModal.searchPlaceholder")}
                       className="w-full bg-slate-50 border border-slate-100 p-4 pr-12 rounded-2xl text-xs font-bold outline-none focus:ring-2 focus:ring-slate-500 transition-all shadow-inner"
                     />
                     <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300">
@@ -7354,11 +8097,11 @@ export const MerchantApp: React.FC = () => {
                     className="p-5 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-4"
                   >
                     <div className="flex justify-between items-center">
-                      <p className="text-[10px] font-black text-emerald-700 uppercase">المنتج البديل المختار:</p>
+                      <p className="text-[10px] font-black text-emerald-700 uppercase">{t("merchant.orders.replacementModal.selectedReplacement")}</p>
                       <button 
                         onClick={() => setReplacementProduct(null)}
                         className="text-[10px] bg-white text-emerald-600 px-3 py-1 rounded-full font-black border border-emerald-100 shadow-sm"
-                      >تغيير</button>
+                      >{t("merchant.orders.replacementModal.change")}</button>
                     </div>
                     <div className="flex items-center gap-4">
                       <img src={replacementProduct.image || undefined} className="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-md" alt="" />
@@ -7374,7 +8117,7 @@ export const MerchantApp: React.FC = () => {
                              onClick={() => setReplacementQuantity(replacementQuantity + 1)}
                              className="w-7 h-7 bg-white rounded-lg flex items-center justify-center text-emerald-600 border border-emerald-100 shadow-sm hover:bg-emerald-50 active:scale-90 transition-all font-black"
                            >+</button>
-                           <span className="text-[10px] font-bold text-slate-400 mr-2">الكمية المطلوبة</span>
+                           <span className="text-[10px] font-bold text-slate-400 mr-2">{t("merchant.orders.replacementModal.qtyRequired")}</span>
                         </div>
                       </div>
                     </div>
@@ -7384,7 +8127,7 @@ export const MerchantApp: React.FC = () => {
                 {!replacementProduct && (
                   <div className="py-12 text-center text-slate-300 border-2 border-dashed border-slate-100 rounded-[2.5rem] bg-slate-50/50">
                     <Package size={40} className="mx-auto mb-3 opacity-20" />
-                    <p className="text-xs font-bold px-8">يرجى البحث واختيار منتج بديل لإكمال عملية الاستبدال</p>
+                    <p className="text-xs font-bold px-8">{t("merchant.orders.replacementModal.searchHint")}</p>
                   </div>
                 )}
               </div>
@@ -7396,11 +8139,11 @@ export const MerchantApp: React.FC = () => {
                   className="w-full py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl font-black text-sm disabled:opacity-30 disabled:grayscale transition-all shadow-xl shadow-slate-100 flex items-center justify-center gap-3 active:scale-[0.98]"
                 >
                   {isConfirmingReplacement ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                  {isConfirmingReplacement ? 'جاري الاستبدال...' : 'إرسال الطلب للتجهيز كاستبدال'}
+                  {isConfirmingReplacement ? t("merchant.orders.replacementModal.confirming") : t("merchant.orders.replacementModal.confirmBtn")}
                 </button>
                 <p className="text-[9px] text-center text-slate-400 mt-4 font-bold flex items-center justify-center gap-1">
                   <Shield size={10} />
-                  سيتم تحديث حالة الفاتورة وإظهار المنتجات البديلة للزبون والمندوب
+                  {t("merchant.orders.replacementModal.footerNote")}
                 </p>
               </div>
             </motion.div>
@@ -7415,15 +8158,15 @@ export const MerchantApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col items-center gap-6"
+                className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-sm rounded-[2.5rem] shadow-2xl p-8 flex flex-col items-center gap-6 text-white"
               >
                 <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center text-rose-500 shadow-inner">
                   <AlertTriangle size={40} />
                 </div>
                 
                 <div className="text-center space-y-2">
-                  <h3 className="text-xl font-black text-violet">تأكيد إرجاع الطلب</h3>
-                  <p className="text-xs font-bold text-slate-400">هل أنت متأكد من رغبتك في إرجاع هذا الطلب؟ لا يمكن التراجع عن هذا الإجراء.</p>
+                  <h3 className="text-xl font-black text-violet">{t("merchant.orders.returnConfirm.title")}</h3>
+                  <p className="text-xs font-bold text-slate-400">{t("merchant.orders.returnConfirm.body")}</p>
                 </div>
 
                 <div 
@@ -7437,22 +8180,22 @@ export const MerchantApp: React.FC = () => {
                    <div className={`w-5 h-5 rounded-lg border-2 transition-all flex items-center justify-center ${skipReturnConfirm ? 'bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white' : 'bg-white border-slate-200 group-hover:border-slate-300'}`}>
                       {skipReturnConfirm && <Check size={14} className="text-white" />}
                    </div>
-                   <span className="text-[11px] font-black text-slate-500">عدم إظهار رسالة التأكيد مجدداً</span>
+                   <span className="text-[11px] font-black text-slate-500">{t("merchant.orders.returnConfirm.skipConfirm")}</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 w-full">
                    <button
                      onClick={() => setReturnConfirmModal({ show: false, orderId: "" })}
                      className="py-3.5 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs hover:bg-slate-200 transition-colors"
-                   >إلغاء</button>
+                   >{t("common.cancel")}</button>
                    <button
                      onClick={() => {
-                       void runOrderStatusUpdate(returnConfirmModal.orderId, "returned", "إرجاع من قبل التاجر");
+                       void runOrderStatusUpdate(returnConfirmModal.orderId, "returned", t("merchant.orders.returnByMerchant"));
                        setReturnConfirmModal({ show: false, orderId: "" });
                      }}
                      disabled={!!updatingOrderId}
                      className="py-3.5 bg-rose-500 text-white rounded-2xl font-black text-xs shadow-lg shadow-rose-100 hover:bg-rose-600 active:scale-95 transition-all disabled:opacity-70"
-                   >{updatingOrderId ? 'جاري التحديث...' : 'تأكيد الإرجاع'}</button>
+                   >{updatingOrderId ? t("merchant.common.updating") : t("merchant.orders.returnConfirm.confirmReturn")}</button>
                 </div>
               </motion.div>
             </div>
@@ -7467,7 +8210,7 @@ export const MerchantApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white w-full max-w-lg rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+                className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-lg rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] text-white"
               >
                 {/* أزرار التحكم الفوقية */}
                 <div className="p-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
@@ -7477,14 +8220,14 @@ export const MerchantApp: React.FC = () => {
                         className="p-3 bg-emerald-500 text-white rounded-2xl shadow-lg hover:bg-emerald-600 transition-all flex items-center gap-2 text-xs font-black"
                      >
                        <MessageCircle size={18} />
-                       <span>واتساب</span>
+                       <span>{t("merchant.orders.invoice.whatsapp")}</span>
                      </button>
                      <button
                         onClick={handlePrint}
                         className="p-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl shadow-lg transition-all flex items-center gap-2 text-xs font-black"
                      >
                        <Zap size={18} />
-                       <span>طباعة</span>
+                       <span>{t("merchant.orders.invoice.print")}</span>
                      </button>
                    </div>
                    <button
@@ -7527,7 +8270,7 @@ export const MerchantApp: React.FC = () => {
                   </style>
                   <div 
                     ref={invoiceRef}
-                    className="invoice-container p-10 print:p-2 bg-white min-h-[600px] text-right font-sans"
+                    className="invoice-container keep-white p-10 print:p-2 bg-white min-h-[600px] text-right font-sans text-black"
                     dir="rtl"
                   >
                     {/* Header */}
@@ -7541,17 +8284,17 @@ export const MerchantApp: React.FC = () => {
                           </div>
                         )}
                         <h2 className="text-2xl font-black text-violet">{currentMerchant?.shopName || currentMerchant?.ownerName}</h2>
-                        <p className="text-xs font-bold text-slate-400 mt-1">{"متجركم المفضل"}</p>
+                        <p className="text-xs font-bold text-slate-400 mt-1">{t("merchant.orders.invoice.favoriteStore")}</p>
                       </div>
                       <div className="text-left" dir="ltr">
                         <h1 className="text-4xl font-black text-slate-200 uppercase tracking-widest mb-4">INVOICE</h1>
                         <div className="space-y-1">
                           <div className="text-[10px] font-black text-slate-400 flex items-center justify-end gap-1">
-                            <span>رقم الفاتورة: </span>
+                            <span>{t("merchant.orders.invoice.invoiceNumber")} </span>
                             <span className="text-violet">#{getOrderSeqId(selectedInvoice.id)}</span>
                             <CopyButton text={getOrderSeqId(selectedInvoice.id)} size={9} className="print:hidden" />
                           </div>
-                          <p className="text-[10px] font-black text-slate-400">التاريخ: <span className="text-violet">{formatSafeDateTimeString(selectedInvoice.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}</span></p>
+                          <p className="text-[10px] font-black text-slate-400">{t("merchant.orders.invoice.date")} <span className="text-violet">{formatSafeDateTimeString(selectedInvoice.createdAt, 'ar-IQ', { dateStyle: 'short', timeStyle: 'short' })}</span></p>
                         </div>
                       </div>
                     </div>
@@ -7559,7 +8302,7 @@ export const MerchantApp: React.FC = () => {
                     {/* Customer & Merchant Details */}
                     <div className="grid grid-cols-2 gap-8 mb-10">
                       <div>
-                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3 border-r-4 border-slate-500 pr-3">مستلم الفاتورة:</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3 border-r-4 border-slate-500 pr-3">{t("merchant.orders.invoice.billTo")}</p>
                         <p className="text-sm font-black text-violet mb-1 flex items-center gap-1">
                           <span>{selectedInvoice.customerName}</span>
                           <CopyButton text={selectedInvoice.customerName} size={10} className="print:hidden" />
@@ -7576,22 +8319,22 @@ export const MerchantApp: React.FC = () => {
                         {(selectedInvoice as any).customerLat && (selectedInvoice as any).customerLng && (
                           <div className="flex gap-2 mt-3 font-tajawal">
                             <button
-                              onClick={() => openNativeMapApp((selectedInvoice as any).customerLat, (selectedInvoice as any).customerLng, 'google')}
+                              onClick={() => openNativeMapApp((selectedInvoice as any).customerLat, (selectedInvoice as any).customerLng, 'google', t("merchant.orders.map.noCoordinates"))}
                               className="flex-1 py-3.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg active:scale-95 transition print:hidden"
                             >
-                              <span>فتح عبر Google Maps</span>
+                              <span>{t("merchant.orders.invoice.openGoogleMaps")}</span>
                             </button>
                             <button
-                              onClick={() => openNativeMapApp((selectedInvoice as any).customerLat, (selectedInvoice as any).customerLng, 'waze')}
+                              onClick={() => openNativeMapApp((selectedInvoice as any).customerLat, (selectedInvoice as any).customerLng, 'waze', t("merchant.orders.map.noCoordinates"))}
                               className="flex-1 py-3.5 bg-sky-500 hover:bg-sky-600 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg active:scale-95 transition print:hidden"
                             >
-                              <span>فتح عبر Waze</span>
+                              <span>{t("merchant.orders.invoice.openWaze")}</span>
                             </button>
                           </div>
                         )}
                       </div>
                       <div>
-                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3 border-r-4 border-slate-200 pr-3">المصدر:</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3 border-r-4 border-slate-200 pr-3">{t("merchant.orders.invoice.source")}</p>
                         <p className="text-sm font-black text-violet mb-1">{currentMerchant?.shopName || currentMerchant?.ownerName}</p>
                         <p className="text-xs font-bold text-slate-500 mb-1">{currentMerchant?.phone}</p>
                         <p className="text-xs font-bold text-slate-400">{currentMerchant?.province} - {currentMerchant?.area}</p>
@@ -7602,10 +8345,10 @@ export const MerchantApp: React.FC = () => {
                     <table className="w-full mb-10">
                       <thead>
                         <tr className="bg-slate-50 text-right">
-                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase rounded-r-2xl text-right">المنتج</th>
-                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-center">الكمية</th>
-                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-center">السعر</th>
-                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-left rounded-l-2xl text-left">المجموع</th>
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase rounded-r-2xl text-right">{t("merchant.orders.invoice.colProduct")}</th>
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-center">{t("merchant.orders.invoice.colQty")}</th>
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-center">{t("merchant.orders.invoice.colPrice")}</th>
+                          <th className="p-4 text-[10px] font-black text-slate-400 uppercase text-left rounded-l-2xl text-left">{t("merchant.orders.invoice.colTotal")}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
@@ -7647,30 +8390,30 @@ export const MerchantApp: React.FC = () => {
                       
                       <div className="w-64 space-y-3">
                         <div className="flex justify-between items-center text-xs">
-                          <span className="font-bold text-slate-400">سعر المنتجات:</span>
+                          <span className="font-bold text-slate-400">{t("merchant.orders.invoice.productsPrice")}</span>
                           <span className="font-black text-slate-600">{(selectedInvoice.subtotal || 0).toLocaleString()} د.ع</span>
                         </div>
                         <div className="flex justify-between items-center text-xs">
-                          <span className="font-bold text-slate-400">سعر التوصيل:</span>
+                          <span className="font-bold text-slate-400">{t("merchant.orders.invoice.deliveryPrice")}</span>
                           <span className="font-black text-slate-600">{(selectedInvoice.deliveryPrice || 0).toLocaleString()} د.ع</span>
                         </div>
                         {selectedInvoice.discountAmount > 0 && (
                           <div className="flex justify-between items-center text-xs">
                             <div className="flex items-center gap-2">
-                              <span className="font-bold text-emerald-600">قيمة الخصم:</span>
+                              <span className="font-bold text-emerald-600">{t("merchant.orders.invoice.discountValue")}</span>
                               <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${
                                 selectedInvoice.discountSponsor === 'ADMIN' 
                                   ? 'bg-blue-50 text-blue-600 border border-blue-100' 
                                   : 'bg-purple-50 text-purple-600 border border-purple-100'
                               }`}>
-                                {selectedInvoice.discountSponsor === 'ADMIN' ? 'خصم من الإدارة' : 'خصم من المتجر'}
+                                {selectedInvoice.discountSponsor === 'ADMIN' ? t("merchant.orders.invoice.discountFromAdmin") : t("merchant.orders.invoice.discountFromStore")}
                               </span>
                             </div>
                             <span className="font-black text-emerald-600">- {selectedInvoice.discountAmount.toLocaleString()} د.ع</span>
                           </div>
                         )}
                         <div className="flex justify-between items-center p-4 bg-vibrant-purple rounded-2xl text-white shadow-xl shadow-slate-100 mt-2">
-                          <span className="text-xs font-black uppercase">السعر الكلي المطلوب من الزبون:</span>
+                          <span className="text-xs font-black uppercase">{t("merchant.orders.invoice.grandTotal")}</span>
                           <span className="text-lg font-black">{(selectedInvoice.total || 0).toLocaleString()} د.ع</span>
                         </div>
                       </div>
@@ -7678,7 +8421,7 @@ export const MerchantApp: React.FC = () => {
 
                     {/* Footer Note */}
                     <div className="mt-16 text-center pt-8 border-t border-slate-100 flex flex-col items-center">
-                      <p className="text-[10px] font-bold text-slate-400 italic mb-6">شكراً لاختياركم {currentMerchant?.shopName || currentMerchant?.ownerName}! نأمل رؤيتكم مرة أخرى قريباً.</p>
+                      <p className="text-[10px] font-bold text-slate-400 italic mb-6">{t("merchant.orders.invoice.thankYou", { shopName: currentMerchant?.shopName || currentMerchant?.ownerName })}</p>
                       
                       <div className="flex w-full items-center justify-between px-8 py-4 bg-slate-50 rounded-2xl border border-slate-100">
                         <div className="text-right">
@@ -7708,124 +8451,185 @@ export const MerchantApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-[#f8f9fa] w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+                className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] text-white"
                 dir="rtl"
               >
                 {/* Header */}
-                <div className="px-6 py-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0">
-                  <div className="flex items-center gap-3">
+                <div className="px-3 py-3 bg-white/5 border-b border-white/15 flex items-center gap-1.5 shrink-0">
+                  <div className="flex-1 grid grid-cols-3 gap-1.5 min-w-0">
                     <button
+                      type="button"
                       onClick={() => handlePrintShippingLabel()}
-                      className="bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white px-4 py-2 rounded-xl text-xs font-black shadow-lg shadow-vibrant-purple/25/30 transition-all flex items-center gap-2"
+                      className="min-w-0 w-full justify-center bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white px-1 py-2 rounded-xl text-[8px] leading-tight font-black shadow-lg shadow-vibrant-purple/25 transition-all flex flex-col items-center gap-0.5 active:scale-[0.98] sm:flex-row sm:gap-1 sm:text-[9px]"
                     >
-                      <Printer size={16} />
-                      <span>طباعة الملصق</span>
+                      <Printer size={12} className="shrink-0" />
+                      <span className="text-center whitespace-normal">{t("merchant.orders.shippingLabel.printLabel")}</span>
                     </button>
                     <button
-                      onClick={() => handleWhatsAppShare(selectedInvoice)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-lg shadow-emerald-500/30 transition-all flex items-center gap-2 cursor-pointer"
+                      type="button"
+                      onClick={() => void handleSaveShippingLabel()}
+                      disabled={isSharingInvoice}
+                      className="min-w-0 w-full justify-center bg-white/10 hover:bg-white/20 border border-white/30 text-white px-1 py-2 rounded-xl text-[8px] leading-tight font-black shadow-lg transition-all flex flex-col items-center gap-0.5 active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait sm:flex-row sm:gap-1 sm:text-[9px]"
                     >
-                      <MessageCircle size={16} />
-                      <span>مشاركة واتساب</span>
+                      <Download size={12} className="shrink-0 text-[#fff700]" />
+                      <span className="text-center whitespace-normal">{t("merchant.orders.shippingLabel.saveLabel")}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleWhatsAppShare(selectedInvoice, { captureImage: true })}
+                      disabled={isSharingInvoice}
+                      className="min-w-0 w-full justify-center bg-emerald-600 hover:bg-emerald-700 border border-emerald-400/40 text-white px-1 py-2 rounded-xl text-[8px] leading-tight font-black shadow-lg shadow-emerald-500/30 transition-all flex flex-col items-center gap-0.5 active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait sm:flex-row sm:gap-1 sm:text-[9px]"
+                    >
+                      <MessageCircle size={12} className="shrink-0" />
+                      <span className="text-center whitespace-normal">{t("merchant.orders.shippingLabel.shareWhatsApp")}</span>
                     </button>
                   </div>
                   <button
+                    type="button"
                     onClick={() => { setShowShippingLabelModal(false); setSelectedInvoice(null); }}
-                    className="p-2 hover:bg-slate-100 rounded-full text-slate-400 transition-colors"
+                    className="p-1.5 hover:bg-white/15 rounded-full text-white/60 hover:text-white transition-colors shrink-0"
                   >
-                    <X size={20} />
+                    <X size={16} />
                   </button>
                 </div>
 
-                {/* محتوى ملصق الشحن الحراري */}
-                <div className="flex-1 overflow-y-auto p-4 bg-gray-200 flex justify-center items-center">
+                {/* محتوى ملصق الشحن الحراري — يبقى أبيض للطباعة */}
+                <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-black/20">
                   {/* حاوية الملصق بمقاس حراري متعارف عليه (مثل 100x150mm أو مقارب له) */}
                   <div 
                     ref={shippingLabelRef}
-                    className="bg-white p-4 font-mono text-black print:p-0 print:m-0 w-[400px] max-w-full print:w-full border border-gray-300"
+                    className="keep-white bg-white p-4 font-mono text-black print:p-0 print:m-0 w-[400px] max-w-full mx-auto print:w-full border border-gray-300"
                     style={{ direction: 'rtl' }}
                   >
-                    <div className="pb-3 border-b-2 border-black border-dashed flex justify-between items-center mb-4">
-                      <div>
-                        <h2 className="text-xl font-black">{currentMerchant?.shopName || currentMerchant?.ownerName}</h2>
-                        <p className="text-xs font-bold leading-tight mt-1">توصيل سريع</p>
+                    {/* هيدر الملصق: تحميل تطبيق محلك */}
+                    <div className="pb-3 border-b-2 border-black border-dashed flex items-center justify-between gap-3 mb-3">
+                      <div className="text-right min-w-0 flex-1">
+                        <p className="text-lg font-black tracking-tight leading-none">محلك</p>
+                        <p className="text-[10px] font-bold leading-snug mt-1" style={{ color: '#000000' }}>
+                          {t("merchant.orders.shippingLabel.downloadApp")}
+                        </p>
+                        <p className="text-[10px] font-bold leading-snug mt-0.5" style={{ color: '#000000' }}>
+                          {t("merchant.orders.shippingLabel.downloadAppProvinces")}
+                        </p>
+                        <p className="text-[9px] font-bold leading-snug mt-0.5" style={{ color: '#000000' }}>
+                          {t("merchant.orders.shippingLabel.downloadAppStores")}
+                        </p>
                       </div>
-                      {/* الباركود يسهل مسحه من المندوب لتحديث الحالة */}
-                      <div className="bg-white p-1 rounded-lg">
-                        <QRCodeSVG value={`https://mahallak.app/deliveryQR/${selectedInvoice.id}`} size={64} level="H" />
+                      <div className="bg-white p-1 rounded-sm border border-black shrink-0">
+                        <img
+                          src="/mahalak-app-qr.png"
+                          alt={t("merchant.orders.shippingLabel.downloadApp")}
+                          width={64}
+                          height={64}
+                          className="block w-16 h-16 object-contain"
+                          draggable={false}
+                        />
                       </div>
                     </div>
 
                     <div className="mb-4">
+                      <p
+                        className="text-xl font-black text-center mb-2"
+                        style={{ color: '#000000' }}
+                      >
+                        {selectedInvoice.storeName || currentMerchant?.shopName || currentMerchant?.ownerName}
+                      </p>
                       <p className="text-sm font-black border border-black p-2 bg-black text-white text-center uppercase tracking-widest mb-3">
-                        رقم الطلب: #{getOrderSeqId(selectedInvoice.id)}
+                        {t("merchant.orders.shippingLabel.orderNumber")} #{getOrderSeqId(selectedInvoice.id)}
                       </p>
                       <div className="space-y-2 text-sm font-bold">
                         <p className="flex justify-between items-center border-b border-gray-200 pb-1">
-                          <span className="text-gray-500">اسم الزبون:</span>
+                          <span className="text-gray-500">{t("merchant.orders.shippingLabel.customerName")}</span>
                           <span className="text-lg font-black">{selectedInvoice.customerName}</span>
                         </p>
                         <p className="flex justify-between items-center border-b border-gray-200 pb-1">
-                          <span className="text-gray-500">المحافظة:</span>
+                          <span className="text-gray-500">{t("merchant.orders.shippingLabel.province")}</span>
                           <span>{selectedInvoice.customerProvince}</span>
                         </p>
                         <p className="flex justify-between border-b border-gray-200 pb-1">
-                          <span className="text-gray-500">العنوان:</span>
+                          <span className="text-gray-500">{t("merchant.orders.shippingLabel.address")}</span>
                           <span className="text-left w-2/3 truncate block">{selectedInvoice.customerAddress}</span>
                         </p>
                         <p className="flex justify-between items-center border-b border-gray-200 pb-1">
-                          <span className="text-gray-500">تاريخ الطلب:</span>
+                          <span className="text-gray-500">{t("merchant.orders.shippingLabel.orderDate")}</span>
                           <span dir="ltr">{formatSafeDate(selectedInvoice.createdAt)}</span>
                         </p>
                         <p className="flex items-center gap-1 mt-2 p-2 bg-gray-100 border border-gray-300 border-dashed justify-center">
                           <Phone size={16} /> 
-                          <span className="tracking-widest font-black text-lg">{selectedInvoice.customerPhone || 'لا يوجد'}</span>
+                          <span className="tracking-widest font-black text-lg">{selectedInvoice.customerPhone || t("merchant.orders.shippingLabel.noPhone")}</span>
                         </p>
                       </div>
                     </div>
 
                     <div className="mt-4">
-                      <p className="text-xs font-black uppercase mb-1">المنتجات ({selectedInvoice.items?.length}):</p>
-                      <ul className="text-xs space-y-1 mb-4">
+                      <p className="text-xs font-black uppercase mb-1">{t("merchant.orders.shippingLabel.products", { count: selectedInvoice.items?.length })}</p>
+                      <ul className="text-xs space-y-1.5 mb-4">
                         {selectedInvoice.items?.map((item: any, idx: number) => (
-                          <li key={idx} className="flex justify-between items-center border-b border-gray-100 pb-1">
-                            <span className="truncate w-3/4">{item.quantity}x {item.productName}</span>
-                            <span className="font-bold">{item.price.toLocaleString()} د.ع</span>
+                          <li key={idx} className="flex justify-between items-center gap-3 border-b border-gray-100 pb-1.5">
+                            <span className="min-w-0 flex-1 truncate text-right">{item.quantity}x {item.productName}</span>
+                            <span className="shrink-0 inline-flex items-baseline gap-1 font-bold tabular-nums whitespace-nowrap" dir="ltr">
+                              <span>{Number(item.price || 0).toLocaleString()}</span>
+                              <span className="text-[10px] font-bold">د.ع</span>
+                            </span>
                           </li>
                         ))}
                       </ul>
 
-                      <div className="border-t border-gray-300 pt-2 mb-4 space-y-1 text-xs">
-                        <div className="flex justify-between">
-                          <span className="font-bold text-gray-500">سعر المنتجات:</span>
-                          <span className="font-black">{(selectedInvoice.subtotal || 0).toLocaleString()} د.ع</span>
+                      <div className="border-t border-gray-300 pt-2 mb-4 space-y-2 text-xs">
+                        <div className="flex justify-between items-center gap-3">
+                          <span className="font-bold text-gray-500 shrink-0">{t("merchant.orders.shippingLabel.productsPrice")}</span>
+                          <span className="shrink-0 inline-flex items-baseline gap-1 font-black tabular-nums whitespace-nowrap" dir="ltr">
+                            <span>{(selectedInvoice.subtotal || 0).toLocaleString()}</span>
+                            <span className="text-[10px] font-bold">د.ع</span>
+                          </span>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="font-bold text-gray-500">سعر التوصيل:</span>
-                          <span className="font-black">{(selectedInvoice.deliveryPrice || 0).toLocaleString()} د.ع</span>
+                        <div className="flex justify-between items-center gap-3">
+                          <span className="font-bold text-gray-500 shrink-0">{t("merchant.orders.shippingLabel.deliveryPrice")}</span>
+                          <span className="shrink-0 inline-flex items-baseline gap-1 font-black tabular-nums whitespace-nowrap" dir="ltr">
+                            <span>{(selectedInvoice.deliveryPrice || 0).toLocaleString()}</span>
+                            <span className="text-[10px] font-bold">د.ع</span>
+                          </span>
                         </div>
                         {(selectedInvoice.discountAmount || 0) > 0 && (
-                          <div className="flex justify-between items-center">
-                            <span className="font-bold text-gray-500">قيمة الخصم ({selectedInvoice.discountSponsor === 'ADMIN' ? 'تطبيق محلك' : 'المتجر'}):</span>
-                            <span className="font-black">- {(selectedInvoice.discountAmount || 0).toLocaleString()} د.ع</span>
+                          <div className="flex justify-between items-center gap-3">
+                            <span className="font-bold text-gray-500 min-w-0">{t("merchant.orders.shippingLabel.discountValue", { sponsor: selectedInvoice.discountSponsor === 'ADMIN' ? t("merchant.orders.shippingLabel.discountSponsorApp") : t("merchant.orders.shippingLabel.discountSponsorStore") })}</span>
+                            <span className="shrink-0 inline-flex items-baseline gap-1 font-black tabular-nums whitespace-nowrap" dir="ltr">
+                              <span>-{(selectedInvoice.discountAmount || 0).toLocaleString()}</span>
+                              <span className="text-[10px] font-bold">د.ع</span>
+                            </span>
                           </div>
                         )}
                       </div>
                     </div>
 
-                    <div className="border-t-4 border-black pt-2 flex flex-col gap-1 items-center justify-center bg-gray-100 p-2">
-                      <span className="text-sm font-bold text-gray-600">المبلغ الإجمالي لتحصيل المندوب</span>
-                      <span className="text-3xl font-black tabular-nums">{selectedInvoice.total?.toLocaleString()} <span className="text-sm">د.ع</span></span>
+                    <div className="border-t-4 border-black pt-3 pb-2 flex flex-col gap-2 items-center justify-center bg-gray-100 px-3">
+                      <span className="text-[11px] font-bold text-gray-600 text-center leading-snug">
+                        {t("merchant.orders.shippingLabel.collectorTotal")}
+                      </span>
+                      <div className="inline-flex items-baseline gap-2" dir="ltr">
+                        <span className="text-3xl font-black tabular-nums leading-none">
+                          {Number(selectedInvoice.total || 0).toLocaleString()}
+                        </span>
+                        <span className="text-sm font-bold leading-none">د.ع</span>
+                      </div>
                     </div>
 
-                    <div className="mt-4 border-t-2 border-black border-dashed pt-4 flex items-center justify-between">
-                      <div className="text-right">
-                        <p className="text-lg font-black tracking-tight">محلك</p>
-                        <p className="text-[10px] font-bold">حمّل التطبيق الآن وابدأ التسوق</p>
-                        <p className="text-[8px] font-bold text-gray-500 mt-1">متوفر على App Store و Google Play</p>
+                    {/* تذييل الملصق: نفس باركود الطلب */}
+                    <div className="mt-4 border-t-2 border-black border-dashed pt-4 flex items-center justify-between gap-3">
+                      <div className="text-right min-w-0 flex-1">
+                        <p className="text-lg font-black tracking-tight leading-none">تاجرنا</p>
+                        <p className="text-[10px] font-bold leading-snug mt-1">
+                          {t("merchant.orders.shippingLabel.scanOrderQr")}
+                        </p>
                       </div>
-                      <div className="bg-white p-1 rounded-sm border border-black">
-                        <QRCodeSVG value="https://mahallak.app/download" size={50} level="M" />
+                      <div className="bg-white p-1 rounded-sm border border-black shrink-0">
+                        <QRCodeSVG
+                          value={buildMerchantOrderDeepLink(selectedInvoice.id)}
+                          size={64}
+                          level="H"
+                          fgColor="#000000"
+                          bgColor="#FFFFFF"
+                        />
                       </div>
                     </div>
                   </div>
@@ -7838,7 +8642,7 @@ export const MerchantApp: React.FC = () => {
         {/* Modal: إرسال هدية */}
         {giftModal.show && (
           <div className="fixed inset-0 bg-deep-navy/50 backdrop-blur-sm z-[115] flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
-            <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl animate-fade-in text-right max-h-[90vh] overflow-y-auto border border-slate-100 no-scrollbar relative">
+            <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl animate-fade-in text-right max-h-[90vh] overflow-y-auto no-scrollbar relative text-white">
               <div className="flex justify-between items-start mb-6">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 bg-pink-50 text-pink-600 rounded-2xl flex items-center justify-center border border-pink-100 shrink-0">
@@ -7846,9 +8650,9 @@ export const MerchantApp: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="font-black text-lg text-slate-800 leading-tight">
-                      إرسال هدية لـ {giftModal.customerName}
+                      {t("merchant.gifts.title", { name: giftModal.customerName })}
                     </h3>
-                    <p className="text-[10px] font-medium text-slate-400 mt-0.5">اختر كود خصم مخصص أو منتج مجاني لإسعاده</p>
+                    <p className="text-[10px] font-medium text-slate-400 mt-0.5">{t("merchant.gifts.subtitle")}</p>
                   </div>
                 </div>
                 <button
@@ -7869,7 +8673,7 @@ export const MerchantApp: React.FC = () => {
                 {/* اختيار نوع الهدية */}
                 <div>
                   <label className="block text-[11px] font-black text-slate-400 mb-2 mr-1 uppercase tracking-widest">
-                    نوع الهدية المختارة
+                    {t("merchant.gifts.giftTypeLabel")}
                   </label>
                   <div className="grid grid-cols-2 gap-3">
                     <button
@@ -7882,7 +8686,7 @@ export const MerchantApp: React.FC = () => {
                       }`}
                     >
                       <Ticket size={16} />
-                      <span>كود خصم (كوبون)</span>
+                      <span>{t("merchant.gifts.typePromo")}</span>
                     </button>
                     <button
                       type="button"
@@ -7901,7 +8705,7 @@ export const MerchantApp: React.FC = () => {
                       }`}
                     >
                       <Gift size={16} />
-                      <span>منتج من المتجر</span>
+                      <span>{t("merchant.gifts.typeProduct")}</span>
                     </button>
                   </div>
                 </div>
@@ -7909,33 +8713,31 @@ export const MerchantApp: React.FC = () => {
                 {giftType === "promo" ? (
                   <>
                     <p className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-2xl border border-slate-100 leading-relaxed">
-                      💡 سيتم توليد كود خصم مخصص حصرياً للزبون وإضافته لمحفظته مع إرسال إشعار فوري له للتشجيع على الشراء.
+                      {t("merchant.gifts.promoHint")}
                     </p>
 
                     {/* حقول إنشاء كود الخصم (نوع الخصم وقيمة الخصم) */}
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-[11px] font-black text-slate-500 mb-1.5">
-                          نوع الخصم
+                          {t("merchant.gifts.discountType")}
                         </label>
                         <div className="relative">
                           <select
                             value={giftDiscountType}
                             onChange={(e) => setGiftDiscountType(e.target.value as any)}
-                            className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple p-3 text-xs font-bold text-slate-700 appearance-none focus:outline-none focus:ring-4 focus:ring-purple-50 transition-all cursor-pointer"
+                            className="welcome-select welcome-select--sm welcome-select--with-chevron"
                           >
-                            <option value="amount">مبلغ ثابت (د.ع)</option>
-                            <option value="percent">نسبة مئوية (%)</option>
+                            <option value="amount">{t("merchant.gifts.discountAmount")}</option>
+                            <option value="percent">{t("merchant.gifts.discountPercent")}</option>
                           </select>
-                          <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-slate-400">
-                            <ChevronDown size={14} />
-                          </div>
+                          <ChevronDown size={14} className="welcome-select-chevron" aria-hidden />
                         </div>
                       </div>
 
                       <div>
                         <label className="block text-[11px] font-black text-slate-500 mb-1.5">
-                          قيمة الخصم
+                          {t("merchant.gifts.discountValue")}
                         </label>
                         <div className="relative">
                           <input
@@ -7956,12 +8758,12 @@ export const MerchantApp: React.FC = () => {
                     {/* مدة الصلاحية بالأيام */}
                     <div>
                       <label className="block text-[11px] font-black text-slate-500 mb-1.5">
-                        مدة الصلاحية بالـ أيام
+                        {t("merchant.gifts.expiryDays")}
                       </label>
                       <div className="relative">
                         <input
                           type="number"
-                          placeholder="مثال: 30"
+                          placeholder={t("merchant.gifts.expiryPlaceholder")}
                           value={giftExpiryDays || ""}
                           onChange={(e) => setGiftExpiryDays(parseInt(e.target.value) || 0)}
                           required
@@ -7969,7 +8771,7 @@ export const MerchantApp: React.FC = () => {
                           className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple focus:ring-4 focus:ring-purple-50 p-3 text-center text-xs font-black text-slate-800 transition-all"
                         />
                         <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs font-black text-slate-400">
-                          أيام
+                          {t("merchant.gifts.days")}
                         </div>
                       </div>
                     </div>
@@ -7977,34 +8779,32 @@ export const MerchantApp: React.FC = () => {
                 ) : (
                   <>
                     <p className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-2xl border border-slate-100 leading-relaxed">
-                      💡 اختر أحد المنتجات المتاحة في متجرك لتقوم بإهدائه للزبون، وسيصله إشعار دافئ ورائع لمراجعة المتجر واستلام الهدية.
+                      {t("merchant.gifts.productHint")}
                     </p>
 
                     {/* اختيار المنتج */}
                     <div>
                       <label className="block text-[11px] font-black text-slate-500 mb-1.5">
-                        اختر المنتج الهدية
+                        {t("merchant.gifts.selectProduct")}
                       </label>
                       <div className="relative">
                         <select
                           value={giftProductId}
                           onChange={(e) => setGiftProductId(e.target.value)}
-                          className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple p-3 text-xs font-bold text-slate-700 appearance-none focus:outline-none focus:ring-4 focus:ring-purple-50 transition-all cursor-pointer"
+                          className="welcome-select welcome-select--sm welcome-select--with-chevron"
                         >
                           {products
                             .filter(p => p.storeId === currentMerchant!.id && p.status === "published")
                             .map((p) => (
                               <option key={p.id} value={p.id}>
-                                {p.name} ({p.price.toLocaleString()} د.ع)
+                                {p.name} ({p.price.toLocaleString()} {t("merchant.delivery.currency")})
                               </option>
                             ))}
                           {products.filter(p => p.storeId === currentMerchant!.id && p.status === "published").length === 0 && (
-                            <option value="">لا توجد منتجات منشورة حالياً في المتجر</option>
+                            <option value="">{t("merchant.gifts.noPublishedProducts")}</option>
                           )}
                         </select>
-                        <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-slate-400">
-                          <ChevronDown size={14} />
-                        </div>
+                        <ChevronDown size={14} className="welcome-select-chevron" aria-hidden />
                       </div>
                     </div>
                   </>
@@ -8023,7 +8823,7 @@ export const MerchantApp: React.FC = () => {
                     }
                     className="w-1/3 py-3.5 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-600 font-black rounded-2xl text-xs transition-colors cursor-pointer"
                   >
-                    إلغاء
+                    {t("merchant.gifts.cancel")}
                   </button>
                   <button
                     type="submit"
@@ -8031,7 +8831,7 @@ export const MerchantApp: React.FC = () => {
                     className="w-2/3 py-3.5 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 active:scale-[0.98] text-white font-black rounded-2xl shadow-lg shadow-rose-100/50 text-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <Gift size={16} />
-                    <span>{isSendingGift ? "جاري الإرسال..." : "إرسال الهدية الآن 🎉"}</span>
+                    <span>{isSendingGift ? t("merchant.gifts.sending") : t("merchant.gifts.sendNow")}</span>
                   </button>
                 </div>
               </form>
@@ -8039,106 +8839,125 @@ export const MerchantApp: React.FC = () => {
           </div>
         )}
 
-        {/* مودال المشاركة المطور */}
+        {/* مودال المشاركة — نفس تصميم تطبيق الزبون */}
         <AnimatePresence>
           {showShareModal && (
-            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-deep-navy/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white w-full max-w-sm rounded-[3rem] shadow-2xl overflow-hidden text-right border border-slate-100"
+                className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy w-full max-w-sm rounded-[3rem] shadow-2xl overflow-hidden text-right border border-white/30"
+                dir="rtl"
               >
-                <div className="p-8 pb-4">
+                <WelcomeScreenBackground lite />
+                <div className="relative z-10 p-8 pb-4">
                   <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-black text-violet">
-                      مشاركة متجرك
-                    </h3>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowShareModal(false)}
+                        className="welcome-btn-pulse p-2 bg-white/10 border border-white/20 text-white rounded-xl hover:bg-white/20 transition-all ml-1 backdrop-blur-md"
+                      >
+                        <ChevronRight size={20} />
+                      </button>
+                      <h3 className="text-xl font-black text-white">
+                        {shareConfig?.type === "location"
+                          ? t("merchant.orders.map.shareLocation")
+                          : t("share.modalTitle")}
+                      </h3>
+                    </div>
                     <button
+                      type="button"
                       onClick={() => setShowShareModal(false)}
-                      className="p-2 bg-slate-50 text-slate-400 rounded-full hover:text-rose-500 transition-colors"
+                      className="p-2 text-white/50 hover:text-rose-300 transition-colors"
                     >
                       <X size={20} />
                     </button>
                   </div>
 
-                  <p className="text-[10px] font-black text-slate-400 mb-2 mr-1 uppercase tracking-widest">
-                    معاينة الرسالة
+                  <p className="text-[10px] font-black text-white/50 mb-2 mr-1 uppercase tracking-widest">
+                    {t("share.previewLabel")}
                   </p>
                   <textarea
                     value={shareText}
                     onChange={(e) => setShareText(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-xs font-bold text-slate-600 focus:ring-1 focus:ring-slate-500 outline-none leading-relaxed mb-4 min-h-[100px]"
+                    className="w-full bg-white/10 border border-white/20 p-4 rounded-2xl text-xs font-bold text-white placeholder:text-white/40 focus:ring-1 focus:ring-vibrant-purple outline-none leading-relaxed mb-4 min-h-[100px] backdrop-blur-md"
                   />
 
-                  <p className="text-[10px] font-black text-slate-400 mb-3 mr-1 uppercase tracking-widest text-center">
-                    أين تريد النشر؟
+                  <p className="text-[10px] font-black text-white/50 mb-3 mr-1 uppercase tracking-widest text-center">
+                    {t("share.choosePlatform")}
                   </p>
 
                   <div className="grid grid-cols-3 gap-2">
                     <button
+                      type="button"
                       onClick={() => executeShare("whatsapp")}
-                      className="flex flex-col items-center gap-2 p-4 bg-emerald-50 text-emerald-600 rounded-2xl hover:bg-emerald-100 transition-colors group"
+                      className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-emerald-500/15 text-emerald-200 border border-emerald-400/30 rounded-3xl hover:bg-emerald-500/25 transition-colors group backdrop-blur-md"
                     >
-                      <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
+                      <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform">
                         <MessageCircle size={24} />
                       </div>
-                      <span className="text-[9px] font-black">واتساب</span>
+                      <span className="text-[9px] font-black">{t("share.viaWhatsApp")}</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => executeShare("telegram")}
-                      className="flex flex-col items-center gap-2 p-4 bg-violet/10 text-vibrant-purple rounded-2xl hover:bg-violet/20 transition-colors group"
+                      className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-violet-200 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md"
                     >
-                      <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-[#b07aff]">
+                      <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-violet-200">
                         <Send size={24} />
                       </div>
-                      <span className="text-[9px] font-black">تيليجرام</span>
+                      <span className="text-[9px] font-black">{t("share.viaTelegram")}</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => executeShare("messenger")}
-                      className="flex flex-col items-center gap-2 p-4 bg-slate-50 text-slate-600 rounded-2xl hover:bg-slate-100 transition-colors group"
+                      className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-violet-200 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md"
                     >
-                      <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-slate-500">
+                      <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-violet-200">
                         <MessageCircle size={24} />
                       </div>
-                      <span className="text-[9px] font-black">ماسنجر</span>
+                      <span className="text-[9px] font-black">{t("share.viaMessenger")}</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => executeShare("instagram")}
-                      className="flex flex-col items-center gap-2 p-4 bg-rose-50 text-rose-500 rounded-2xl hover:bg-rose-100 transition-colors group"
+                      className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-rose-500/15 text-rose-200 border border-rose-400/30 rounded-3xl hover:bg-rose-500/25 transition-colors group backdrop-blur-md"
                     >
-                      <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-rose-400">
+                      <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-rose-200">
                         <Camera size={24} />
                       </div>
-                      <span className="text-[9px] font-black">انستقرام</span>
+                      <span className="text-[9px] font-black">{t("share.viaInstagram")}</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => executeShare("facebook")}
-                      className="flex flex-col items-center gap-2 p-4 bg-violet/10 text-violet rounded-2xl hover:bg-violet/20 transition-colors group"
+                      className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-violet-200 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md"
                     >
-                      <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform text-violet">
+                      <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform text-violet-200">
                         <Users size={24} />
                       </div>
-                      <span className="text-[9px] font-black">فيسبوك</span>
+                      <span className="text-[9px] font-black">{t("share.viaFacebook")}</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => executeShare("copy")}
-                      className="flex flex-col items-center gap-2 p-4 bg-slate-50 text-slate-600 rounded-2xl hover:bg-slate-100 transition-colors group"
+                      className="flex flex-col items-center gap-2 p-4 welcome-card-border-glow bg-white/5 text-white/80 border border-white/20 rounded-3xl hover:bg-white/10 transition-colors group backdrop-blur-md"
                     >
-                      <div className="bg-white p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
+                      <div className="bg-white/10 border border-white/20 p-2 rounded-xl group-hover:scale-110 transition-transform">
                         <ClipboardList size={24} />
                       </div>
-                      <span className="text-[9px] font-black">نسخ الرابط</span>
+                      <span className="text-[9px] font-black">{t("share.copyLink")}</span>
                     </button>
                   </div>
                 </div>
 
-                <div className="p-8 pt-0 mt-4 text-center">
-                  <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                    💡 نصيحة
-                  </p>
-                  <p className="text-[10px] text-violet font-black">
-                    المشاركة المستمرة تزيد من مبيعاتك بنسبة تصل إلى 40%!
+                <div className="relative z-10 p-8 pt-0">
+                  <p className="text-[9px] text-white/50 text-center font-bold">
+                    {shareConfig?.type === "location"
+                      ? t("merchant.orders.map.shareLocationTip")
+                      : t("share.rewardHint", { points: 1 })}
                   </p>
                 </div>
               </motion.div>
@@ -8154,13 +8973,12 @@ export const MerchantApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl relative border-4 border-white"
+                className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl relative border border-white/30 text-white"
               >
                 <div className="p-6 pb-4">
                   <div className="flex justify-between items-center mb-6">
                     <h3 className="font-black text-violet text-lg flex items-center gap-2">
-                      <Camera size={20} className="text-slate-600" /> الهوية
-                      الرقمية
+                      <Camera size={20} className="text-slate-600" /> {t("profile.qrModal.title")}
                     </h3>
                     <button
                       onClick={() => setShowQRMenu(false)}
@@ -8170,77 +8988,109 @@ export const MerchantApp: React.FC = () => {
                     </button>
                   </div>
 
-                  <div className="bg-slate-50 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-4 shadow-inner border border-slate-100">
-                    <div id="merchant-store-qr-print" className="bg-white p-4 rounded-2xl shadow-md border">
-                      <QRCode
-                        value={`https://e-mahalak.com/store/${currentMerchant.username}`}
-                        size={180}
-                        fgColor="#4F46E5"
+                  <div className="bg-slate-50 rounded-2xl p-6 flex flex-col items-center justify-center text-center shadow-inner border border-slate-100">
+                    <div id="merchant-store-qr-print" className="keep-white bg-white p-3 rounded-2xl shadow-md border w-full max-w-[280px]">
+                      <img
+                        src="/mahalak-app-qr.png"
+                        alt={t("profile.qrModal.title")}
+                        className="w-full h-auto rounded-xl select-none"
+                        draggable={false}
                       />
                     </div>
-                    <h2 className="text-xl font-black text-violet">
-                      {currentMerchant.shopName}
-                    </h2>
-                    <p className="text-xs text-violet font-bold bg-white px-3 py-1.5 rounded-xl uppercase tracking-widest shadow-sm">
-                      امسح الرمز لزيارة متجرنا
-                    </p>
                   </div>
                 </div>
 
                 <div className="p-6 pt-2">
                   <p className="text-[10px] text-slate-500 font-bold text-center mb-4">
-                    اطلب من الزبائن مسح الرمز لمتابعة محلك على التطبيق.
+                    {t("profile.qrModal.instruction")}
                     <br />
-                    يمكنك طباعة هذا الرمز ولصقه على باب المحل أو الأكياس!
+                    {t("profile.qrModal.instructionPrint")}
                   </p>
-                  <button
-                    onClick={() => {
-                      const svg = document.querySelector("#merchant-store-qr-print svg") as SVGElement | null;
-                      if (!svg) {
-                        showToast("error", "رمز QR", "تعذر تجهيز رمز QR");
-                        return;
-                      }
-                      const serializer = new XMLSerializer();
-                      const svgString = serializer.serializeToString(svg);
-                      const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
-                      const url = URL.createObjectURL(blob);
-                      const img = new Image();
-                      img.onload = () => {
-                        const canvas = document.createElement("canvas");
-                        const pad = 40;
-                        canvas.width = img.width + pad * 2;
-                        canvas.height = img.height + pad * 2 + 48;
-                        const ctx = canvas.getContext("2d");
-                        if (!ctx) return;
-                        ctx.fillStyle = "#ffffff";
-                        ctx.fillRect(0, 0, canvas.width, canvas.height);
-                        ctx.drawImage(img, pad, pad);
-                        ctx.fillStyle = "#4F46E5";
-                        ctx.font = "bold 16px Tajawal, Arial, sans-serif";
-                        ctx.textAlign = "center";
-                        ctx.fillText(currentMerchant.shopName || "محلك", canvas.width / 2, canvas.height - 18);
-                        canvas.toBlob((pngBlob) => {
-                          URL.revokeObjectURL(url);
-                          if (!pngBlob) return;
-                          const downloadUrl = URL.createObjectURL(pngBlob);
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const imgEl = document.querySelector("#merchant-store-qr-print img") as HTMLImageElement | null;
+                        if (!imgEl?.src) {
+                          showToast("error", t("profile.qrModal.errorTitle"), t("profile.qrModal.prepareError"));
+                          return;
+                        }
+                        const a = document.createElement("a");
+                        a.href = imgEl.src;
+                        a.download = `qr-${currentMerchant.username || "store"}-mahalak.png`;
+                        a.click();
+                      }}
+                      className="min-w-0 py-3 px-1 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl shadow-lg transition-transform active:scale-95 flex flex-col items-center justify-center gap-1 text-[11px] leading-tight"
+                    >
+                      <Download size={16} className="shrink-0" />
+                      <span className="truncate max-w-full">{t("profile.qrModal.save")}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!document.querySelector("#merchant-store-qr-print img")) {
+                          showToast("error", t("profile.qrModal.errorTitle"), t("profile.qrModal.prepareError"));
+                          return;
+                        }
+                        window.print();
+                      }}
+                      className="min-w-0 py-3 px-1 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl shadow-lg transition-transform active:scale-95 flex flex-col items-center justify-center gap-1 text-[11px] leading-tight"
+                    >
+                      <Printer size={16} className="shrink-0" />
+                      <span className="truncate max-w-full text-center">{t("profile.qrModal.print")}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const imgEl = document.querySelector("#merchant-store-qr-print img") as HTMLImageElement | null;
+                        if (!imgEl?.src) {
+                          showToast("error", t("profile.qrModal.errorTitle"), t("profile.qrModal.prepareError"));
+                          return;
+                        }
+                        try {
+                          const res = await fetch(imgEl.currentSrc || imgEl.src);
+                          const blob = await res.blob();
+                          const fileName = `qr-${currentMerchant.username || "store"}-mahalak.png`;
+                          const file = new File([blob], fileName, { type: blob.type || "image/png" });
+                          const shareData: ShareData = {
+                            title: t("profile.qrModal.title"),
+                            text: t("profile.qrModal.instruction"),
+                            files: [file],
+                          };
+
+                          if (typeof navigator !== "undefined" && typeof navigator.canShare === "function" && navigator.canShare(shareData)) {
+                            await navigator.share(shareData);
+                            showToast("success", t("profile.qrModal.title"), t("profile.qrModal.shareSuccess"));
+                            return;
+                          }
+
+                          const absoluteUrl = new URL(imgEl.currentSrc || imgEl.src || "/mahalak-app-qr.png", window.location.href).href;
+                          const nativeResult = await tryNativeShare({
+                            title: t("profile.qrModal.title"),
+                            text: t("profile.qrModal.instruction"),
+                            url: absoluteUrl,
+                          });
+                          if (nativeResult === "shared") {
+                            showToast("success", t("profile.qrModal.title"), t("profile.qrModal.shareSuccess"));
+                            return;
+                          }
+                          if (nativeResult === "cancelled") return;
+
                           const a = document.createElement("a");
-                          a.href = downloadUrl;
-                          a.download = `qr-${currentMerchant.username || "store"}.png`;
+                          a.href = imgEl.src;
+                          a.download = fileName;
                           a.click();
-                          URL.revokeObjectURL(downloadUrl);
-                          window.print();
-                        }, "image/png");
-                      };
-                      img.onerror = () => {
-                        URL.revokeObjectURL(url);
-                        showToast("error", "رمز QR", "تعذر حفظ الصورة");
-                      };
-                      img.src = url;
-                    }}
-                    className="w-full py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl shadow-lg transition-transform active:scale-95 flex justify-center items-center gap-2"
-                  >
-                    حفظ وإرسال للطباعة
-                  </button>
+                          showToast("success", t("profile.qrModal.title"), t("profile.qrModal.shareSuccess"));
+                        } catch {
+                          showToast("error", t("profile.qrModal.errorTitle"), t("profile.qrModal.shareFailed"));
+                        }
+                      }}
+                      className="min-w-0 py-3 px-1 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black rounded-2xl shadow-lg transition-transform active:scale-95 flex flex-col items-center justify-center gap-1 text-[11px] leading-tight"
+                    >
+                      <Share2 size={16} className="shrink-0" />
+                      <span className="truncate max-w-full">{t("profile.qrModal.share")}</span>
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             </div>
@@ -8255,16 +9105,16 @@ export const MerchantApp: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl relative overflow-hidden text-center"
+                className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-2xl w-full max-w-sm p-6 shadow-2xl relative overflow-hidden text-center text-white"
               >
                 <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4 border-4 border-white shadow-sm">
                   <AlertTriangle className="text-amber-500 w-8 h-8" />
                 </div>
                 <h3 className="text-lg font-black text-violet mb-2">
-                  توجد تعديلات غير محفوظة!
+                  {t("profile.unsaved.title")}
                 </h3>
                 <p className="text-xs text-slate-500 mb-6 px-4">
-                  هل تريد حفظ التعديلات في ملفك الشخصي قبل مغادرة الصفحة؟
+                  {t("profile.unsaved.body")}
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   <button
@@ -8273,19 +9123,62 @@ export const MerchantApp: React.FC = () => {
                       setIsSavingProfile(true);
                       try {
                         const dbPayload = {
-                          ...profileForm,
+                          ownerName: profileForm.ownerName.trim(),
+                          shopName: profileForm.shopName.trim(),
+                          username: profileForm.username.trim().toLowerCase(),
+                          category: profileForm.category,
+                          province: profileForm.province,
+                          area: profileForm.area.trim(),
+                          landmark: profileForm.landmark.trim(),
+                          logo: profileForm.logo || "",
+                          showPhone: profileForm.showPhone,
+                          showArea: profileForm.showArea,
+                          showLandmark: profileForm.showLandmark,
+                          showMap: profileForm.showMap,
+                          ...(profileForm.lat !== undefined ? { lat: profileForm.lat } : {}),
+                          ...(profileForm.lng !== undefined ? { lng: profileForm.lng } : {}),
                           payoutMethods: {
                             zainCashNumber: profileForm.zainCashNumber,
                             mastercardNumber: profileForm.mastercardNumber,
-                          }
+                          },
                         };
                         await updateStoreProfile(dbPayload);
                         setIsProfileDirty(false);
                         setShowUnsavedModal(false);
-                        handleTabChange(pendingTab);
+                        showToast("success", t("profile.saveSuccess"), t("merchant.profileForm.saveSuccessDetail"));
+                        const next = pendingTab;
                         setPendingTab(null);
-                      } catch (e: any) {
-                        alert(e.message || "حدث خطأ أثناء حفظ التعديلات.");
+                        if (next === "__profile_hub__") {
+                          setProfileSubPage(null);
+                        } else if (typeof next === "string" && next.startsWith("__profile_")) {
+                          const page = next.replace("__profile_", "") as
+                            | "storeInfo"
+                            | "location"
+                            | "wallet"
+                            | "verification"
+                            | "settings";
+                          setMyStoreSubPage(null);
+                          setShowNotifications(false);
+                          setIframeUrl(null);
+                          setProfileSubPage(page);
+                          startTabTransition(() => setActiveTab("profile"));
+                        } else if (typeof next === "string" && next.startsWith("__mystore_")) {
+                          const page = next.replace("__mystore_", "") as
+                            | "reports"
+                            | "marketing"
+                            | "delivery"
+                            | "customers";
+                          setProfileSubPage(null);
+                          setShowNotifications(false);
+                          setIframeUrl(null);
+                          if (page === "customers") void refreshStoreAudience();
+                          setMyStoreSubPage(page);
+                          startTabTransition(() => setActiveTab("mystore"));
+                        } else if (next != null) {
+                          applyTabChange(next);
+                        }
+                      } catch (e: unknown) {
+                        showToast("error", t("common.error"), profileSaveErrorMessage(e));
                       } finally {
                         setIsSavingProfile(false);
                       }
@@ -8293,7 +9186,7 @@ export const MerchantApp: React.FC = () => {
                     disabled={isSavingProfile}
                     className="p-3 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white rounded-2xl font-bold text-xs transition disabled:opacity-70"
                   >
-                    {isSavingProfile ? 'جاري الحفظ...' : 'حفظ ومغادرة'}
+                    {isSavingProfile ? t("common.loading") : t("profile.unsaved.saveAndLeave")}
                   </button>
                   <button
                     onClick={() => {
@@ -8327,12 +9220,41 @@ export const MerchantApp: React.FC = () => {
                       }
                       setIsProfileDirty(false);
                       setShowUnsavedModal(false);
-                      handleTabChange(pendingTab);
+                      const next = pendingTab;
                       setPendingTab(null);
+                      if (next === "__profile_hub__") {
+                        setProfileSubPage(null);
+                      } else if (typeof next === "string" && next.startsWith("__profile_")) {
+                        const page = next.replace("__profile_", "") as
+                          | "storeInfo"
+                          | "location"
+                          | "wallet"
+                          | "verification"
+                          | "settings";
+                        setMyStoreSubPage(null);
+                        setShowNotifications(false);
+                        setIframeUrl(null);
+                        setProfileSubPage(page);
+                        startTabTransition(() => setActiveTab("profile"));
+                      } else if (typeof next === "string" && next.startsWith("__mystore_")) {
+                        const page = next.replace("__mystore_", "") as
+                          | "reports"
+                          | "marketing"
+                          | "delivery"
+                          | "customers";
+                        setProfileSubPage(null);
+                        setShowNotifications(false);
+                        setIframeUrl(null);
+                        if (page === "customers") void refreshStoreAudience();
+                        setMyStoreSubPage(page);
+                        startTabTransition(() => setActiveTab("mystore"));
+                      } else if (next != null) {
+                        applyTabChange(next);
+                      }
                     }}
                     className="p-3 bg-rose-50 text-rose-600 rounded-2xl font-bold text-xs hover:bg-rose-100 transition"
                   >
-                    تجاهل التعديلات
+                    {t("profile.unsaved.discard")}
                   </button>
                 </div>
                 <div className="mt-3">
@@ -8343,7 +9265,7 @@ export const MerchantApp: React.FC = () => {
                     }}
                     className="p-2 w-full text-slate-400 text-xs font-bold hover:text-slate-600 transition"
                   >
-                    إلغاء (البقاء في الصفحة)
+                    {t("profile.unsaved.stay")}
                   </button>
                 </div>
               </motion.div>
@@ -8362,7 +9284,7 @@ export const MerchantApp: React.FC = () => {
                <motion.div 
                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                 className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden relative"
+                 className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-2xl w-full max-w-md shadow-2xl overflow-hidden relative text-white"
                >
                  <div className="bg-vibrant-purple p-6 text-white flex justify-between items-center rounded-b-3xl shadow-lg relative z-10">
                     <h3 className="text-xl font-black flex items-center gap-2">
@@ -8423,11 +9345,11 @@ export const MerchantApp: React.FC = () => {
 
                        {/* قسم الإجراءات والرقابة للتاجر وحظر الزبائن */}
                        <div className="bg-[#fff5f5] p-5 rounded-2xl border border-red-100 col-span-2 text-right">
-                          <span className="text-[10px] text-red-500 font-black block mb-1">إجراءات الرقابة والحماية 🛡️</span>
+                          <span className="text-[10px] text-red-500 font-black block mb-1">{t("merchant.confirms.block.moderationTitle")}</span>
                           <p className="text-[9px] text-slate-500 mb-3 leading-relaxed">
                             {aud.isBlocked 
-                              ? "هذا الزبون محظور حالياً من رؤية متجرك أو تقديم طلبات جديدة." 
-                              : "حظر الزبون يمنعه بشكل فوري ومؤقت من الوصول للمتجر أو إرسال طلبات جديدة."}
+                              ? t("merchant.confirms.block.blockedNow")
+                              : t("merchant.confirms.block.blockHint")}
                           </p>
                           <button
                             type="button"
@@ -8445,7 +9367,7 @@ export const MerchantApp: React.FC = () => {
                                 : "bg-red-600 hover:bg-red-700 text-white"
                             }`}
                           >
-                            <span>{aud.isBlocked ? "إلغاء حظر الزبون وتفعيله ✅" : "حظر هذا الزبون فوراً 🚫"}</span>
+                            <span>{aud.isBlocked ? t("merchant.confirms.block.confirmUnblockAction") : t("merchant.confirms.block.confirmBlockAction")}</span>
                           </button>
                        </div>
 
@@ -8496,6 +9418,22 @@ export const MerchantApp: React.FC = () => {
           </Suspense>
         )}
 
+        {showStorePreview && currentMerchant && (
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 z-[160] flex items-center justify-center bg-deep-navy text-white">
+                <Loader2 size={28} className="animate-spin" />
+              </div>
+            }
+          >
+            <MerchantStorePreview
+              store={currentMerchant}
+              products={products}
+              onClose={() => setShowStorePreview(false)}
+            />
+          </Suspense>
+        )}
+
         {/* نافذة عرض الروابط الخارجية داخل التطبيق مع زر الرجوع للتطبيق */}
         <AnimatePresence>
           {iframeUrl && (
@@ -8515,7 +9453,7 @@ export const MerchantApp: React.FC = () => {
                     onClick={() => {
                       try {
                         navigator.clipboard.writeText(iframeUrl);
-                        alert('تم نسخ الرابط بنجاح! ✅');
+                        alert(t("common.browser.linkCopied"));
                       } catch (err) {
                       }
                     }}
@@ -8589,12 +9527,12 @@ export const MerchantApp: React.FC = () => {
               const ok = await authService.requestOTP(currentMerchant.phone, "forgot");
               if (ok) {
                 setPwStep(2);
-                showToast("success", "تم إرسال رمز OTP", "تم الإرسال لتغيير كلمة المرور إلى واتساب!");
+                showToast("success", t("auth.toast.otpSentTitle"), t("auth.toast.otpSentForPasswordChange"));
               } else {
-                showToast("error", "فشل إرسال الرمز", "حاول مرة أخرى.");
+                showToast("error", t("auth.toast.sendFailedTitle"), t("auth.toast.sendFailed"));
               }
             } catch (err: any) {
-              showToast("error", "خطأ", err.message || "حاول مرة أخرى.");
+              showToast("error", t("auth.toast.errorTitle"), err.message || t("auth.toast.tryAgain"));
             } finally {
               setIsSendingPwOtp(false);
             }
@@ -8614,10 +9552,10 @@ export const MerchantApp: React.FC = () => {
     <MerchantAuthPage contentKey={view}>
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-black text-white">
-            محلك - لوحة التاجر
+            {t("auth.merchantPanelTitle")}
           </h1>
           <p className="mt-1 text-xs text-white">
-            ابدأ بيع منتجاتك بكل سهولة
+            {t("auth.merchantPanelSubtitle")}
           </p>
         </div>
 
@@ -8625,7 +9563,7 @@ export const MerchantApp: React.FC = () => {
         {view === "login" && (
           <form onSubmit={handleLogin} noValidate className="space-y-5">
             {loginError && (
-              <div className="bg-red-50 border border-red-200 text-red-600 text-xs p-3 rounded-2xl font-bold flex items-center gap-2">
+              <div className="welcome-inline-alert welcome-card-glow" role="alert">
                 <AlertTriangle size={16} />
                 {loginError}
               </div>
@@ -8637,21 +9575,21 @@ export const MerchantApp: React.FC = () => {
                 className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'phone' ? 'bg-white text-violet shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 onClick={() => { setLoginMethod('phone'); setLoginError(''); }}
               >
-                رقم الهاتف
+                {t("auth.loginByPhone")}
               </button>
               <button
                 type="button"
                 className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'username' ? 'bg-white text-violet shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 onClick={() => { setLoginMethod('username'); setLoginError(''); }}
               >
-                اسم المستخدم
+                {t("auth.loginByUsername")}
               </button>
             </div>
 
             {loginMethod === 'phone' ? (
               <div>
                 <label className="block text-xs font-bold text-white mb-1.5">
-                  رقم الهاتف <span className="text-red-500">*</span>
+                  {t("auth.phone")} <span className="text-red-500">*</span>
                 </label>
                 <div
                   className="flex items-center border border-slate-200 rounded-2xl overflow-hidden bg-gradient-to-r from-vibrant-purple to-deep-navy focus-within:border-slate-500 transition-all"
@@ -8678,11 +9616,11 @@ export const MerchantApp: React.FC = () => {
             ) : (
               <div>
                 <label className="block text-xs font-bold text-white mb-1.5">
-                  اسم المستخدم (username) <span className="text-red-500">*</span>
+                  {t("auth.usernameLabel")} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="مثال: azeaa_alalmi"
+                  placeholder={t("auth.example.username")}
                   value={loginUsername}
                   onChange={(e) => setLoginUsername(e.target.value)}
                   required
@@ -8694,13 +9632,13 @@ export const MerchantApp: React.FC = () => {
             
             <div>
               <label className="block text-xs font-bold text-white mb-1.5">
-                كلمة المرور <span className="text-red-500">*</span>
+                {t("auth.password")} <span className="text-red-500">*</span>
               </label>
               <input
                 type="password"
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="لا تقل عن 8 حروف"
+                placeholder={t("auth.passwordMinPlaceholder")}
                 required
                 className="w-full border border-slate-200 p-3.5 rounded-2xl text-sm text-white placeholder:text-white/50 focus:ring-2 focus:ring-slate-500 focus:outline-none"
               />
@@ -8714,7 +9652,7 @@ export const MerchantApp: React.FC = () => {
               }}
               className="text-xs font-bold text-[#FFF700] hover:underline px-1"
             >
-              نسيت كلمة السر؟
+              {t("auth.forgotPasswordShort")}
             </button>
             <button
               type="submit"
@@ -8728,23 +9666,23 @@ export const MerchantApp: React.FC = () => {
               {isAuthBusy ? (
                 <>
                   <RefreshCw size={20} className="animate-spin" />
-                  <span>جارٍ تسجيل الدخول...</span>
+                  <span>{t("auth.loggingIn")}</span>
                 </>
               ) : (
                 <>
                   <LogOut size={20} className="rotate-180" />
-                  <span>تسجيل الدخول</span>
+                  <span>{t("auth.login")}</span>
                 </>
               )}
             </button>
             <div className="text-center pt-4 border-t border-vibrant-purple text-sm text-white">
-              ليس لديك حساب؟{" "}
+              {t("auth.noAccount")}{" "}
               <button
                 type="button"
                 onClick={() => { setLoginError(''); setView("signup"); }}
                 className="font-bold text-[#FFF700]"
               >
-                انشاء حساب جديد
+                {t("auth.createAccountLink")}
               </button>
             </div>
           </form>
@@ -8754,7 +9692,7 @@ export const MerchantApp: React.FC = () => {
         {view === "signup" && (
           <form onSubmit={handleSignup} noValidate className="space-y-4">
             {loginError && (
-              <div className="bg-red-50 border border-red-200 text-red-600 text-xs p-3 rounded-2xl font-bold flex items-center gap-2">
+              <div className="welcome-inline-alert welcome-card-glow" role="alert">
                 <AlertTriangle size={16} />
                 {loginError}
               </div>
@@ -8762,11 +9700,11 @@ export const MerchantApp: React.FC = () => {
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-white mb-1">
-                  الاسم الكامل <span className="text-red-500">*</span>
+                  {t("auth.fullName")} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="مثال: حسين صفاء جبار"
+                  placeholder={t("auth.example.fullName")}
                   value={ownerName}
                   onChange={(e) => setOwnerName(e.target.value)}
                   required
@@ -8775,7 +9713,7 @@ export const MerchantApp: React.FC = () => {
               </div>
               <div>
                 <label className="block text-xs font-bold text-white mb-1">
-                  رقم الهاتف (WhatsApp) <span className="text-red-500">*</span>
+                  {t("auth.phoneWhatsApp")} <span className="text-red-500">*</span>
                 </label>
                 <div
                   className={`flex items-center border rounded-2xl overflow-hidden bg-gradient-to-r from-vibrant-purple to-deep-navy ${isPhoneValid ? "border-green-400" : phone ? "border-red-400" : "border-slate-200"}`}
@@ -8798,17 +9736,17 @@ export const MerchantApp: React.FC = () => {
                 </div>
                 <label className="flex items-center gap-2 cursor-pointer mt-2">
                   <input type="checkbox" checked={showPhone} onChange={(e) => setShowPhone(e.target.checked)} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                  <span className="text-xs">إظهار عند الزبون</span>
+                  <span className="text-xs">{t("auth.showToCustomer")}</span>
                 </label>
 
               </div>
               <div>
                 <label className="block text-xs font-bold text-white mb-1">
-                  اسم المحل / البيج <span className="text-red-500">*</span>
+                  {t("auth.shopName")} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="مثال: ازياء العالمي"
+                  placeholder={t("auth.example.shopName")}
                   value={shopName}
                   onChange={(e) => setShopName(e.target.value)}
                   required
@@ -8817,28 +9755,28 @@ export const MerchantApp: React.FC = () => {
               </div>
               <div>
                 <label className="block text-xs font-bold text-white mb-1">
-                  صنف المتجر <span className="text-red-500">*</span>
+                  {t("auth.shopCategory")} <span className="text-red-500">*</span>
                 </label>
                 <select
                   value={categoryId}
                   onChange={(e) => setCategoryId(e.target.value)}
                   required
-                  className="w-full p-3 rounded-2xl text-sm input-brand text-white"
+                  className="welcome-select welcome-select--lg"
                 >
                   {STORE_CATEGORIES.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {getStoreCategoryFullLabel(c.id)}
                     </option>
                   ))}
                 </select>
               </div>
               <div>
                 <label className="block text-xs font-bold text-white mb-1">
-                  اسم المستخدم (username) <span className="text-red-500">*</span>
+                  {t("auth.usernameLabel")} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="مثال: azeaa_alalmi"
+                  placeholder={t("auth.example.username")}
                   value={username}
                   onChange={(e) =>
                     setUsername(
@@ -8852,11 +9790,11 @@ export const MerchantApp: React.FC = () => {
               </div>
               <div>
                 <label className="block text-xs font-bold text-white mb-1">
-                  كلمة المرور <span className="text-red-500">*</span>
+                  {t("auth.password")} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="password"
-                  placeholder="8 حروف أو أكثر"
+                  placeholder={t("auth.passwordPlaceholder8")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -8866,28 +9804,28 @@ export const MerchantApp: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-white mb-1">
-                    المحافظة <span className="text-red-500">*</span>
+                    {t("auth.province")} <span className="text-red-500">*</span>
                   </label>
                   <select
                     value={selectedProvince}
                     onChange={(e) => setSelectedProvince(e.target.value)}
                     required
-                    className="w-full p-2.5 rounded-2xl text-sm input-brand text-white"
+                    className="welcome-select welcome-select--sm"
                   >
                     {provinces.map((p) => (
                       <option key={p.id} value={p.name}>
-                        {p.name}
+                        {getProvinceLabel(p)}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-white mb-1">
-                    المنطقة / الحي <span className="text-red-500">*</span>
+                    {t("auth.area")} <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
-                    placeholder="مثال: حي العامل"
+                    placeholder={t("auth.example.area")}
                     value={area}
                     onChange={(e) => setArea(e.target.value)}
                     required
@@ -8895,17 +9833,17 @@ export const MerchantApp: React.FC = () => {
                   />
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={showArea} onChange={(e) => setShowArea(e.target.checked)} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                    <span className="text-xs">إظهار عند الزبون</span>
+                    <span className="text-xs">{t("auth.showToCustomer")}</span>
                   </label>
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-bold text-white mb-1">
-                  أقرب نقطة دالة <span className="text-red-500">*</span>
+                  {t("auth.landmark")} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="مثال: متوسطة ........."
+                  placeholder={t("auth.example.landmark")}
                   value={landmark}
                   onChange={(e) => setLandmark(e.target.value)}
                   required
@@ -8913,7 +9851,7 @@ export const MerchantApp: React.FC = () => {
                 />
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={showLandmark} onChange={(e) => setShowLandmark(e.target.checked)} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                  <span className="text-xs">إظهار عند الزبون</span>
+                  <span className="text-xs">{t("auth.showToCustomer")}</span>
                 </label>
               </div>
               <div className="space-y-3 pt-2">
@@ -8922,21 +9860,21 @@ export const MerchantApp: React.FC = () => {
                     setLat(lat);
                     setLng(lng);
                   }}
-                  label="تحديد الموقع على الخريطة"
+                  label={t("auth.mapLocation")}
                   required={true}
                 />
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={showMap} onChange={(e) => setShowMap(e.target.checked)} className="rounded text-vibrant-purple focus:ring-vibrant-purple" />
-                  <span className="text-xs">إظهار عند الزبون</span>
+                  <span className="text-xs">{t("auth.showToCustomer")}</span>
                 </label>
               </div>
               <div className="max-w-[120px] mx-auto">
                 <ImageUploader
                   value={logoUrl}
                   onChange={setLogoUrl}
-                  label="لوغو المحل (اختياري)"
+                  label={t("auth.shopLogoOptional")}
                   labelClassName="block text-xs font-black text-white mb-1"
-                  placeholder="اضغط لإضافة صورة"
+                  placeholder={t("auth.addImagePlaceholder")}
                   hideSourceHint
                   emptyVariant="brand"
                 />
@@ -8953,13 +9891,13 @@ export const MerchantApp: React.FC = () => {
                   className="rounded text-vibrant-purple focus:ring-vibrant-purple w-5 h-5 shadow-sm" 
                 />
                 <span className="text-sm font-bold leading-relaxed">
-                  <span className="text-white">أوافق على</span>{' '}
+                  <span className="text-white">{t("auth.agreeTerms")}</span>{' '}
                   <button 
                     type="button" 
                     onClick={() => setShowTermsModal(true)} 
                     className="text-[#FFF700] underline underline-offset-4 decoration-2 hover:text-[#FFF700] transition-colors"
                   >
-                    شروط وقوانين محلك للتاجر
+                    {t("auth.merchantTermsLink")}
                   </button>
                 </span>
               </label>
@@ -8967,7 +9905,7 @@ export const MerchantApp: React.FC = () => {
 
             {!isFormValid && (
               <p className="text-[10px] text-[#FFF700] text-center font-bold animate-pulse">
-                ⚠️ أكمل جميع الحقول المطلوبة
+                {t("auth.completeRequiredFields")}
               </p>
             )}
             <button
@@ -8984,10 +9922,10 @@ export const MerchantApp: React.FC = () => {
               {isAuthBusy ? (
                 <>
                   <RefreshCw size={20} className="animate-spin" />
-                  <span>جارٍ إنشاء الحساب...</span>
+                  <span>{t("auth.creatingAccount")}</span>
                 </>
               ) : (
-                "إنشاء حساب التاجر"
+                t("auth.createMerchantAccount")
               )}
             </button>
             <div className="text-center pt-2">
@@ -8996,7 +9934,7 @@ export const MerchantApp: React.FC = () => {
                 onClick={() => { setLoginError(''); setView("login"); }}
                 className="text-xs font-bold text-white"
               >
-                الرجوع لتسجيل الدخول
+                {t("auth.backToLogin")}
               </button>
             </div>
           </form>
@@ -9006,17 +9944,17 @@ export const MerchantApp: React.FC = () => {
         {view === "otp" && (
           <form onSubmit={handleOtpConfirm} noValidate className="space-y-6">
             {loginError && (
-              <div className="bg-red-50 border border-red-200 text-red-600 text-xs p-3 rounded-2xl font-bold flex items-center gap-2">
+              <div className="welcome-inline-alert welcome-card-glow" role="alert">
                 <AlertTriangle size={16} />
                 {loginError}
               </div>
             )}
             <div className="text-center">
               <h3 className="text-xl font-black text-white">
-                تأكيد رقم الهاتف
+                {t("auth.otpPhoneConfirmTitle")}
               </h3>
               <p className="text-sm text-slate-300 mt-2">
-                أدخل الرمز المرسل إلى واتساب
+                {t("auth.otpWhatsAppHint")}
               </p>
             </div>
             <input
@@ -9039,12 +9977,12 @@ export const MerchantApp: React.FC = () => {
               {isAuthBusy ? (
                 <>
                   <RefreshCw size={20} className="animate-spin" />
-                  <span>جاري التأكيد...</span>
+                  <span>{t("auth.confirmingOtp")}</span>
                 </>
               ) : (
                 <>
                   <Check size={20} />
-                  <span>تأكيد الرمز والدخول</span>
+                  <span>{t("auth.confirmOtpAndLogin")}</span>
                 </>
               )}
             </button>
@@ -9060,10 +9998,10 @@ export const MerchantApp: React.FC = () => {
                 }`}
               >
                 {isResendingOtp
-                  ? "جار ارسال رمز التحقق"
+                  ? t("auth.resendingOtp")
                   : canResendOtp
-                    ? "إعادة إرسال الرمز"
-                    : `إعادة الإرسال خلال ${otpTimer} ثانية`}
+                    ? t("auth.resendOtp")
+                    : t("auth.resendIn", { seconds: otpTimer })}
               </button>
               
               <button
@@ -9073,7 +10011,7 @@ export const MerchantApp: React.FC = () => {
                 }
                 className="text-xs font-bold text-slate-400 hover:text-slate-600"
               >
-                تغيير الرقم / رجوع
+                {t("auth.changePhoneBack")}
               </button>
             </div>
           </form>
@@ -9083,19 +10021,19 @@ export const MerchantApp: React.FC = () => {
         {view === "forgot" && (
           <form onSubmit={handleForgotPassword} noValidate className="space-y-5">
             {loginError && (
-              <div className="bg-red-50 border border-red-200 text-red-600 text-xs p-3 rounded-2xl font-bold flex items-center gap-2">
+              <div className="welcome-inline-alert welcome-card-glow" role="alert">
                 <AlertTriangle size={16} />
                 {loginError}
               </div>
             )}
             <div className="text-center">
               <h3 className="text-xl font-black text-white">
-                استعادة كلمة المرور
+                {t("auth.recoverPasswordTitle")}
               </h3>
             </div>
             <div>
               <label className="block text-xs font-bold text-white/80 mb-1.5">
-                رقم الهاتف المسجل <span className="text-red-500">*</span>
+                {t("auth.registeredPhone")} <span className="text-red-500">*</span>
               </label>
               <div
                 className="flex items-center border border-slate-200 rounded-2xl overflow-hidden bg-gradient-to-r from-vibrant-purple to-deep-navy"
@@ -9121,7 +10059,7 @@ export const MerchantApp: React.FC = () => {
             </div>
             <div>
               <label className="block text-xs font-bold text-white/80 mb-1.5">
-                كلمة المرور الجديدة <span className="text-red-500">*</span>
+                {t("auth.newPassword")} <span className="text-red-500">*</span>
               </label>
               <input
                 type="password"
@@ -9142,10 +10080,10 @@ export const MerchantApp: React.FC = () => {
               {isAuthBusy ? (
                 <span className="inline-flex items-center justify-center gap-2">
                   <Loader2 size={16} className="animate-spin" />
-                  جار ارسال رمز التحقق
+                  {t("auth.sendingOtpForgot")}
                 </span>
               ) : (
-                'إرسال رمز OTP'
+                t("auth.sendOtpBtn")
               )}
             </button>
             <button
@@ -9156,7 +10094,7 @@ export const MerchantApp: React.FC = () => {
               }}
               className="w-full text-xs font-bold text-slate-400"
             >
-              الرجوع لتسجيل الدخول
+              {t("auth.backToLogin")}
             </button>
           </form>
         )}
@@ -9170,14 +10108,14 @@ export const MerchantApp: React.FC = () => {
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="w-full max-w-2xl bg-white rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+              className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-2xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-white"
               dir="rtl"
             >
               <div className="flex justify-between items-center p-6 border-b border-slate-100 bg-slate-50/80 backdrop-blur-md">
                 <div className="flex items-center gap-3">
                   <MahalakLogo className="h-10 w-10 shrink-0 object-contain" />
                   <div>
-                    <h2 className="text-xl font-black text-slate-800 border-b-2 border-[#7B3DFF]/30 pb-0.5 inline-block">شروط استخدام منصة "محلك" (للتاجر)</h2>
+                    <h2 className="text-xl font-black text-slate-800 border-b-2 border-[#7B3DFF]/30 pb-0.5 inline-block">{t("merchant.terms.signupTitle")}</h2>
                   </div>
                 </div>
                 <button 
@@ -9189,77 +10127,55 @@ export const MerchantApp: React.FC = () => {
               </div>
               <div className="p-6 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
                 <div className="text-slate-600 text-sm leading-relaxed space-y-6 pb-4">
-                  <div className="flex gap-3">
-                    <div className="shrink-0 w-8 h-8 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center font-bold">1</div>
-                    <div>
-                      <p className="font-bold text-slate-800 mb-1">القبول والالتزام</p>
-                      <p>يوافق التاجر عند التسجيل في منصة "محلك" على الالتزام الكامل بهذه الشروط. أي مخالفة قد تؤدي إلى تعليق الحساب أو إنهائه.</p>
+                  {(["acceptance", "responsibility", "billing", "privacy", "termination"] as const).map((key, index) => (
+                    <div key={key} className="flex gap-3">
+                      <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center font-bold ${
+                        index === 0 ? "bg-blue-50 text-blue-500"
+                          : index === 1 ? "bg-indigo-50 text-indigo-500"
+                          : index === 2 ? "bg-vibrant-purple/10 text-vibrant-purple"
+                          : index === 3 ? "bg-emerald-50 text-emerald-500"
+                          : "bg-rose-50 text-rose-500"
+                      }`}>
+                        {index + 1}
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-800 mb-1">{t(`merchant.terms.sections.${key}.title`)}</p>
+                        <p>{t(`merchant.terms.sections.${key}.body`)}</p>
+                      </div>
                     </div>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                    <div className="shrink-0 w-8 h-8 rounded-full bg-indigo-50 text-indigo-500 flex items-center justify-center font-bold">2</div>
-                    <div>
-                      <p className="font-bold text-slate-800 mb-1">مسؤولية التاجر</p>
-                      <p>يلتزم التاجر بتقديم معلومات دقيقة وصحيحة عن منتجاته، وعدم عرض أي مواد محظورة قانونياً أو مخالفة للشريعة الإسلامية والأعراف المجتمعية. التاجر هو المسؤول الوحيد عن عمليات البيع، جودة المنتجات، وعمليات الشحن والتوصيل.</p>
-                    </div>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                    <div className="shrink-0 w-8 h-8 rounded-full bg-vibrant-purple/10 text-vibrant-purple flex items-center justify-center font-bold">3</div>
-                    <div>
-                      <p className="font-bold text-slate-800 mb-1">الاشتراكات والأموال</p>
-                      <p>تحدد "محلك" رسوم اشتراك ثابتة (حسب الخطة المختارة)، ويتم تحويل المستحقات المالية للتاجر بعد خصم عمولات المنصة وأكواد الخصم المطبقة، وذلك بمدة أقصاها 24 ساعة من اكتمال عملية التسليم أو إغلاق الطلب.</p>
-                    </div>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                    <div className="shrink-0 w-8 h-8 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center font-bold">4</div>
-                    <div>
-                      <p className="font-bold text-slate-800 mb-1">الخصوصية والبيانات</p>
-                      <p>تلتزم "محلك" بحماية بيانات التاجر والعملاء وفقاً لأعلى معايير الأمان. لا يحق للتاجر استخدام بيانات العملاء (مثل أرقام الهواتف أو العناوين) لأي أغراض خارج نطاق معالجة طلباتهم عبر المنصة.</p>
-                    </div>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                    <div className="shrink-0 w-8 h-8 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center font-bold">5</div>
-                    <div>
-                      <p className="font-bold text-slate-800 mb-1">إنهاء الخدمة</p>
-                      <p>يحق لـ "محلك" إنهاء أو تعليق حساب أي تاجر في حال ثبوت الاحتيال، كثرة الشكاوى من العملاء، مخالفة الشروط، أو أي نشاط يضر بسمعة المنصة أو مستخدميها.</p>
-                    </div>
-                  </div>
+                  ))}
 
                   <div className="bg-slate-100 rounded-2xl p-5 border border-slate-200 mt-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-2 h-full bg-vibrant-purple"></div>
                     <div className="flex items-center gap-2 mb-4">
                       <MahalakLogo className="h-5 w-5 shrink-0 object-contain" />
                       <p className="text-lg font-black text-slate-800">
-                        عقد التاجر الإلكتروني
+                        {t("merchant.terms.contractTitle")}
                       </p>
                     </div>
                     <div className="space-y-3 text-slate-600 text-[13px] leading-relaxed">
                       <p className="bg-white p-3 rounded-xl shadow-sm border border-slate-100">
-                        أوافق على كافة الشروط والأحكام المذكورة أعلاه، وأعتبر ضغطي على زر <strong>"إنشاء حساب التاجر"</strong> وتأكيد رقمي بمثابة <strong>توقيع إلكتروني ملزم قانوناً</strong> على كافة البنود.
+                        {t("merchant.terms.signupContractBody")}
                       </p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
                         <div className="bg-white p-3 rounded-xl border border-slate-100">
-                          <strong className="text-slate-800 inline-block mb-1">الطرف الأول:</strong> <br/>منصة "محلك" (ممثلّة بإدارتها).
+                          <strong className="text-slate-800 inline-block mb-1">{t("merchant.terms.party1Label")}</strong> <br/>{t("merchant.terms.party1Value")}
                         </div>
                         <div className="bg-white p-3 rounded-xl border border-slate-100">
-                          <strong className="text-slate-800 inline-block mb-1">الطرف الثاني:</strong> <br/>التاجر المسجل (الممثل ببياناته المقدمة).
+                          <strong className="text-slate-800 inline-block mb-1">{t("merchant.terms.party2Label")}</strong> <br/>{t("merchant.terms.party2Value")}
                         </div>
                       </div>
                       <div className="bg-white p-3 rounded-xl border border-slate-100">
-                        <strong className="text-slate-800">نطاق الخدمة:</strong> توفير منصة إلكترونية لعرض المنتجات وإدارة المبيعات والتواصل مع العملاء.
+                        <strong className="text-slate-800">{t("merchant.terms.serviceScopeLabel")}</strong> {t("merchant.terms.serviceScopeValue")}
                       </div>
                       <div className="bg-white p-3 rounded-xl border border-slate-100 mb-0">
-                        <strong className="text-slate-800">الاستقلالية:</strong> التاجر يعمل كطرف مستقل، ومنصة "محلك" لا تتحمل مسؤولية أي نزاعات تنشأ بين التاجر والعميل خارج نطاق استخدام المنصة.
+                        <strong className="text-slate-800">{t("merchant.terms.independenceLabel")}</strong> {t("merchant.terms.independenceValue")}
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div className="p-4 border-t border-slate-100 bg-white">
+              <div className="p-4 border-t border-white/15 bg-white/5">
                 <button 
                   type="button"
                   onClick={() => {
@@ -9268,7 +10184,7 @@ export const MerchantApp: React.FC = () => {
                   }}
                   className="w-full py-4 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-black text-lg rounded-xl shadow-[0_8px_20px_-8px_rgba(123,61,255,0.6)] hover:-translate-y-0.5 active:translate-y-0 transition-all flex items-center justify-center gap-2"
                 >
-                  <span>قرأت وموافق على الشروط</span>
+                  <span>{t("merchant.terms.readAndAgree")}</span>
                   <ChevronRight size={20} className="rotate-180" />
                 </button>
               </div>
@@ -9296,7 +10212,7 @@ export const MerchantApp: React.FC = () => {
                   onClick={() => {
                     try {
                       navigator.clipboard.writeText(iframeUrl);
-                      alert('تم نسخ الرابط بنجاح! ✅');
+                      alert(t("common.browser.linkCopied"));
                     } catch (err) {
                     }
                   }}
@@ -9342,7 +10258,7 @@ export const MerchantApp: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-[2rem] shadow-2xl p-6 sm:p-8 w-full max-w-md relative z-10 border border-slate-100"
+              className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2rem] shadow-2xl p-6 sm:p-8 w-full max-w-md relative z-10 text-white"
             >
               <div className="flex items-center gap-4 mb-6">
                 <div className="w-12 h-12 rounded-2xl bg-vibrant-purple/10 text-vibrant-purple flex items-center justify-center shrink-0">

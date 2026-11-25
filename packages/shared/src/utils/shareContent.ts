@@ -1,4 +1,5 @@
 import { appendShareTrackingQuery } from '../lib/shareVisitTracking';
+import { formatStoreUsername } from './storeIdentity';
 
 export const CUSTOMER_APP_BASE_URL = 'https://mahallak.app';
 
@@ -7,6 +8,7 @@ export type ShareTargetType = 'store' | 'product';
 export interface StoreShareInput {
   id: string;
   shopName: string;
+  username?: string;
   area?: string;
   province?: string;
 }
@@ -16,6 +18,7 @@ export interface ProductShareInput {
   storeId: string;
   name: string;
   shopName?: string;
+  storeUsername?: string;
   price?: number;
   finalPrice?: number;
 }
@@ -42,43 +45,52 @@ function formatSharePrice(product: ProductShareInput): string {
   return price.toLocaleString('ar-IQ');
 }
 
+function storeShareLabel(shopName: string, username?: string): string {
+  const handle = formatStoreUsername(username);
+  return handle ? `${shopName} (${handle})` : shopName;
+}
+
 export function buildCustomerStoreSharePayload(store: StoreShareInput): SharePayload {
   const url = buildStoreShareUrl(store.id);
   const area = store.area || store.province || '';
+  const label = storeShareLabel(store.shopName, store.username);
   return {
     type: 'store',
-    title: `متجر ${store.shopName}`,
-    text: `ألق نظرة على متجر "${store.shopName}" في تطبيق محلك. المتجر يعرض منتجات رائعة في منطقة ${area}. يمكنك تصفح المتجر والطلب من خلال هذا الرابط: ${url}`,
+    title: `متجر ${label}`,
+    text: `ألق نظرة على متجر "${label}" في تطبيق محلك. المتجر يعرض منتجات رائعة في منطقة ${area}. يمكنك تصفح المتجر والطلب من خلال هذا الرابط: ${url}`,
     url,
   };
 }
 
 export function buildMerchantStoreSharePayload(store: StoreShareInput): SharePayload {
   const url = buildStoreShareUrl(store.id);
+  const label = storeShareLabel(store.shopName, store.username);
   return {
     type: 'store',
-    title: `متجر ${store.shopName}`,
-    text: `مرحبا بكم في متجرنا الرسمي "${store.shopName}". يمكنكم تصفح أحدث المنتجات والطلب مباشرة من خلال الرابط التالي: ${url}`,
+    title: `متجر ${label}`,
+    text: `مرحبا بكم في متجرنا الرسمي "${label}". يمكنكم تصفح أحدث المنتجات والطلب مباشرة من خلال الرابط التالي: ${url}`,
     url,
   };
 }
 
 export function buildCustomerProductSharePayload(product: ProductShareInput): SharePayload {
   const url = buildProductShareUrl(product.storeId, product.id);
+  const storeLabel = storeShareLabel(product.shopName || 'المتجر', product.storeUsername);
   return {
     type: 'product',
     title: product.name,
-    text: `شاهد هذا المنتج: "${product.name}" بسعر ${formatSharePrice(product)} دينار عراقي في متجر "${product.shopName || 'المتجر'}". يمكنك مشاهدة تفاصيل المنتج والطلب من خلال هذا الرابط: ${url}`,
+    text: `شاهد هذا المنتج: "${product.name}" بسعر ${formatSharePrice(product)} دينار عراقي في متجر "${storeLabel}". يمكنك مشاهدة تفاصيل المنتج والطلب من خلال هذا الرابط: ${url}`,
     url,
   };
 }
 
 export function buildMerchantProductSharePayload(product: ProductShareInput): SharePayload {
   const url = buildProductShareUrl(product.storeId, product.id);
+  const storeLabel = storeShareLabel(product.shopName || 'متجرنا', product.storeUsername);
   return {
     type: 'product',
     title: product.name,
-    text: `يتوفر الآن في متجرنا: "${product.name}" بسعر ${formatSharePrice(product)} دينار عراقي. يمكنك الطلب الآن من خلال الرابط التالي: ${url}`,
+    text: `يتوفر الآن في متجر "${storeLabel}": "${product.name}" بسعر ${formatSharePrice(product)} دينار عراقي. يمكنك الطلب الآن من خلال الرابط التالي: ${url}`,
     url,
   };
 }

@@ -4,7 +4,10 @@ import { MahalakLogo } from '@shared/components/MahalakLogo';
 import { ProductImage } from '@shared/components/ProductImage';
 import { Store } from '@shared/types';
 import { getStoreCategoryLabel } from '@shared/constants';
-import { VerifiedBadge } from '@shared/components/VerifiedBadge';
+import { StoreIdentity } from '@shared/components/StoreIdentity';
+import { OfferPercentBadge } from '@shared/components/OfferPercentBadge';
+import { formatStoreUsername } from '@shared/utils/storeIdentity';
+import { isStoreVerified } from '@shared/utils/storeVerification';
 
 interface StoreGridItemProps {
   store: Store;
@@ -38,12 +41,16 @@ const StoreGridItem = memo(function StoreGridItem({
       type="button"
       onClick={() => onSelect(store)}
       className="group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center transition-all duration-200 hover:scale-[1.04] active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-vibrant-purple/50 cursor-pointer"
-      aria-label={`${store.shopName} — ${store.province} — ${categoryLabel}`}
+      aria-label={`${store.shopName}${formatStoreUsername(store.username) ? ` ${formatStoreUsername(store.username)}` : ''} — ${store.province} — ${categoryLabel}`}
     >
       <div className={`relative flex aspect-square w-full max-w-[76px] items-center justify-center overflow-hidden rounded-xl shadow-sm transition-shadow sm:max-w-[84px] ${
-        onDark
-          ? 'welcome-card-border-glow border border-white/30 bg-white/10 backdrop-blur-md group-hover:border-white/50 group-hover:bg-white/15'
-          : 'border border-slate-200 bg-white group-hover:border-vibrant-purple/30 group-hover:shadow-md'
+        isVerified
+          ? onDark
+            ? 'welcome-card-border-glow border-2 border-sky-300/70 bg-sky-500/15 backdrop-blur-md ring-2 ring-sky-400/30 group-hover:border-sky-200 group-hover:bg-sky-500/20'
+            : 'border-2 border-sky-400/60 bg-white ring-2 ring-sky-300/40 group-hover:border-sky-500 group-hover:shadow-md group-hover:shadow-sky-200/50'
+          : onDark
+            ? 'welcome-card-border-glow border border-white/30 bg-white/10 backdrop-blur-md group-hover:border-white/50 group-hover:bg-white/15'
+            : 'border border-slate-200 bg-white group-hover:border-vibrant-purple/30 group-hover:shadow-md'
       }`}>
         {store.logo ? (
           <ProductImage
@@ -62,14 +69,7 @@ const StoreGridItem = memo(function StoreGridItem({
         )}
 
         {offerBadge && (
-          <div
-            className="pointer-events-none absolute left-0 top-0 z-10 h-10 w-10 overflow-hidden"
-            aria-hidden
-          >
-            <span className="absolute -left-4 top-3 w-[4.5rem] rotate-[-45deg] bg-rose-500/90 py-0.5 text-center text-[7px] font-black leading-none text-white shadow-sm">
-              {offerBadge}
-            </span>
-          </div>
+          <OfferPercentBadge label={offerBadge} variant="pill" size="md" placement="card" />
         )}
 
         {distanceLabel && (
@@ -89,24 +89,22 @@ const StoreGridItem = memo(function StoreGridItem({
           </div>
         )}
 
-        {isVerified && (
-          <div className="absolute bottom-1 left-1 z-10" title="متجر موثق">
-            <VerifiedBadge size={12} />
-          </div>
-        )}
       </div>
 
       <div className="flex w-full flex-col items-center justify-center gap-0.5 px-0.5">
-        <span
-          className={`line-clamp-2 w-full text-[10px] font-bold leading-tight transition-colors sm:text-[11px] ${
+        <StoreIdentity
+          name={store.shopName}
+          username={store.username}
+          verified={!!isVerified}
+          size="xs"
+          align="center"
+          nameClassName={
             onDark
-              ? 'text-white group-hover:text-white/90'
-              : 'text-slate-800 group-hover:text-vibrant-purple'
-          }`}
-          title={store.shopName}
-        >
-          {store.shopName}
-        </span>
+              ? 'text-white group-hover:text-white/90 line-clamp-2'
+              : 'text-slate-800 group-hover:text-vibrant-purple line-clamp-2'
+          }
+          usernameClassName={onDark ? 'text-white/75' : 'text-vibrant-purple/80'}
+        />
         <div className={`flex items-center gap-0.5 rounded-md px-1.5 py-[2px] ${
           onDark
             ? 'border border-amber-300/30 bg-amber-400/15 text-amber-200'
@@ -175,7 +173,7 @@ export const StoreGrid = memo(function StoreGrid({
           ratingLabel={getStoreRating?.(store)}
           isFeatured={getIsFeatured?.(store) ?? false}
           distanceLabel={getDistanceLabel?.(store) ?? null}
-          isVerified={!!(store.isVerified || (store as Store & { is_verified?: boolean }).is_verified)}
+          isVerified={isStoreVerified(store)}
           onSelect={onStoreSelect}
           variant={variant}
         />

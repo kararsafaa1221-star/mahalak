@@ -5,9 +5,10 @@ const DEFAULT_LOYALTY = {
   orderDeliveryBonusPoints: 0,
   signupBonusPoints: 50,
   shareRewardPoints: 5,
-  shareDailyLimit: 10,
+  shareRewardCooldownHours: 24,
   storeReviewRewardPoints: 50,
   productReviewRewardPoints: 0,
+  reviewRewardOnFirstOnly: true,
   tierUpgradeBonuses: {
     silverToGold: 100,
     goldToPlatinum: 125,
@@ -16,6 +17,7 @@ const DEFAULT_LOYALTY = {
   tierResetPeriodMonths: 1,
   redemptionBasePoints: 150,
   redemptionBaseDiscountIqd: 5000,
+  redemptionPromoValidityDays: 30,
   tiers: [
     { key: "Silver", labelAr: "فضي", shortIcon: "S", ordersRequired: 0, upgradeBonusPoints: 0 },
     { key: "Gold", labelAr: "ذهبي", shortIcon: "G", ordersRequired: 5, upgradeBonusPoints: 100 },
@@ -149,13 +151,29 @@ function resolveLoyaltySettings(globalData) {
     orderDeliveryBonusPoints: Number(raw.orderDeliveryBonusPoints ?? DEFAULT_LOYALTY.orderDeliveryBonusPoints),
     signupBonusPoints: Number(raw.signupBonusPoints ?? DEFAULT_LOYALTY.signupBonusPoints),
     shareRewardPoints: Number(raw.shareRewardPoints ?? DEFAULT_LOYALTY.shareRewardPoints),
-    shareDailyLimit: Number(raw.shareDailyLimit ?? DEFAULT_LOYALTY.shareDailyLimit),
+    shareRewardCooldownHours: Math.max(
+      1,
+      Math.min(
+        8760,
+        Math.round(
+          Number(
+            raw.shareRewardCooldownHours ??
+              (raw.shareDailyLimit != null ? 24 : DEFAULT_LOYALTY.shareRewardCooldownHours),
+          ),
+        ),
+      ),
+    ),
     storeReviewRewardPoints: Number(raw.storeReviewRewardPoints ?? DEFAULT_LOYALTY.storeReviewRewardPoints),
     productReviewRewardPoints: Number(raw.productReviewRewardPoints ?? DEFAULT_LOYALTY.productReviewRewardPoints),
+    reviewRewardOnFirstOnly: raw.reviewRewardOnFirstOnly !== false,
     tierUpgradeBonuses: syncTierUpgradeBonusesFromTiers(tiers),
     tierResetPeriodMonths: Math.max(1, Number(raw.tierResetPeriodMonths ?? DEFAULT_LOYALTY.tierResetPeriodMonths)),
     redemptionBasePoints: Number(raw.redemptionBasePoints ?? DEFAULT_LOYALTY.redemptionBasePoints),
     redemptionBaseDiscountIqd: Number(raw.redemptionBaseDiscountIqd ?? DEFAULT_LOYALTY.redemptionBaseDiscountIqd),
+    redemptionPromoValidityDays: Math.max(
+      0,
+      Math.min(3650, Math.round(Number(raw.redemptionPromoValidityDays ?? DEFAULT_LOYALTY.redemptionPromoValidityDays))),
+    ),
     tiers,
     redemptionPackages: mergePackages(raw.redemptionPackages),
     earnRules: mergeEarnRules(raw.earnRules),

@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { Home, Briefcase, MapPin, Plus, Star, Trash2, X, Check, Pencil } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Home, Briefcase, MapPin, Plus, Star, Trash2, X, Check, Pencil, ChevronDown } from 'lucide-react';
 import { CustomerLocationPicker } from '@/components/CustomerLocationPicker';
 import type { CustomerSavedLocation, Province } from '@shared/types';
+import { getProvinceLabel } from '@shared/constants';
 import {
   createSavedLocation,
   formatSavedLocationSummary,
@@ -56,72 +58,76 @@ function AddressFields({
   onChange: (next: AddressDraft) => void;
   provinces: Province[];
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={labelClass}>المحافظة</label>
-          <select
-            value={draft.province}
-            onChange={(e) => onChange({ ...draft, province: e.target.value })}
-            className={`${fieldClass} appearance-none`}
-          >
-            {provinces.map((p) => (
-              <option key={p.id} value={p.name}>{p.name}</option>
-            ))}
-          </select>
+          <label className={labelClass}>{t('locations.province')}</label>
+          <div className="welcome-select-wrap">
+            <select
+              value={draft.province}
+              onChange={(e) => onChange({ ...draft, province: e.target.value })}
+              className="welcome-select welcome-select--sm welcome-select--with-chevron"
+            >
+              {provinces.map((p) => (
+                <option key={p.id} value={p.name}>{getProvinceLabel(p)}</option>
+              ))}
+            </select>
+            <ChevronDown size={14} className="welcome-select-chevron" aria-hidden />
+          </div>
         </div>
         <div>
-          <label className={labelClass}>المنطقة</label>
+          <label className={labelClass}>{t('locations.area')}</label>
           <input
             type="text"
             value={draft.area}
             onChange={(e) => onChange({ ...draft, area: e.target.value })}
             className={fieldClass}
-            placeholder="مثال: الكرادة"
+            placeholder={t('locations.areaPlaceholder')}
           />
         </div>
       </div>
       <div className="grid grid-cols-3 gap-3">
         <div>
-          <label className={labelClass}>محلة</label>
+          <label className={labelClass}>{t('locations.mahalla')}</label>
           <input
             type="text"
             value={draft.mahalla}
             onChange={(e) => onChange({ ...draft, mahalla: e.target.value })}
             className={fieldClass}
-            placeholder="محلة"
+            placeholder={t('locations.mahalla')}
           />
         </div>
         <div>
-          <label className={labelClass}>زقاق</label>
+          <label className={labelClass}>{t('locations.zuqaq')}</label>
           <input
             type="text"
             value={draft.zuqaq}
             onChange={(e) => onChange({ ...draft, zuqaq: e.target.value })}
             className={fieldClass}
-            placeholder="زقاق"
+            placeholder={t('locations.zuqaq')}
           />
         </div>
         <div>
-          <label className={labelClass}>دار</label>
+          <label className={labelClass}>{t('locations.dar')}</label>
           <input
             type="text"
             value={draft.dar}
             onChange={(e) => onChange({ ...draft, dar: e.target.value })}
             className={fieldClass}
-            placeholder="دار"
+            placeholder={t('locations.dar')}
           />
         </div>
       </div>
       <div>
-        <label className={labelClass}>أقرب نقطة دالة</label>
+        <label className={labelClass}>{t('locations.landmark')}</label>
         <input
           type="text"
           value={draft.landmark}
           onChange={(e) => onChange({ ...draft, landmark: e.target.value })}
           className={fieldClass}
-          placeholder="مثال: قرب مدرسة..."
+          placeholder={t('locations.landmarkPlaceholder')}
         />
       </div>
     </div>
@@ -135,6 +141,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
   labelClassName = 'block text-xs font-bold text-white mb-1',
   hideHeader = false,
 }) => {
+  const { t } = useTranslation();
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [preset, setPreset] = useState<LocationPreset | 'custom'>('البيت');
@@ -180,15 +187,15 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
 
   const validateDraft = (label: string) => {
     if (!label) {
-      alert('يرجى إدخال اسم الموقع');
+      alert(t('locations.enterName'));
       return false;
     }
     if (!isSavedLocationAddressComplete(addressDraft)) {
-      alert('يرجى إكمال المحافظة والمنطقة وأقرب نقطة دالة');
+      alert(t('locations.completeAddress'));
       return false;
     }
     if (draftLat === undefined || draftLng === undefined) {
-      alert('يرجى تحديد الموقع على الخريطة');
+      alert(t('locations.pickMapRequired'));
       return false;
     }
     return true;
@@ -197,7 +204,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
   const handleAddLocation = () => {
     if (!validateDraft(resolvedLabel)) return;
     if (locations.some((loc) => loc.label === resolvedLabel)) {
-      alert('يوجد موقع محفوظ بنفس الاسم. اختر اسماً مختلفاً.');
+      alert(t('locations.duplicateName'));
       return;
     }
 
@@ -227,7 +234,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
 
     const duplicate = locations.some((loc) => loc.id !== editingId && loc.label === resolvedLabel);
     if (duplicate) {
-      alert('يوجد موقع محفوظ بنفس الاسم. اختر اسماً مختلفاً.');
+      alert(t('locations.duplicateName'));
       return;
     }
 
@@ -269,14 +276,14 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
   const renderLocationForm = (mode: 'add' | 'edit') => (
     <div className="space-y-4 p-4 rounded-2xl welcome-card-border-glow bg-white/5 border border-white/20 animate-fade-in text-right">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-black text-[#fff700]">{mode === 'add' ? 'موقع جديد' : 'تعديل الموقع'}</span>
+        <span className="text-xs font-black text-[#fff700]">{mode === 'add' ? t('locations.newLocation') : t('locations.edit')}</span>
         <button type="button" onClick={resetDraft} className="p-1.5 rounded-lg hover:bg-white/10 text-white/70">
           <X size={16} />
         </button>
       </div>
 
       <div>
-        <label className={labelClass}>اسم الموقع</label>
+        <label className={labelClass}>{t('locations.nameLabel')}</label>
         <div className="flex flex-wrap gap-2">
           {LOCATION_PRESETS.map((name) => (
             <button
@@ -301,7 +308,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                 : 'bg-white/10 text-white/80 border-white/20 hover:bg-white/15'
             }`}
           >
-            مكان آخر
+            {t('locations.other')}
           </button>
         </div>
         {preset === 'custom' && (
@@ -309,7 +316,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
             type="text"
             value={customLabel}
             onChange={(e) => setCustomLabel(e.target.value)}
-            placeholder="مثال: بيت العائلة، الجامعة..."
+            placeholder={t('locations.otherPlaceholder')}
             className={`${fieldClass} mt-3`}
           />
         )}
@@ -326,7 +333,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
           setDraftLng(lng);
           setDraftMapAddress(address);
         }}
-        label="تحديد الموقع على الخريطة"
+        label={t('locations.pickOnMap')}
         labelClassName={labelClassName}
         required
       />
@@ -337,7 +344,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
         className="welcome-btn-pulse w-full py-3 bg-brand-horizontal border border-white/30 text-white rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-brand-glow hover:opacity-95 transition-all active:scale-95"
       >
         <Check size={14} />
-        {mode === 'add' ? 'حفظ هذا الموقع' : 'تحديث الموقع'}
+        {mode === 'add' ? t('locations.saveLocation') : t('locations.updateLocation')}
       </button>
     </div>
   );
@@ -348,7 +355,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
         <div className="flex items-center justify-between gap-3">
           <h4 className="text-[10px] font-black text-white uppercase tracking-widest px-1 flex items-center gap-1.5">
             <MapPin size={12} />
-            مواقع التوصيل المحفوظة
+            {t('locations.savedListTitle')}
           </h4>
           {!isAdding && !editingId && (
             <button
@@ -360,7 +367,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-[#fff700] text-[10px] font-black border border-white/20 hover:bg-white/15 transition-colors"
             >
               <Plus size={12} />
-              إضافة موقع
+              {t('locations.add')}
             </button>
           )}
         </div>
@@ -376,7 +383,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-[#fff700] text-[10px] font-black border border-white/20 hover:bg-white/15 transition-colors"
             >
               <Plus size={12} />
-              إضافة موقع
+              {t('locations.add')}
             </button>
           </div>
         )
@@ -400,7 +407,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                       {loc.isDefault && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#fff700]/15 text-[#fff700] text-[9px] font-black border border-[#fff700]/30">
                           <Star size={10} fill="currentColor" />
-                          الافتراضي
+                          {t('locations.default')}
                         </span>
                       )}
                     </div>
@@ -413,7 +420,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                       type="button"
                       onClick={() => startEdit(loc)}
                       className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 hover:text-[#fff700] transition-colors"
-                      title="تعديل الموقع"
+                      title={t('locations.editLocation')}
                     >
                       <Pencil size={14} />
                     </button>
@@ -422,7 +429,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                         type="button"
                         onClick={() => handleSetDefault(loc.id)}
                         className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 hover:text-[#fff700] transition-colors"
-                        title="تعيين كموقع افتراضي"
+                        title={t('locations.setDefault')}
                       >
                         <Star size={14} />
                       </button>
@@ -431,7 +438,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
                       type="button"
                       onClick={() => handleDelete(loc.id)}
                       className="p-2 rounded-xl bg-rose-500/15 text-rose-200 hover:bg-rose-500/25 transition-colors"
-                      title="حذف الموقع"
+                      title={t('locations.deleteLocation')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -444,7 +451,7 @@ export const SavedLocationsManager: React.FC<SavedLocationsManagerProps> = ({
         </div>
       ) : (
         <p className="text-[10px] text-purple-100/70 font-bold text-center py-2">
-          لم تُضف أي مواقع بعد. أضف موقع البيت أو العمل مع العنوان الكامل.
+          {t('locations.emptyList')}
         </p>
       )}
 

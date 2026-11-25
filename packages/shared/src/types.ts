@@ -33,6 +33,14 @@ export interface Store {
   isVerified?: boolean;
   verificationType?: 'days' | 'months' | 'years' | 'lifetime';
   verificationExpiresAt?: string;
+  /** Amount (IQD) charged when verification badge was last granted */
+  verificationAmountIqd?: number;
+  /** Cumulative verification revenue from this store (increments on each paid grant) */
+  verificationLifetimeRevenueIqd?: number;
+  /** ISO timestamp of last verification grant */
+  verificationLastActivatedAt?: string;
+  /** True when the current verification badge was granted as a free admin gift (excluded from revenue accounting) */
+  verificationIsGift?: boolean;
   is_virtual?: boolean;
   walletBalance?: number;
   payoutMethods?: { zainCashNumber?: string; mastercardNumber?: string; };
@@ -44,6 +52,14 @@ export interface Store {
   subscriptionLifetimeRevenueIqd?: number;
   /** ISO timestamp of last subscription payment/activation */
   subscriptionLastActivatedAt?: string;
+  /** True when the current active subscription was granted as a free admin gift (excluded from revenue accounting) */
+  subscriptionIsGift?: boolean;
+  /** Dedupe stamp for the daily subscription-reminder Cloud Function — last reminder stage already sent for the CURRENT expiry date */
+  subscriptionReminderStage?: '7days' | '3days' | '1day' | 'expired';
+  /** ISO expiry date the reminder stage above was computed against — reset stage tracking whenever the store renews */
+  subscriptionReminderStageFor?: string;
+  /** Dedupe stamp for the daily verification-expiry Cloud Function */
+  verificationReminderStage?: 'expired';
   /** YYYY-MM-DD expiry date (or Lifetime) — mirrors subscriptionExpiry for queries/display */
   subscriptionExpiryDate?: string;
   /** Duration granted by auto-subscription on registration */
@@ -158,6 +174,10 @@ export interface Customer {
   followedStores: string[]; 
   storeNotifications: string[]; 
   isBlocked: boolean;
+  /** True after first store-review loyalty reward was granted */
+  loyaltyStoreReviewRewarded?: boolean;
+  /** True after first product-review loyalty reward was granted */
+  loyaltyProductReviewRewarded?: boolean;
   /** Store IDs this customer is blocked from (merchant store-scope) */
   blockedStoreIds?: string[];
   objectId?: string; 
@@ -187,7 +207,7 @@ export interface CustomerSavedLocation {
   address?: string;
   isDefault?: boolean;
 }
-export interface Order { id: string; storeId: string; storeName: string; customerId: string; customerName: string; customerPhone: string; customerAddress: string; customerProvince: string; customerLat?: number; customerLng?: number; items: any[]; subtotal: number; deliveryPrice: number; discountAmount: number; total: number; status: 'pending' | 'accepted' | 'shipped' | 'delivered' | 'returned' | 'replaced' | 'rejected' | 'cancelled'; rejectionReason?: string; returnReason?: string; createdAt: string; promoCode?: string; objectId?: string; discountSponsor?: 'ADMIN' | 'MERCHANT'; /** رقم الطلب الموحّد على مستوى المنصة (لكل المتاجر) */ orderNumber?: number; /** false حتى انتهاء نافذة إلغاء الزبون (30ث) */ merchantNotified?: boolean; customerGraceUntil?: string | { seconds?: number; toMillis?: () => number }; /** إخفاء من قائمة التاجر فقط — لا يؤثر على التقارير أو الحسابات */ merchantInboxCleared?: boolean; merchantInboxClearedAt?: string; }
+export interface Order { id: string; storeId: string; storeName: string; /** يوزرنيم المتجر وقت الطلب */ storeUsername?: string; customerId: string; customerName: string; customerPhone: string; customerAddress: string; customerProvince: string; customerLat?: number; customerLng?: number; items: any[]; subtotal: number; deliveryPrice: number; discountAmount: number; total: number; status: 'pending' | 'accepted' | 'shipped' | 'delivered' | 'returned' | 'replaced' | 'rejected' | 'cancelled'; rejectionReason?: string; returnReason?: string; createdAt: string; promoCode?: string; objectId?: string; discountSponsor?: 'ADMIN' | 'MERCHANT'; /** رقم الطلب الموحّد على مستوى المنصة (لكل المتاجر) */ orderNumber?: number; /** false حتى انتهاء نافذة إلغاء الزبون (15ث) */ merchantNotified?: boolean; customerGraceUntil?: string | { seconds?: number; toMillis?: () => number }; /** إخفاء من قائمة التاجر فقط — لا يؤثر على التقارير أو الحسابات */ merchantInboxCleared?: boolean; merchantInboxClearedAt?: string; }
 
 export interface PayoutRequest {
   id: string;
@@ -226,14 +246,28 @@ export interface AppNotification {
   userId: string; 
   role: 'customer' | 'merchant' | 'admin'; 
   title: string; 
-  message: string; 
+  message: string;
+  /** Sorani title when available */
+  titleCkb?: string;
+  /** Sorani body when available */
+  messageCkb?: string;
   read: boolean; 
   createdAt: string; 
-  type?: 'order' | 'subscription' | 'product' | 'promo' | 'event' | 'system';
+  type?: 'order' | 'subscription' | 'product' | 'promo' | 'event' | 'system' | 'social' | 'broadcast';
   targetId?: string;
   objectId?: string; 
   actionLink?: string;
   actionText?: string;
+  /** Template key used when creating the notification (e.g. merchant.newFollower) — helps deep-link routing */
+  templateKey?: string;
+  /** Variables used to fill the template — enables re-localization on display */
+  templateVars?: Record<string, string | number | undefined | null>;
+  /** Whether the external push notification should play a sound (default true when omitted) */
+  sound?: boolean;
+  /** Whether the in-app toast should play a sound while the app is open (default true when omitted) */
+  inAppSound?: boolean;
+  /** Sound profile the notification was created with — informational, kept for the admin Notification Center audit trail */
+  soundProfile?: 'sound_both' | 'silent_both' | 'silent_inapp';
 }
 export interface FlashSale { id: string; title: string; description: string; startTime: string; endTime: string; status: 'upcoming' | 'active' | 'ended' | 'paused'; objectId?: string; }
 export interface FlashSaleRequest { id: string; flashSaleId: string; storeId: string; productId: string; status: 'pending' | 'approved' | 'rejected'; promotionalPrice: number; quantityLimit?: number; objectId?: string; }
@@ -248,5 +282,36 @@ export interface PayoutRequest {
   };
   status: 'pending' | 'completed';
   createdAt: string;
+}
+
+/** Dashboard staff record (admins/{uid}) — mirrors apps/admin/src/types.ts::Admin. */
+export interface Admin {
+  id: string;
+  email?: string;
+  name?: string;
+  phone?: string;
+  province?: string;
+  area?: string;
+  /** One of the 5 built-in roles, or a custom role id defined in settings/global.customRoles. */
+  role: 'owner' | 'admin' | 'supervisor' | 'accountant' | 'support' | string;
+  permissions: string[];
+  rawPermissions?: string[];
+  status?: 'active' | 'suspended' | string;
+  isSuspended?: boolean;
+  lastLogin?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /** Staff profile photo — base64 data URL or hosted URL, same convention as store logos. */
+  photoUrl?: string;
+  /** Live presence flag — self-written heartbeat while the dashboard tab is open. */
+  isOnline?: boolean;
+  /** ISO timestamp of the last presence heartbeat — used to detect stale/crashed sessions. */
+  lastActiveAt?: string;
+  /** "HH:mm" — start of the allowed login/session window (ignored unless isTimeRestricted). */
+  workStartTime?: string;
+  /** "HH:mm" — end of the allowed login/session window (ignored unless isTimeRestricted). */
+  workEndTime?: string;
+  /** When true, login is blocked and active sessions are force-logged-out outside work hours. Never applies to the owner. */
+  isTimeRestricted?: boolean;
 }
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Shield } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { ChangePasswordContent } from './ChangePasswordContent';
 import { LegalSheetModal } from './LegalSheetModal';
 
@@ -32,8 +33,9 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   onSubmit,
   onResendOtp,
 }) => {
+  const { t } = useTranslation();
   return (
-    <LegalSheetModal open={open} onClose={onClose} title="تغيير كلمة المرور" icon={Shield} variant="home">
+    <LegalSheetModal open={open} onClose={onClose} title={t('profile.changePassword')} icon={Shield} variant="home">
       <ChangePasswordContent
         compact
         showHeader

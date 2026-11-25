@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { Activity, Clock, Filter, Shield, Target, User } from 'lucide-react';
+import { Activity, Clock, Filter, Shield, Target, User, UserCog } from 'lucide-react';
 import { useApp } from '../../context/useApp';
 import { formatSafeDateTimeString } from '../../utils/date';
-import { getRoleLabelAr, localizeActivityLogForDisplay } from '../../lib/activityLogI18n';
+import { localizeActivityLogForDisplay, ROLE_LABELS_AR } from '../../lib/activityLogI18n';
+import { DASHBOARD_ADMIN_ROLES } from '../../lib/adminAuth';
 
 const LOG_CATEGORIES = [
   { id: 'all', label: 'الكل' },
@@ -45,20 +46,53 @@ function categoryBadgeClass(category: LogCategory): string {
 }
 
 export const ActivityLogsPanel: React.FC = React.memo(function ActivityLogsPanel() {
-  const { activityLogs } = useApp();
+  const { activityLogs, adminSettings } = useApp();
   const [categoryFilter, setCategoryFilter] = useState<LogCategory>('all');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+
+  // Custom roles (settings/global.customRoles) don't have a static Arabic
+  // label — fall back to their own saved label so the filter/table always
+  // shows a friendly name instead of the raw role id.
+  const customRoles: { id: string; label: string }[] = useMemo(
+    () => (Array.isArray(adminSettings?.customRoles) ? adminSettings.customRoles : []),
+    [adminSettings?.customRoles],
+  );
+
+  const roleLabelFor = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [id, label] of Object.entries(ROLE_LABELS_AR)) map.set(id, label);
+    for (const role of customRoles) map.set(role.id, role.label);
+    return (role?: string | null) => (role ? map.get(role) ?? role : '—');
+  }, [customRoles]);
+
+  // Always the complete role list — the 5 built-in roles plus every custom
+  // role currently defined — not just roles that already have log entries.
+  // Reading live from adminSettings.customRoles means any role added later
+  // shows up here automatically, with no code change needed.
+  const availableRoles = useMemo(() => {
+    const list = [
+      ...DASHBOARD_ADMIN_ROLES.map((id) => ({ id, label: roleLabelFor(id) })),
+      ...customRoles.map((role) => ({ id: role.id, label: roleLabelFor(role.id) })),
+    ];
+    return list.sort((a, b) => {
+      if (a.id === 'owner') return -1;
+      if (b.id === 'owner') return 1;
+      return a.label.localeCompare(b.label, 'ar');
+    });
+  }, [customRoles, roleLabelFor]);
 
   const filteredLogs = useMemo(() => {
     return activityLogs.filter((log) => {
       const cat = resolveCategory(log.actionKey);
       if (categoryFilter !== 'all' && cat !== categoryFilter) return false;
+      if (roleFilter !== 'all' && log.adminRole !== roleFilter) return false;
       if (!search.trim()) return true;
       const row = localizeActivityLogForDisplay(log);
       const haystack = `${row.action} ${row.target} ${row.description} ${log.adminName ?? ''}`.toLowerCase();
       return haystack.includes(search.trim().toLowerCase());
     });
-  }, [activityLogs, categoryFilter, search]);
+  }, [activityLogs, categoryFilter, roleFilter, search]);
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -92,6 +126,39 @@ export const ActivityLogsPanel: React.FC = React.memo(function ActivityLogsPanel
               }`}
             >
               {cat.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 flex flex-col lg:flex-row lg:items-center gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500 whitespace-nowrap">
+          <UserCog size={14} /> تصفية حسب الدور:
+        </span>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setRoleFilter('all')}
+            className={`px-3 py-1.5 text-[10px] font-bold rounded-xl border transition ${
+              roleFilter === 'all'
+                ? 'bg-[#4D2980] text-white border-[#4D2980]'
+                : 'bg-white text-slate-600 border-slate-200 hover:border-[#e9daff]'
+            }`}
+          >
+            كل الأدوار
+          </button>
+          {availableRoles.map((role) => (
+            <button
+              key={role.id}
+              type="button"
+              onClick={() => setRoleFilter(role.id)}
+              className={`px-3 py-1.5 text-[10px] font-bold rounded-xl border transition ${
+                roleFilter === role.id
+                  ? 'bg-[#4D2980] text-white border-[#4D2980]'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-[#e9daff]'
+              }`}
+            >
+              {role.label}
             </button>
           ))}
         </div>
@@ -138,7 +205,7 @@ export const ActivityLogsPanel: React.FC = React.memo(function ActivityLogsPanel
                       </td>
                       <td className="px-3 py-2">
                         <span className="text-xs bg-[#f5eeff] text-[#4D2980] px-2 py-0.5 rounded-full font-bold">
-                          {getRoleLabelAr(log.adminRole)}
+                          {roleLabelFor(log.adminRole)}
                         </span>
                       </td>
                       <td className="px-3 py-2">

@@ -336,10 +336,10 @@ export function buildCustomerPointsAudit(input: BuildCustomerPointsAuditInput): 
     });
   }
 
-  if (bySource.share_app >= loyalty.shareRewardPoints * loyalty.shareDailyLimit * 3) {
+  if (bySource.share_app >= loyalty.shareRewardPoints * Math.max(1, Math.ceil(72 / Math.max(1, loyalty.shareRewardCooldownHours))) * 3) {
     fraudFlags.push({
       severity: 'warning',
-      messageAr: 'نشاط مشاركة مرتفع جداً مقارنة بالحد اليومي — راجع سجل المشاركات.',
+      messageAr: 'نشاط مشاركة مرتفع جداً مقارنة بفترة مكافأة المشاركة — راجع سجل المشاركات.',
     });
   }
 

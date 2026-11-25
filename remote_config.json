@@ -1,0 +1,46 @@
+{
+  "parameters": {
+    "min_version_android": {
+      "defaultValue": {
+        "value": "1.0.5"
+      },
+      "description": "Minimum supported Android version shared by the customer and merchant apps.",
+      "valueType": "STRING"
+    },
+    "min_version_ios": {
+      "defaultValue": {
+        "value": "1.0.5"
+      },
+      "description": "Minimum supported iOS version shared by the customer and merchant apps.",
+      "valueType": "STRING"
+    },
+    "update_title": {
+      "defaultValue": {
+        "value": "تحديث مطلوب"
+      },
+      "description": "Title shown in the app update modal.",
+      "valueType": "STRING"
+    },
+    "update_message": {
+      "defaultValue": {
+        "value": "يتوفر إصدار جديد من {appName}. يرجى التحديث للاستمتاع بأحدث التحسينات والميزات."
+      },
+      "description": "Body text for the update modal. Supports {appName} placeholder.",
+      "valueType": "STRING"
+    },
+    "update_button_text": {
+      "defaultValue": {
+        "value": "تحديث التطبيق الآن"
+      },
+      "description": "Primary CTA label on the update modal.",
+      "valueType": "STRING"
+    },
+    "force_update": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "When true, the update modal cannot be dismissed. When false, users may skip the update.",
+      "valueType": "BOOLEAN"
+    }
+  }
+}

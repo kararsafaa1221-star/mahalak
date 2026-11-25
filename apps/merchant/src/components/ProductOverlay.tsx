@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useApp } from '@shared/context/useApp';
 import { db } from '@shared/lib/firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { ShoppingBag, User, Phone, MapPin, CheckCircle, AlertCircle, ShoppingCart, Loader2 } from 'lucide-react';
 import { Product, Store } from '@shared/types';
+import { buildNotificationContent, notificationDeliveryFields } from '@shared/constants/notificationTemplates';
 
 // Helper functions placed outside the component to preserve purity
 const generateOrderId = (customerId: string | undefined): { orderId: string; customerIdVal: string } => {
@@ -32,7 +34,8 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
   storeDetails,
   onOrderSuccess
 }) => {
-  const { currentCustomer, stores } = useApp();
+  const { t } = useTranslation();
+  const { currentCustomer, stores, adminSettings } = useApp();
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [customerForm, setCustomerForm] = useState({
     name: currentCustomer?.name || '',
@@ -52,15 +55,15 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
   const handleQuickCODOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerForm.name.trim()) {
-      setError("الرجاء إدخال اسم المستلم بالكامل.");
+      setError(t('merchant.reels.overlay.errors.nameRequired'));
       return;
     }
     if (!customerForm.phone.trim() || customerForm.phone.trim().length < 10) {
-      setError("الرجاء إدخال رقم هاتف هاتف عراقي صالح (10+ أرقام).");
+      setError(t('merchant.reels.overlay.errors.phoneRequired'));
       return;
     }
     if (!customerForm.address.trim()) {
-      setError("الرجاء تحديد عنوان السكن/التوصيل بالتفصيل.");
+      setError(t('merchant.reels.overlay.errors.addressRequired'));
       return;
     }
 
@@ -83,7 +86,7 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
         productId: product.id, // requested field
         merchantId: merchantId, // requested field
         storeId: merchantId,
-        storeName: storeInstance?.shopName || 'متجر ريلز',
+        storeName: storeInstance?.shopName || t('merchant.reels.overlay.defaultStore'),
         customerId: customerIdVal,
         customerName: customerForm.name,
         customerPhone: customerForm.phone,
@@ -122,18 +125,30 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
 
       // Create a merchant notification
       try {
-        const notifId = generateNotifId();
-        await setDoc(doc(db, 'notifications', notifId), {
-          id: notifId,
-          userId: merchantId,
-          role: 'merchant',
-          title: 'طلب ريلز جديد! 🎬🛍️',
-          message: `طلب زبون جديد من مقطع الفيديو الخاص بـ: ${product.name}. بقيمة إجمالية ${totalCost} د.ع.`,
-          read: false,
-          createdAt: serverTimestamp(),
-          type: 'order',
-          targetId: orderId
-        });
+        const content = buildNotificationContent(
+          adminSettings as Record<string, unknown>,
+          'merchant.reelsOrder',
+          {
+            productName: product.name,
+            totalCost: totalCost.toLocaleString('en-US'),
+          },
+        );
+        if (content) {
+          const notifId = generateNotifId();
+          await setDoc(doc(db, 'notifications', notifId), {
+            id: notifId,
+            userId: merchantId,
+            role: 'merchant',
+            title: content.title,
+            message: content.message,
+            read: false,
+            createdAt: serverTimestamp(),
+            type: 'order',
+            templateKey: 'merchant.reelsOrder',
+            targetId: orderId,
+            ...notificationDeliveryFields(adminSettings as Record<string, unknown>, 'merchant.reelsOrder'),
+          });
+        }
       } catch (notifErr) {
       }
 
@@ -143,7 +158,7 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
       }, 3500);
 
     } catch (err: any) {
-      setError("فشل تسجيل الطلب الإقتراحي. يرجى تكرار المحاولة في غضون لحظات.");
+      setError(t('merchant.reels.overlay.errors.orderFailed'));
     } finally {
       setLoading(false);
     }
@@ -171,13 +186,16 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
             )}
             <div className="max-w-[190px] sm:max-w-xs">
               <span className="text-[10px] uppercase tracking-wider font-extrabold text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-md inline-block mb-1">
-                توصيل سريع بالدفع COD
+                {t('merchant.reels.overlay.codBadge')}
               </span>
               <h4 className="text-xs sm:text-sm font-black text-white truncate drop-shadow-md leading-tight">
                 {product.name}
               </h4>
               <p className="text-[10px] text-slate-300 font-bold mt-0.5 truncate max-w-[180px]">
-                المتجر: {storeInstance?.shopName || 'جاري التحميل...'}
+                {t('merchant.reels.overlay.storeLabel')} {storeInstance?.shopName || t('common.loading')}
+                {storeInstance?.username
+                  ? ` (@${String(storeInstance.username).replace(/^@+/, '')})`
+                  : ''}
               </p>
             </div>
           </div>
@@ -191,9 +209,9 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                 <span className="text-[#00AA4F] text-xs sm:text-sm font-black drop-shadow-md">
                   {product.finalPrice.toLocaleString()} د.ع
                 </span>
-                <div title="لا تفوت هذه الفرصة، وفر الآن!" className="bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 px-1 py-[2px] rounded-[4px] mt-1 flex items-center justify-center gap-0.5 w-fit">
+                <div title={t('merchant.reels.overlay.savingsTitle')} className="bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 px-1 py-[2px] rounded-[4px] mt-1 flex items-center justify-center gap-0.5 w-fit">
                   <span className="text-[9px]">⚡</span>
-                  <span className="text-[7.5px] font-black">توفير سريع: {(product.price - product.finalPrice).toLocaleString()} د.ع</span>
+                  <span className="text-[7.5px] font-black">{t('merchant.reels.overlay.savingsBadge', { amount: (product.price - product.finalPrice).toLocaleString() })}</span>
                 </div>
               </div>
             ) : (
@@ -210,28 +228,28 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
           className="w-full py-3 sm:py-3.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-black text-xs sm:text-sm rounded-2xl flex items-center justify-center gap-2 shadow-xl shadow-amber-500/10 active:scale-[0.97] transition-all"
         >
           <ShoppingCart size={16} />
-          <span>اطلب الآن ودفع عند الاستلام (COD)</span>
+          <span>{t('merchant.reels.overlay.orderNow')}</span>
         </button>
       </div>
 
       {/* Slide-Up Checkout Bottom Sheets/Modals */}
       {showCheckoutModal && (
         <div className="fixed inset-0 bg-deep-navy/70 backdrop-blur-sm z-[160] flex items-end justify-center animate-fade-in" dir="rtl">
-          <div className="bg-white rounded-t-[2.5rem] w-full max-w-lg p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto animate-slide-up pb-10 shadow-2xl">
+          <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-t-[2.5rem] w-full max-w-lg p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto animate-slide-up pb-10 shadow-2xl text-white">
             {/* Header */}
-            <div className="flex justify-between items-center border-b border-slate-50 pb-3">
+            <div className="flex justify-between items-center border-b border-white/15 pb-3">
               <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-amber-400/10 flex items-center justify-center text-amber-500">
+                <div className="w-9 h-9 rounded-xl bg-amber-400/15 flex items-center justify-center text-amber-300">
                   <ShoppingBag size={18} />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-slate-850 font-tajawal">شراء فوري مباشر</h3>
-                  <p className="text-[10px] text-slate-400 font-bold">الدفع كاش عند الاستلام وسريع التوصيل</p>
+                  <h3 className="text-sm font-black text-white font-tajawal">{t('merchant.reels.overlay.modalTitle')}</h3>
+                  <p className="text-[10px] text-white/55 font-bold">{t('merchant.reels.overlay.modalSubtitle')}</p>
                 </div>
               </div>
               <button
                 onClick={() => setShowCheckoutModal(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition active:scale-90"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-90"
               >
                 ✕
               </button>
@@ -243,10 +261,10 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                   <CheckCircle size={36} />
                 </div>
                 <div className="space-y-1">
-                  <h4 className="text-base font-black text-slate-800">تم تسجيل طلبك بنجاح! 🎉</h4>
-                  <p className="text-xs text-slate-500 font-medium">سيتواصل معك متجر <strong className="text-vibrant-purple">{storeInstance?.shopName}</strong> لتأكيد الشحن الفوري.</p>
+                  <h4 className="text-base font-black text-slate-800">{t('merchant.reels.overlay.successTitle')}</h4>
+                  <p className="text-xs text-slate-500 font-medium">{t('merchant.reels.overlay.successContact', { shopName: storeInstance?.shopName })}</p>
                 </div>
-                <p className="text-xs text-slate-400 font-bold bg-slate-50 px-4 py-1.5 rounded-xl">سيتم العودة لمشاهدة المقطع خلال ثوانٍ...</p>
+                <p className="text-xs text-slate-400 font-bold bg-slate-50 px-4 py-1.5 rounded-xl">{t('merchant.reels.overlay.successReturn')}</p>
               </div>
             ) : (
               <form onSubmit={handleQuickCODOrder} className="space-y-4 font-tajawal">
@@ -266,7 +284,7 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                     )}
                     <div className="font-bold">
                       <p className="text-slate-800 truncate max-w-[150px]">{product.name}</p>
-                      <p className="text-[10px] text-slate-400 font-normal">شحن بواسطة: {storeInstance?.shopName}</p>
+                      <p className="text-[10px] text-slate-400 font-normal">{t('merchant.reels.overlay.shippingBy')} {storeInstance?.shopName}</p>
                     </div>
                   </div>
                   <div className="text-left font-extrabold text-[#00AA4F]">
@@ -279,13 +297,13 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-extrabold text-slate-700 flex items-center gap-1.5">
                       <User size={12} className="text-indigo-500" />
-                      <span>اسم المستلم بالكامل <span className="text-rose-500">*</span></span>
+                      <span>{t('merchant.reels.overlay.form.receiverName')} <span className="text-rose-500">*</span></span>
                     </label>
                     <input
                       type="text"
                       value={customerForm.name}
                       onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
-                      placeholder="امجد احمد محمد"
+                      placeholder={t('merchant.reels.overlay.form.receiverNamePlaceholder')}
                       className="w-full bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-xs sm:text-sm font-bold focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple outline-none transition"
                       required
                     />
@@ -294,13 +312,13 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-extrabold text-slate-700 flex items-center gap-1.5">
                       <Phone size={12} className="text-emerald-500" />
-                      <span>رقم الهاتف <span className="text-rose-500">*</span></span>
+                      <span>{t('merchant.reels.overlay.form.phone')} <span className="text-rose-500">*</span></span>
                     </label>
                     <input
                       type="tel"
                       value={customerForm.phone}
                       onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })}
-                      placeholder="077XXXXXXXX"
+                      placeholder={t('merchant.reels.overlay.form.phonePlaceholder')}
                       className="w-full bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-xs sm:text-sm font-bold text-left tracking-widest focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple outline-none transition"
                       required
                     />
@@ -311,12 +329,12 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                     <div className="space-y-1.5">
                       <label className="text-[11px] font-extrabold text-slate-700 flex items-center gap-1.5">
                         <MapPin size={12} className="text-rose-500" />
-                        <span>المحافظة <span className="text-rose-500">*</span></span>
+                        <span>{t('merchant.reels.overlay.form.province')} <span className="text-rose-500">*</span></span>
                       </label>
                       <select
                         value={customerForm.province}
                         onChange={(e) => setCustomerForm({ ...customerForm, province: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-xs font-bold focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple outline-none transition"
+                        className="welcome-select welcome-select--sm"
                       >
                         {['بغداد', 'البصرة', 'نينوى', 'أربيل', 'النجف', 'كربلاء', 'بابل', 'الأنبار', 'كركوك', 'ديالى', 'واسط', 'ميسان', 'القادسية', 'المثنى', 'ذي قار', 'صلاح الدين', 'دهوك', 'السليمانية'].map(prov => (
                           <option key={prov} value={prov}>{prov}</option>
@@ -327,13 +345,13 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                     <div className="space-y-1.5">
                       <label className="text-[11px] font-extrabold text-slate-700 flex items-center gap-1.5">
                         <MapPin size={12} className="text-pink-500" />
-                        <span>العنوان والتفاصيل <span className="text-rose-500">*</span></span>
+                        <span>{t('merchant.reels.overlay.form.address')} <span className="text-rose-500">*</span></span>
                       </label>
                       <input
                         type="text"
                         value={customerForm.address}
                         onChange={(e) => setCustomerForm({ ...customerForm, address: e.target.value })}
-                        placeholder="المنطقة، قرب المعلم الشهير"
+                        placeholder={t('merchant.reels.overlay.form.addressPlaceholder')}
                         className="w-full bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-xs font-bold focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple outline-none transition"
                         required
                       />
@@ -350,12 +368,12 @@ export const ProductOverlay: React.FC<ProductOverlayProps> = ({
                   {loading ? (
                     <>
                       <Loader2 size={16} className="animate-spin text-white" />
-                      <span>جاري تأكيد وتسجيل طلبك...</span>
+                      <span>{t('merchant.reels.overlay.form.submitting')}</span>
                     </>
                   ) : (
                     <>
                       <CheckCircle size={16} />
-                      <span>تأكيد الشراء الفوري (دفع عند الاستلام) 📦</span>
+                      <span>{t('merchant.reels.overlay.form.submit')}</span>
                     </>
                   )}
                 </button>

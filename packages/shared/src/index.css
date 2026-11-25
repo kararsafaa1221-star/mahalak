@@ -1,10 +1,11 @@
 /* ==========================================
    Mahalak Brand Identity — Shared Global Styles
    Colors: deep-navy · vibrant-purple · violet
-   EN: Plus Jakarta Sans (Modern Sans-serif)
-   AR: Cairo (Elegant Modern Kufi)
+   EN: Plus Jakarta Sans
+   AR: Cairo
+   CKB (Sorani): Vazirmatn — أفضل تغطية لحروف الكردية (ە ۆ ێ ۊ …)
    ========================================== */
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&family=Noto+Sans+Arabic:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap');
 
 @import "tailwindcss";
 @config "../tailwind.config.js";
@@ -58,9 +59,11 @@
 
   /* ── Brand Typography ── */
   --font-sans:    'Plus Jakarta Sans', 'Cairo', 'IBM Plex Sans Arabic', -apple-system, sans-serif;
-  --font-arabic:  'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  --font-arabic:  var(--font-ui);
+  --font-kurdish: 'Vazirmatn', 'Noto Sans Arabic', 'Cairo', sans-serif;
   --font-english: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-tajawal: 'Cairo', sans-serif;
+  /* يتبع لغة الواجهة (Cairo للعربية / Vazirmatn للكردية) عبر --font-ui */
+  --font-tajawal: var(--font-ui);
   --font-outfit:  'Plus Jakarta Sans', sans-serif;
   --font-space:   'Plus Jakarta Sans', sans-serif;
 
@@ -73,9 +76,38 @@
     0 10px 10px -5px rgba(123, 61, 255, 0.3);
 }
 
+:root {
+  --font-ui: 'Cairo', 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+html.lang-ar,
+html[lang="ar"] {
+  --font-ui: 'Cairo', 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+html.lang-ckb,
+html[lang="ckb"],
+:lang(ckb) {
+  --font-ui: 'Vazirmatn', 'Noto Sans Arabic', 'Cairo', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
 .font-tajawal,
 .font-arabic {
-  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  font-family: var(--font-ui) !important;
+}
+
+.font-kurdish {
+  font-family: 'Vazirmatn', 'Noto Sans Arabic', 'Cairo', sans-serif !important;
+}
+
+/* تأكيد إضافي: أي font-tajawal داخل واجهة كردية يستخدم Vazirmatn */
+html.lang-ckb .font-tajawal,
+html.lang-ckb .font-arabic,
+html[lang="ckb"] .font-tajawal,
+html[lang="ckb"] .font-arabic,
+html.lang-ckb .font-sans,
+html[lang="ckb"] .font-sans {
+  font-family: 'Vazirmatn', 'Noto Sans Arabic', 'Cairo', 'Plus Jakarta Sans', sans-serif !important;
 }
 
 .font-english {
@@ -87,9 +119,19 @@
   font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Arabic only — do NOT bind to [dir=rtl] (Kurdish is also RTL) */
 :lang(ar),
-[dir="rtl"] {
+html.lang-ar,
+html[lang="ar"] {
   font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  font-variant-numeric: lining-nums proportional-nums;
+  font-feature-settings: "lnum" 1, "pnum" 1;
+}
+
+:lang(ckb),
+html.lang-ckb,
+html[lang="ckb"] {
+  font-family: 'Vazirmatn', 'Noto Sans Arabic', 'Cairo', sans-serif;
   font-variant-numeric: lining-nums proportional-nums;
   font-feature-settings: "lnum" 1, "pnum" 1;
 }
@@ -99,7 +141,7 @@
    ========================================== */
 
 body {
-  font-family: 'Cairo', 'Plus Jakarta Sans', 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui);
   background: linear-gradient(180deg, #0B1320 0%, #151d2b 100%);
   background-attachment: fixed;
   color: #E8ECF4;
@@ -210,6 +252,124 @@ body {
   border: 1px solid rgba(123, 61, 255, 0.15);
 }
 
+/* متجري + الصفحات الفرعية — زجاج مثل الرئيسية */
+.merchant-glass-page .merchant-brand-card {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  border-image: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    0 0 24px -8px rgba(123, 61, 255, 0.4),
+    0 8px 24px -12px rgba(11, 19, 32, 0.5),
+    inset 0 1px 0 rgba(177, 140, 255, 0.1) !important;
+  color: #e8ecf4;
+}
+
+.merchant-glass-page .merchant-panel-inset {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.merchant-glass-page .merchant-inner-card {
+  background-color: rgba(11, 19, 32, 0.92);
+  border-color: rgba(255, 255, 255, 0.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* نوافذ ولوحات التاجر — نفس زجاج الرئيسية */
+.merchant-glass-sheet {
+  background: rgba(11, 19, 32, 0.97) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    0 0 40px -8px rgba(123, 61, 255, 0.45),
+    0 20px 50px -20px rgba(11, 19, 32, 0.8),
+    inset 0 1px 0 rgba(177, 140, 255, 0.12) !important;
+  color: #e8ecf4;
+}
+
+.merchant-glass-sheet h1,
+.merchant-glass-sheet h2,
+.merchant-glass-sheet h3,
+.merchant-glass-sheet h4,
+.merchant-glass-sheet .text-slate-800,
+.merchant-glass-sheet .text-slate-850,
+.merchant-glass-sheet .text-slate-700,
+.merchant-glass-sheet .text-slate-900,
+.merchant-glass-sheet .text-deep-navy,
+.merchant-glass-sheet .text-violet {
+  color: #ffffff !important;
+}
+
+.merchant-glass-sheet .text-slate-600,
+.merchant-glass-sheet .text-slate-500,
+.merchant-glass-sheet .text-slate-400,
+.merchant-glass-sheet .text-slate-300 {
+  color: rgba(232, 236, 244, 0.75) !important;
+}
+
+.merchant-glass-sheet input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.merchant-glass-sheet select,
+.merchant-glass-sheet textarea {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  color: #fff !important;
+}
+
+.merchant-glass-sheet input::placeholder,
+.merchant-glass-sheet textarea::placeholder {
+  color: rgba(232, 236, 244, 0.45) !important;
+}
+
+.merchant-glass-sheet .bg-slate-50,
+.merchant-glass-sheet .bg-slate-100,
+.merchant-glass-sheet .bg-gray-50,
+.merchant-glass-sheet .bg-purple-50,
+.merchant-glass-sheet .bg-violet-50,
+.merchant-glass-sheet .bg-white:not(.keep-white) {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  color: #e8ecf4 !important;
+}
+
+.merchant-glass-sheet .border-slate-100,
+.merchant-glass-sheet .border-slate-200,
+.merchant-glass-sheet .divide-slate-50 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.merchant-glass-sheet .border-b,
+.merchant-glass-sheet .border-t {
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* سطح صفحات كاملة (تعريف / شروط) */
+.merchant-glass-screen {
+  min-height: 100vh;
+  background: linear-gradient(160deg, #0b1320 0%, #1a1430 45%, #0b1320 100%);
+  color: #e8ecf4;
+}
+
+/* إلغاء فرض الأصفر داخل صفحات الزجاج — الإبقاء على الأصفر فقط عند صفه صراحة */
+.merchant-glass-page.reports-page .merchant-brand-card {
+  color: #e8ecf4;
+}
+
+.merchant-glass-page.reports-page .merchant-brand-card :is(.text-white, .text-slate-300, .text-slate-400, .text-slate-850, .text-slate-405),
+.merchant-glass-page.reports-page .merchant-brand-card .text-\[\#E8ECF4\] {
+  color: #e8ecf4 !important;
+}
+
+.merchant-glass-page.reports-page .merchant-brand-card .text-brand-white,
+.merchant-glass-page.reports-page .merchant-brand-card.text-brand-white {
+  color: #ffffff !important;
+}
+
 .merchant-inner-card {
   background-color: #131C2E;
   border: 1px solid rgba(123, 61, 255, 0.12);
@@ -225,8 +385,8 @@ body {
 /* رأس الصفحة الزجاجي — يطابق تأثيرات WelcomeScreen */
 .customer-welcome-header {
   background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-bottom: 1px solid rgba(255, 255, 255, 0.15);
   color: #ffffff;
 }
@@ -234,15 +394,20 @@ body {
 /* شريط التنقل السفلي الزجاجي — يطابق تأثيرات WelcomeScreen */
 .customer-welcome-nav {
   background: rgba(11, 19, 32, 0.75);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-top: 1px solid rgba(123, 61, 255, 0.3);
   box-shadow: 0 -10px 40px -15px rgba(123, 61, 255, 0.35);
 }
 
 .merchant-dropdown {
-  background-color: #131C2E;
-  border: 1px solid rgba(123, 61, 255, 0.2);
+  background: rgba(11, 19, 32, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    0 0 24px -8px rgba(123, 61, 255, 0.35),
+    0 8px 24px -12px rgba(11, 19, 32, 0.45);
 }
 
 /* إعلانات ممولة — نسبة 16:9 مطابقة لضبط المقاس في لوحة الإدارة (800×450) */
@@ -299,7 +464,7 @@ body {
   background: rgba(8, 12, 24, 0.78);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(6px);
+  backdrop-filter: none;
   color: #ffffff;
   width: fit-content;
   max-width: 100%;
@@ -327,65 +492,21 @@ body {
 .sponsored-ad-slider__title {
   font-size: 0.75rem;
   margin-bottom: 0.1rem;
-  background: linear-gradient(
-    105deg,
-    #ffffff 0%,
-    #f3e8ff 20%,
-    #ffffff 38%,
-    #fcd34d 52%,
-    #ffffff 66%,
-    #c4b5fd 82%,
-    #ffffff 100%
-  );
-  background-size: 220% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  filter: drop-shadow(0 0 10px rgba(123, 61, 255, 0.5))
-    drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
-  animation:
-    sponsored-ad-title-rise 0.65s cubic-bezier(0.22, 1, 0.36, 1) both,
-    sponsored-ad-title-shine 4.5s ease-in-out infinite;
+  color: #ffffff;
 }
 
 .sponsored-ad-slider__desc {
   font-size: 0.5625rem;
-  background: linear-gradient(90deg, #ede9fe 0%, #ffffff 45%, #ddd6fe 100%);
-  background-size: 180% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  filter: drop-shadow(0 0 6px rgba(177, 140, 255, 0.4))
-    drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
-  animation:
-    sponsored-ad-desc-rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both,
-    sponsored-ad-desc-glow 3s ease-in-out infinite;
+  color: #ede9fe;
 }
 
 @keyframes sponsored-ad-title-rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-    filter: blur(3px) drop-shadow(0 0 0 rgba(123, 61, 255, 0));
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-    filter: blur(0) drop-shadow(0 0 10px rgba(123, 61, 255, 0.5))
-      drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
-  }
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes sponsored-ad-title-shine {
-  0%,
-  100% {
-    background-position: 100% 50%;
-  }
-  50% {
-    background-position: 0% 50%;
-  }
+  0%, 100% { opacity: 1; }
 }
 
 @keyframes sponsored-ad-desc-rise {
@@ -400,17 +521,7 @@ body {
 }
 
 @keyframes sponsored-ad-desc-glow {
-  0%,
-  100% {
-    background-position: 0% 50%;
-    filter: drop-shadow(0 0 6px rgba(177, 140, 255, 0.35))
-      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
-  }
-  50% {
-    background-position: 100% 50%;
-    filter: drop-shadow(0 0 10px rgba(177, 140, 255, 0.55))
-      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
-  }
+  0%, 100% { opacity: 1; }
 }
 
 .sponsored-ad-slider.group:hover .sponsored-ad-slider__title {
@@ -624,80 +735,35 @@ body {
   position: absolute;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.9);
-  animation: welcome-star-twinkle var(--twinkle-duration, 3s) ease-in-out infinite;
-  animation-delay: var(--twinkle-delay, 0s);
+  /* No continuous twinkle — hurts scroll/compositor performance */
+  animation: none;
+}
+
+.welcome-star--static {
+  animation: none;
 }
 
 .welcome-star--bright {
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.9), 0 0 16px rgba(177, 140, 255, 0.6);
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.55);
 }
 
 .welcome-particle {
-  position: absolute;
-  bottom: -5%;
-  border-radius: 9999px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(177, 140, 255, 0.7) 40%, rgba(123, 61, 255, 0.2) 100%);
-  box-shadow: 0 0 12px rgba(177, 140, 255, 0.8);
-  animation: welcome-particle-rise var(--rise-duration, 8s) linear infinite;
-  animation-delay: var(--rise-delay, 0s);
+  display: none;
 }
 
 .welcome-aurora {
-  position: absolute;
-  width: 160%;
-  height: 55%;
-  border-radius: 50%;
-  filter: blur(60px);
-  animation: welcome-aurora-shift 8s ease-in-out infinite;
-}
-
-.welcome-aurora--purple {
-  top: -20%;
-  left: -30%;
-  background: radial-gradient(ellipse, rgba(123, 61, 255, 0.55) 0%, transparent 70%);
-}
-
-.welcome-aurora--violet {
-  bottom: -25%;
-  right: -30%;
-  background: radial-gradient(ellipse, rgba(177, 140, 255, 0.45) 0%, transparent 70%);
-  animation-delay: -4s;
-  animation-duration: 10s;
+  display: none;
 }
 
 .welcome-light-beam {
-  position: absolute;
-  top: -10%;
-  width: 40%;
-  height: 120%;
-  background: linear-gradient(180deg, rgba(123, 61, 255, 0.25) 0%, transparent 75%);
-  filter: blur(40px);
-  transform-origin: top center;
-}
-
-.welcome-light-beam--left {
-  left: 5%;
-  transform: rotate(-12deg);
-}
-
-.welcome-light-beam--right {
-  right: 5%;
-  transform: rotate(12deg);
+  display: none;
 }
 
 .welcome-grid-overlay {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(123, 61, 255, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(123, 61, 255, 0.06) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: radial-gradient(ellipse 80% 70% at 50% 45%, black 20%, transparent 75%);
-  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 45%, black 20%, transparent 75%);
+  display: none;
 }
 
 .welcome-card-glow {
-  /* ظل ثابت — بدون نبض مستمر (يؤثر على التمرير عند كثرة البطاقات) */
   box-shadow:
     0 0 24px -8px rgba(123, 61, 255, 0.35),
     0 8px 24px -12px rgba(11, 19, 32, 0.45);
@@ -709,40 +775,100 @@ body {
 }
 
 .welcome-card-shimmer::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    105deg,
-    transparent 30%,
-    rgba(255, 255, 255, 0.08) 50%,
-    transparent 70%
-  );
-  /* تشغيل لمرة واحدة فقط بدل التكرار اللانهائي */
-  animation: welcome-shimmer-sweep 3.5s ease-in-out 1;
-  pointer-events: none;
+  content: none;
+  display: none;
 }
 
 .welcome-card-border-glow {
   position: relative;
 }
 
-/* الحدود المتحركة/المقنّعة مكلفة جداً على الموبايل — نعتمد على border العادي في className */
 .welcome-card-border-glow::before {
   content: none;
   display: none;
 }
 
 .welcome-icon-pulse {
-  /* نبض خفيف جداً لعنصر واحد فقط */
   box-shadow:
     0 0 18px rgba(123, 61, 255, 0.4),
     0 0 32px rgba(123, 61, 255, 0.18);
 }
 
 .welcome-btn-pulse {
-  /* ظل ثابت بدل أنيميشن box-shadow اللانهائي */
   box-shadow: 0 8px 28px 0 rgba(177, 140, 255, 0.28);
+}
+
+/* تنبيهات النماذج (تسجيل الدخول / التسجيل) — نفس لغة Welcome glass */
+.welcome-inline-alert {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 1rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.45;
+  color: #fecdd3;
+  background: linear-gradient(
+    135deg,
+    rgba(21, 29, 43, 0.88) 0%,
+    rgba(26, 37, 64, 0.82) 55%,
+    rgba(136, 19, 55, 0.28) 100%
+  );
+  border: 1px solid rgba(251, 113, 133, 0.4);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    0 0 20px -6px rgba(251, 113, 133, 0.35),
+    0 0 18px -8px rgba(123, 61, 255, 0.28),
+    0 10px 24px -14px rgba(11, 19, 32, 0.7),
+    inset 0 1px 0 rgba(177, 140, 255, 0.1);
+}
+
+.welcome-inline-alert svg {
+  flex-shrink: 0;
+  color: #fb7185;
+  filter: drop-shadow(0 0 6px rgba(251, 113, 133, 0.45));
+}
+
+/* رقائق التصنيفات / الفلاتر على خلفية Welcome */
+.welcome-category-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.welcome-category-chip:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.welcome-category-chip.is-active {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
+  background: linear-gradient(90deg, #7B3DFF 0%, #0B1320 100%);
+  box-shadow: 0 8px 22px 0 rgba(177, 140, 255, 0.28);
+}
+
+.welcome-category-chip--sm {
+  border-radius: 0.75rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.59375rem;
+  font-weight: 700;
+}
+
+.welcome-category-chip--md {
+  padding: 0.625rem 1rem;
+  font-size: 0.625rem;
+  font-weight: 900;
 }
 
 /* بطاقات القوائم — لا ترسم خارج الشاشة لتحسين التمرير */
@@ -779,10 +905,86 @@ body {
   -ms-overflow-style: none !important; /* لمتصفح إنترنت إكسبلورر وإيدج القديم */
 }
 
-/* تحسينات للأزرار والنقر */
+/* تحسينات للأزرار والنقر — استجابة فورية على WebView */
 button, a, [role="button"] {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.reduce-visual-effects button,
+.reduce-visual-effects a,
+.reduce-visual-effects [role="button"],
+.reduce-visual-effects .btn-premium,
+.reduce-visual-effects .btn-primary,
+.reduce-visual-effects .card-interactive {
+  transition-duration: 0.12s !important;
+  transition-property: transform, opacity, background-color, border-color, color, box-shadow !important;
+}
+
+/* Touch targets — readable on entry-level Android + iOS */
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.touch-target-sm {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+.safe-area-top {
+  padding-top: max(0.25rem, env(safe-area-inset-top, 0px));
+}
+
+.safe-area-bottom {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+/* Fluid type that respects OS text scaling without breaking layouts */
+.text-fluid-xs {
+  font-size: clamp(0.625rem, 0.55rem + 0.3vw, 0.75rem);
+  line-height: 1.35;
+}
+
+.text-fluid-sm {
+  font-size: clamp(0.75rem, 0.68rem + 0.35vw, 0.875rem);
+  line-height: 1.4;
+}
+
+.text-fluid-base {
+  font-size: clamp(0.875rem, 0.8rem + 0.4vw, 1rem);
+  line-height: 1.45;
+}
+
+/* Prefer content-visibility for long scroll lists */
+.perf-scroll-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 120px;
+}
+
+/* Platform adaptive: slightly larger hit areas on iOS */
+html.platform-ios .touch-target {
+  min-width: 48px;
+  min-height: 48px;
+}
+
+html.platform-android .touch-target {
+  min-width: 48px;
+  min-height: 48px;
+}
+
+@media (max-width: 380px) {
+  .hide-xs {
+    display: none !important;
+  }
+
+  .text-clamp-1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
 }
 
 /* ==========================================
@@ -797,8 +999,8 @@ button, a, [role="button"] {
 
 .swal2-container.swal2-mahalak-modal {
   z-index: 11000 !important;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   background: rgba(11, 19, 32, 0.72) !important;
 }
 
@@ -821,8 +1023,8 @@ button, a, [role="button"] {
   max-width: min(92vw, 24rem) !important;
   width: auto !important;
   color: #E8ECF4 !important;
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   overflow: hidden;
 }
 
@@ -855,7 +1057,7 @@ button, a, [role="button"] {
 }
 
 .swal2-mahalak-toast-title {
-  font-family: 'Cairo', 'Plus Jakarta Sans', sans-serif !important;
+  font-family: var(--font-ui) !important;
   font-size: 0.9rem !important;
   font-weight: 700 !important;
   color: #E8ECF4 !important;
@@ -866,7 +1068,7 @@ button, a, [role="button"] {
 }
 
 .swal2-mahalak-toast-text {
-  font-family: 'Cairo', 'Plus Jakarta Sans', sans-serif !important;
+  font-family: var(--font-ui) !important;
   font-size: 0.75rem !important;
   font-weight: 500 !important;
   color: rgba(232, 236, 244, 0.72) !important;
@@ -936,21 +1138,24 @@ button, a, [role="button"] {
   animation: mahalak-toast-out 0.22s ease-in both !important;
 }
 
-/* Modal / confirm — branded dark glass */
+/* Modal / confirm — نفس زجاج الرئيسية (merchant-glass-sheet) */
 .swal2-popup.swal2-mahalak-modal-popup {
-  background: linear-gradient(160deg, #151d2b 0%, #131C2E 55%, #1A2540 100%) !important;
-  border: 1px solid rgba(123, 61, 255, 0.35) !important;
+  background: rgba(11, 19, 32, 0.92) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
   border-radius: 1.5rem !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   box-shadow:
-    0 0 32px -8px rgba(123, 61, 255, 0.45),
-    0 20px 40px -18px rgba(11, 19, 32, 0.85) !important;
+    0 0 40px -8px rgba(123, 61, 255, 0.45),
+    0 20px 50px -20px rgba(11, 19, 32, 0.8),
+    inset 0 1px 0 rgba(177, 140, 255, 0.12) !important;
   padding: 1.5rem 1.25rem 1.25rem !important;
   color: #E8ECF4 !important;
   width: min(92vw, 26rem) !important;
 }
 
 .swal2-mahalak-modal-title {
-  font-family: 'Cairo', 'Plus Jakarta Sans', sans-serif !important;
+  font-family: var(--font-ui) !important;
   font-size: 1.2rem !important;
   font-weight: 800 !important;
   color: #E8ECF4 !important;
@@ -958,7 +1163,7 @@ button, a, [role="button"] {
 }
 
 .swal2-mahalak-modal-text {
-  font-family: 'Cairo', 'Plus Jakarta Sans', sans-serif !important;
+  font-family: var(--font-ui) !important;
   font-size: 0.875rem !important;
   color: rgba(232, 236, 244, 0.7) !important;
   margin-top: 0.5rem !important;
@@ -978,7 +1183,7 @@ button, a, [role="button"] {
   border: none !important;
   border-radius: 1rem !important;
   padding: 0.75rem 1.75rem !important;
-  font-family: 'Cairo', 'Plus Jakarta Sans', sans-serif !important;
+  font-family: var(--font-ui) !important;
   font-size: 0.9rem !important;
   font-weight: 700 !important;
   cursor: pointer !important;
@@ -1068,7 +1273,7 @@ input[type="number"] {
 .btn-primary {
   background: linear-gradient(135deg, #7B3DFF 0%, #B18CFF 100%);
   color: white !important;
-  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease, filter 0.15s ease;
   box-shadow: var(--shadow-brand-glow);
 }
 
@@ -1103,16 +1308,6 @@ input[type="number"] {
   color: #E8ECF4;
 }
 
-select.input-brand {
-  background: linear-gradient(90deg, rgba(123, 61, 255, 1) 0%, rgba(11, 19, 32, 1) 100%);
-  border-color: rgba(255, 245, 245, 1);
-  color: #ffffff;
-}
-
-select.input-brand:focus {
-  border-color: rgba(255, 255, 255, 1);
-}
-
 .input-brand:focus {
   border-color: #7B3DFF;
   outline: none;
@@ -1130,6 +1325,108 @@ select.input-brand:focus {
   color: #ffffff;
 }
 
+/* Welcome-style selects — glass + glow matching home screen */
+.welcome-select-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.welcome-select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 1rem;
+  color: #ffffff !important;
+  font-weight: 700;
+  text-align: right;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  box-shadow:
+    0 0 20px -8px rgba(123, 61, 255, 0.32),
+    0 6px 20px -12px rgba(11, 19, 32, 0.4);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.welcome-select--with-chevron {
+  padding-left: 2.5rem !important;
+}
+
+.welcome-select--sm {
+  padding: 0.625rem 1rem;
+  font-size: 0.75rem;
+}
+
+.welcome-select--md {
+  padding: 0.875rem 1rem;
+  font-size: 0.6875rem;
+}
+
+.welcome-select--lg {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+}
+
+.welcome-select:hover:not(:disabled) {
+  border-color: rgba(123, 61, 255, 0.45);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.welcome-select:focus {
+  border-color: rgba(123, 61, 255, 0.65);
+  box-shadow:
+    0 0 0 3px rgba(123, 61, 255, 0.22),
+    0 0 24px -6px rgba(123, 61, 255, 0.42);
+}
+
+.welcome-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.welcome-select-chevron {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+
+.welcome-select option {
+  background-color: #0B1320;
+  color: #E8ECF4;
+}
+
+.welcome-select option:checked {
+  background: linear-gradient(90deg, #7B3DFF 0%, #0B1320 100%);
+  color: #ffffff;
+}
+
+select.input-brand {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #ffffff !important;
+  font-weight: 700;
+  box-shadow:
+    0 0 20px -8px rgba(123, 61, 255, 0.32),
+    0 6px 20px -12px rgba(11, 19, 32, 0.4);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+select.input-brand:focus {
+  border-color: rgba(123, 61, 255, 0.65);
+  box-shadow:
+    0 0 0 3px rgba(123, 61, 255, 0.22),
+    0 0 24px -6px rgba(123, 61, 255, 0.42);
+}
+
 /* Surface card on deep-navy app shell */
 .surface-card {
   background-color: #ffffff;
@@ -1145,7 +1442,7 @@ select.input-brand:focus {
 
 /* تأثير التكبير الطفيف للمرور واللمس على الكروت والبطاقات */
 .card-interactive {
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease;
 }
 
 .card-interactive:hover {
@@ -1181,24 +1478,24 @@ select.input-brand:focus {
 .card-dark {
   background-color: #131C2E;
   border: 1px solid rgba(123, 61, 255, 0.08);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Slightly elevated secondary surface */
 .card-dark-elevated {
   background-color: #1A2540;
   border: 1px solid rgba(177, 140, 255, 0.10);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Glass-morphism variant */
 .card-glass {
   background-color: rgba(19, 28, 46, 0.60);
   border: 1px solid rgba(123, 61, 255, 0.12);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* ==========================================
@@ -1309,4 +1606,207 @@ select.input-brand:focus {
 
 .mahalak-gps-button.is-loading svg {
   animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* Customer stores map — full viewport under fixed header + bottom nav */
+.stores-map-fullscreen {
+  height: calc(100dvh - 4rem - 5.25rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  min-height: calc(100dvh - 4rem - 5.25rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  width: 100%;
+}
+
+.stores-map-shell .leaflet-container {
+  background: #0b1320;
+  font-family: inherit;
+  height: 100%;
+  width: 100%;
+}
+
+.stores-map-marker {
+  background: transparent;
+  border: 0;
+}
+
+.stores-map-marker__pin {
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #7b3dff, #1a0a20);
+  border: 2px solid #ffffff;
+  box-shadow: 0 6px 16px rgba(11, 19, 32, 0.45);
+}
+
+.stores-map-gps {
+  position: absolute;
+  z-index: 500;
+  left: 12px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(11, 19, 32, 0.92);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.stores-map-popup .leaflet-popup-content-wrapper {
+  padding: 0;
+  border-radius: 1rem;
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(11, 19, 32, 0.35);
+}
+
+.stores-map-popup .leaflet-popup-content {
+  margin: 0;
+  min-width: 200px;
+}
+
+.stores-map-popup .leaflet-popup-tip {
+  background: #fff;
+}
+
+.stores-map-popup__card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: #fff;
+  border: 0;
+  text-align: right;
+  cursor: pointer;
+}
+
+.stores-map-popup__logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.stores-map-popup__meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stores-map-popup__cta {
+  font-size: 10px;
+  font-weight: 900;
+  color: #7b3dff;
+}
+
+.stores-map-popup__category {
+  font-size: 10px;
+  font-weight: 800;
+  color: #64748b;
+}
+
+.stores-map-popup__card--static {
+  cursor: default;
+}
+
+.stores-map-user-marker {
+  background: transparent;
+  border: 0;
+}
+
+.stores-map-user-marker__wrap {
+  position: relative;
+  width: 28px;
+  height: 28px;
+}
+
+.stores-map-user-marker__pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.35);
+  animation: stores-map-user-pulse 1.8s ease-out infinite;
+}
+
+.stores-map-user-marker__dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 9999px;
+  background: #2563eb;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.55);
+}
+
+@keyframes stores-map-user-pulse {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.85;
+  }
+  70% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+
+/*
+ * Android WebView / Chrome: animated filter:blur + backdrop-filter + continuous
+ * transform layers cause compositor flicker (text/logo flash as solid rectangles).
+ */
+.reduce-visual-effects .welcome-star,
+.reduce-visual-effects .welcome-particle,
+.reduce-visual-effects .welcome-aurora,
+.reduce-visual-effects .welcome-light-beam {
+  animation: none !important;
+}
+
+.reduce-visual-effects .welcome-card-shimmer::after {
+  animation: none !important;
+  display: none !important;
+}
+
+.reduce-visual-effects .backdrop-blur-sm,
+.reduce-visual-effects .backdrop-blur,
+.reduce-visual-effects .backdrop-blur-md,
+.reduce-visual-effects .backdrop-blur-lg,
+.reduce-visual-effects .backdrop-blur-xl,
+.reduce-visual-effects .backdrop-blur-2xl,
+.reduce-visual-effects .backdrop-blur-3xl,
+.reduce-visual-effects .merchant-glass-sheet,
+.reduce-visual-effects .card-glass,
+.reduce-visual-effects .card-dark-elevated {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.reduce-visual-effects .merchant-glass-sheet {
+  background: rgba(11, 19, 32, 0.97) !important;
+}
+
+.reduce-visual-effects .blur-\[100px\],
+.reduce-visual-effects .blur-\[110px\],
+.reduce-visual-effects .blur-\[90px\],
+.reduce-visual-effects .blur-\[130px\],
+.reduce-visual-effects .blur-3xl,
+.reduce-visual-effects .blur-2xl,
+.reduce-visual-effects .blur-xl {
+  filter: none !important;
 }

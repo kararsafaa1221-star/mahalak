@@ -7,6 +7,23 @@ export function getPublishedSponsoredAds(ads?: SponsoredAdItem[] | null): Sponso
   return (ads || []).filter((ad) => Boolean(ad?.url?.trim()));
 }
 
+/** Soft boost: ads that point at verified stores appear earlier in the slider. */
+export function prioritizeAdsTargetingVerifiedStores(
+  ads: SponsoredAdItem[],
+  isVerifiedStoreId: (storeId: string | undefined | null) => boolean,
+): SponsoredAdItem[] {
+  if (!ads.length) return ads;
+  return [...ads].sort((a, b) => {
+    const storeIdA =
+      a.targetType === 'store' ? a.targetId : a.storeId || a.targetStoreId || undefined;
+    const storeIdB =
+      b.targetType === 'store' ? b.targetId : b.storeId || b.targetStoreId || undefined;
+    const scoreA = isVerifiedStoreId(storeIdA) ? 0 : 1;
+    const scoreB = isVerifiedStoreId(storeIdB) ? 0 : 1;
+    return scoreA - scoreB;
+  });
+}
+
 export function isSponsoredAdClickable(ad: SponsoredAdItem): boolean {
   const targetType = ad.targetType || 'none';
 

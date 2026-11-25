@@ -63,6 +63,12 @@ service firebase.storage {
       allow delete: if isDashboardStaff();
     }
 
+    match /spinWheel/{fileName} {
+      allow read: if true;
+      allow write: if isDashboardStaff() && isValidImageUpload();
+      allow delete: if isDashboardStaff();
+    }
+
     match /{allPaths=**} {
       allow read: if true;
       allow write: if false;

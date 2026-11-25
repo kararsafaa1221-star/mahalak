@@ -1,7 +1,13 @@
 import { removeBackground, preload, type Config } from '@imgly/background-removal';
+import { Capacitor } from '@capacitor/core';
+import { isAndroidClient } from './platformVisuals';
 
-/** Balance between edge quality and single-thread WASM speed. */
-export const BG_REMOVAL_MAX_SIZE = 896;
+/** Slightly below 896 for faster WASM inference without hurting product quality. */
+export const BG_REMOVAL_MAX_SIZE = 640;
+
+const IMGLY_BG_DATA_VERSION = '1.7.0';
+/** Absolute CDN — required for Capacitor (`base: './'`) where relative asset paths break. */
+const IMGLY_CDN_PUBLIC_PATH = `https://staticimgly.com/@imgly/background-removal-data/${IMGLY_BG_DATA_VERSION}/dist/`;
 
 export interface FocusTransform {
   panX: number;
@@ -11,12 +17,46 @@ export interface FocusTransform {
 }
 
 let preloadPromise: Promise<void> | null = null;
+const progressListeners = new Set<(key: string, pct: number) => void>();
 
-/** WASM CPU only — WebGPU causes corrupted output on many Windows/GPU setups. */
+/** WASM CPU only — WebGPU hangs / corrupts on many Windows/Android setups. */
 const BG_REMOVAL_DEVICE: Config['device'] = 'cpu';
 
-/** fp16: best speed/quality trade-off on CPU WASM (isnet full model is very slow single-threaded). */
-const BG_REMOVAL_MODEL: Config['model'] = 'isnet_fp16';
+function useMobileBgRemovalProfile(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Capacitor.isNativePlatform() || isAndroidClient();
+}
+
+/** Smaller input on phones — less RAM pressure in WebView + faster inference. */
+export function getBgRemovalMaxSize(): number {
+  return useMobileBgRemovalProfile() ? 512 : BG_REMOVAL_MAX_SIZE;
+}
+
+function getDefaultModel(): Config['model'] {
+  return useMobileBgRemovalProfile() ? 'isnet_quint8' : 'isnet_fp16';
+}
+
+function getModelFallbackChain(): Config['model'][] {
+  return useMobileBgRemovalProfile()
+    ? ['isnet_quint8', 'isnet_fp16', 'isnet']
+    : ['isnet_fp16', 'isnet'];
+}
+
+async function preloadModelAssets(
+  model: Config['model'],
+  onProgress?: (key: string, pct: number) => void,
+): Promise<void> {
+  resetBgRemovalPreload();
+  preloadPromise = preload(
+    getBgRemovalConfig((key, current, total) => {
+      mapProgress(key, current, total, 0, 40, onProgress);
+    }, { model }),
+  ).catch((err) => {
+    preloadPromise = null;
+    throw err;
+  });
+  await preloadPromise;
+}
 
 function loadImageFromUrl(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -27,19 +67,30 @@ function loadImageFromUrl(url: string): Promise<HTMLImageElement> {
   });
 }
 
+function emitProgress(key: string, pct: number): void {
+  progressListeners.forEach((listener) => {
+    try {
+      listener(key, pct);
+    } catch {
+      // ignore listener errors
+    }
+  });
+}
+
 export function getBgRemovalConfig(
   onProgress?: (key: string, current: number, total: number) => void,
   overrides?: Partial<Pick<Config, 'device' | 'model'>>,
 ): Config {
   return {
+    publicPath: IMGLY_CDN_PUBLIC_PATH,
     device: overrides?.device ?? BG_REMOVAL_DEVICE,
-    model: overrides?.model ?? BG_REMOVAL_MODEL,
-    proxyToWorker: false,
+    model: overrides?.model ?? getDefaultModel(),
+    proxyToWorker: useMobileBgRemovalProfile(),
+    debug: typeof import.meta !== 'undefined' && import.meta.env?.DEV === true,
     rescale: true,
     output: {
       format: 'image/png',
       quality: 1,
-      type: 'foreground',
     },
     progress: onProgress,
   };
@@ -77,7 +128,7 @@ async function validateOutputBlob(blob: Blob): Promise<boolean> {
     }
 
     if (opaqueCount < pixelCount * 0.03) return false;
-    if (blueDominant > pixelCount * 0.6) return false;
+    if (blueDominant > pixelCount * 0.85) return false;
 
     return true;
   } catch {
@@ -88,31 +139,36 @@ async function validateOutputBlob(blob: Blob): Promise<boolean> {
 }
 
 function mapProgress(
-  onProgress: ((key: string, pct: number) => void) | undefined,
   key: string,
   current: number,
   total: number,
   rangeStart: number,
   rangeEnd: number,
+  extra?: (key: string, pct: number) => void,
 ): void {
-  if (!onProgress || total <= 0) return;
+  if (total <= 0) return;
   const pct = rangeStart + Math.round((current / total) * (rangeEnd - rangeStart));
-  onProgress(key, pct);
+  emitProgress(key, pct);
+  extra?.(key, pct);
 }
 
-/** Warm up WASM + model cache so the first removal feels instant. */
+/** Warm up WASM + model cache (does not block processing if still loading). */
 export function preloadBgRemovalModel(
   onProgress?: (key: string, pct: number) => void,
 ): Promise<void> {
+  if (onProgress) progressListeners.add(onProgress);
+
   if (!preloadPromise) {
     preloadPromise = preload(
       getBgRemovalConfig((key, current, total) => {
-        mapProgress(onProgress, key, current, total, 0, 40);
+        mapProgress(key, current, total, 0, 40);
       }),
-    ).catch(() => {
+    ).catch((err) => {
       preloadPromise = null;
+      throw err;
     });
   }
+
   return preloadPromise;
 }
 
@@ -131,7 +187,7 @@ function blobToPng(canvas: HTMLCanvasElement): Promise<Blob> {
 
 export function resizeImageBlob(
   blob: Blob,
-  maxSize = BG_REMOVAL_MAX_SIZE,
+  maxSize = getBgRemovalMaxSize(),
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -174,7 +230,7 @@ export function resizeImageBlob(
 export function extractFocusedRegion(
   imageSrc: string,
   transform: FocusTransform,
-  outputSize = BG_REMOVAL_MAX_SIZE,
+  outputSize = getBgRemovalMaxSize(),
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -214,26 +270,12 @@ export function extractFocusedRegion(
   });
 }
 
-async function runRemoval(
-  input: Blob,
-  onProgress: ((key: string, pct: number) => void) | undefined,
-  model: Config['model'],
-  rangeStart: number,
-  rangeEnd: number,
-): Promise<Blob> {
-  return removeBackground(
-    input,
-    getBgRemovalConfig((key, current, total) => {
-      mapProgress(onProgress, key, current, total, rangeStart, rangeEnd);
-    }, { device: BG_REMOVAL_DEVICE, model }),
-  );
-}
-
 const PROGRESS_LABELS: Record<string, string> = {
   'fetch:model': 'تحميل نموذج الذكاء الاصطناعي',
   'fetch:wasm': 'تحميل محرك المعالجة',
   'compute:inference': 'تحليل الصورة وتفريغ الخلفية',
-  'prepare': 'تحضير الصورة',
+  prepare: 'تحضير الصورة',
+  done: 'اكتمل',
 };
 
 export function getProgressLabel(key: string): string {
@@ -243,35 +285,66 @@ export function getProgressLabel(key: string): string {
   return 'جاري العمل...';
 }
 
+/**
+ * Remove background with live download/inference progress.
+ *
+ * IMPORTANT: never call preload() and removeBackground() at the same time —
+ * both fetch the same large model/wasm files and race on the library's
+ * internal IndexedDB cache, which can deadlock the tab indefinitely.
+ * If a preload is already in flight (started when the modal opened), we
+ * simply wait for it to finish, then removeBackground() reuses the cache
+ * and starts inference immediately.
+ */
 export async function removeBackgroundOptimized(
   input: Blob,
   onProgress?: (key: string, pct: number) => void,
+  options?: { skipResize?: boolean },
 ): Promise<Blob> {
-  onProgress?.('prepare', 1);
+  if (onProgress) progressListeners.add(onProgress);
 
-  await preloadBgRemovalModel(onProgress);
+  try {
+    onProgress?.('prepare', 3);
 
-  onProgress?.('prepare', 42);
-  const resized = await resizeImageBlob(input, BG_REMOVAL_MAX_SIZE);
-  onProgress?.('prepare', 45);
+    const maxSize = getBgRemovalMaxSize();
+    const resized = options?.skipResize
+      ? input
+      : await resizeImageBlob(input, maxSize);
 
-  const models: Config['model'][] = ['isnet_fp16', 'isnet'];
-  let lastError: unknown;
+    onProgress?.('prepare', 8);
 
-  for (let i = 0; i < models.length; i++) {
-    const model = models[i];
-    const rangeStart = 45 + i * 25;
-    const rangeEnd = rangeStart + 50;
-    try {
-      const output = await runRemoval(resized, onProgress, model, rangeStart, rangeEnd);
-      if (await validateOutputBlob(output)) {
-        onProgress?.('done', 100);
-        return output;
+    const models = getModelFallbackChain();
+    let lastError: unknown = new Error('Background removal failed');
+
+    for (let attempt = 0; attempt < models.length; attempt++) {
+      const model = models[attempt];
+      try {
+        if (attempt === 0 && preloadPromise) {
+          await preloadPromise;
+        } else {
+          await preloadModelAssets(model, onProgress);
+        }
+
+        const output = await removeBackground(
+          resized,
+          getBgRemovalConfig((key, current, total) => {
+            mapProgress(key, current, total, 8, 98, onProgress);
+          }, { model }),
+        );
+
+        if (await validateOutputBlob(output)) {
+          onProgress?.('done', 100);
+          return output;
+        }
+
+        lastError = new Error('Background removal produced a corrupt or empty image');
+      } catch (err) {
+        lastError = err;
+        resetBgRemovalPreload();
       }
-    } catch (err) {
-      lastError = err;
     }
-  }
 
-  throw lastError ?? new Error('Background removal produced a corrupt or empty image');
+    throw lastError;
+  } finally {
+    if (onProgress) progressListeners.delete(onProgress);
+  }
 }

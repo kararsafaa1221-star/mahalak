@@ -19,7 +19,7 @@ export const DASHBOARD_ADMIN_ROLES = [
 
 export type DashboardAdminRole = (typeof DASHBOARD_ADMIN_ROLES)[number];
 
-export type AdminVerifyReason = 'missing_doc' | 'suspended' | 'invalid_role';
+export type AdminVerifyReason = 'missing_doc' | 'suspended' | 'invalid_role' | 'time_restricted';
 
 export interface AdminVerifyResult {
   authorized: boolean;
@@ -37,7 +37,10 @@ export function isOwnerRole(role: string | null | undefined): boolean {
 
 export function mapAdminDoc(uid: string, data: Record<string, unknown>): Admin | null {
   const role = data.role;
-  if (!isDashboardAdminRole(role)) return null;
+  // Accepts the 5 built-in roles as well as any custom role id defined in
+  // settings/global.customRoles — actual page-access validity for those is
+  // checked afterwards in verifyDashboardAdmin via resolvePermissions().
+  if (typeof role !== 'string' || !role.trim()) return null;
 
   const isSuspended = data.status === 'suspended' || data.isSuspended === true;
 
@@ -64,11 +67,44 @@ export function mapAdminDoc(uid: string, data: Record<string, unknown>): Admin |
     isSuspended: adminDoc.isSuspended,
     lastLogin: typeof data.lastLogin === 'string' ? data.lastLogin : undefined,
     createdAt: typeof data.createdAt === 'string' ? data.createdAt : undefined,
+    photoUrl: typeof data.photoUrl === 'string' ? data.photoUrl : undefined,
+    isOnline: data.isOnline === true,
+    lastActiveAt:
+      typeof data.lastActiveAt === 'string'
+        ? data.lastActiveAt
+        : (data.lastActiveAt as { toDate?: () => Date })?.toDate?.()?.toISOString?.(),
+    workStartTime: typeof data.workStartTime === 'string' ? data.workStartTime : undefined,
+    workEndTime: typeof data.workEndTime === 'string' ? data.workEndTime : undefined,
+    isTimeRestricted: data.isTimeRestricted === true,
   };
 }
 
-function isAdminLoginBlocked(admin: Admin): boolean {
-  return admin.role !== 'owner' && (admin.status === 'suspended' || admin.isSuspended === true);
+/**
+ * Minutes-since-midnight comparison of "HH:mm" strings against the current
+ * clock, supporting overnight windows (e.g. 22:00 → 06:00). Never applies to
+ * the owner — this must be checked by the caller as well, but is repeated
+ * here so this helper is safe to call standalone.
+ */
+export function isOutsideWorkHours(admin: Pick<Admin, 'role' | 'isTimeRestricted' | 'workStartTime' | 'workEndTime'>, now: Date = new Date()): boolean {
+  if (admin.role === 'owner') return false;
+  if (!admin.isTimeRestricted) return false;
+  if (!admin.workStartTime || !admin.workEndTime) return false;
+
+  const toMinutes = (value: string) => {
+    const [h, m] = value.split(':').map((n) => parseInt(n, 10));
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 60 + m;
+  };
+  const start = toMinutes(admin.workStartTime);
+  const end = toMinutes(admin.workEndTime);
+  if (start === null || end === null || start === end) return false;
+
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  if (start < end) {
+    return !(nowMinutes >= start && nowMinutes < end);
+  }
+  // Overnight window wrapping midnight.
+  return !(nowMinutes >= start || nowMinutes < end);
 }
 
 function normalizeRawPermissions(raw: unknown): string[] {
@@ -96,8 +132,12 @@ export async function verifyDashboardAdmin(uid: string): Promise<AdminVerifyResu
     return { authorized: false, reason: 'invalid_role' };
   }
 
-  if (isAdminLoginBlocked(admin)) {
-    return { authorized: false, reason: 'suspended' };
+  if (admin.status === 'suspended' || admin.isSuspended === true) {
+    if (admin.role !== 'owner') {
+      return { authorized: false, reason: 'suspended' };
+    }
+  } else if (isOutsideWorkHours(admin)) {
+    return { authorized: false, reason: 'time_restricted' };
   }
 
   // Owner always authorized regardless of permissions[] content
@@ -116,6 +156,9 @@ export async function verifyDashboardAdmin(uid: string): Promise<AdminVerifyResu
 export function getAdminAuthErrorMessage(reason?: AdminVerifyReason): string {
   if (reason === 'suspended') {
     return 'تم إيقاف حسابك. تواصل مع المالك لإعادة التفعيل.';
+  }
+  if (reason === 'time_restricted') {
+    return 'الدخول مسموح فقط خلال ساعات العمل المحددة لحسابك. حاول مرة أخرى ضمن هذا النطاق الزمني.';
   }
   return 'ليس لديك صلاحيات للوصول إلى لوحة الإدارة. تواصل مع الدعم الفني إذا كنت مسؤولاً معتمداً.';
 }

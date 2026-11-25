@@ -1,7 +1,9 @@
 /* eslint-disable react-hooks/purity */
-import React, { createContext, useState, useEffect, ReactNode, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, ReactNode, useCallback, useMemo, useRef, startTransition } from 'react';
 import { motion } from 'motion/react';
 import { StorageService } from '@shared/services/storageService';
+import { AuthSessionContext } from './AuthSessionContext';
+import { AppContextStore } from './AppContextStore';
 import { isStoreSubscriptionActive } from '@shared/utils/store';
 import { sanitizeStoreThemeForFirestore } from '@shared/utils/storeTheme';
 import { prefetchImageUrls } from '@shared/utils/prefetchImages';
@@ -29,7 +31,7 @@ import {
   signInAnonymously,
   signOut,
 } from 'firebase/auth';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '../lib/callMahalakFunction';
 import {
   handleFirestoreError,
   OperationType,
@@ -54,9 +56,17 @@ import { logoutOneSignalSession, resetPushNotificationSetup } from '@shared/lib/
 import {
   normalizePromoCode,
   PROMO_CODE_DEFAULTS,
+  formatPromoDiscount,
 } from '@shared/utils/promoCode';
 import { getCallableErrorMessage } from '@shared/utils/firebaseErrors';
-import { resolveLoyaltySettings, getTierPeriodStart, getEffectiveCustomerTierState, storeReviewRewardNotificationMessage } from '@shared/constants/loyaltySettings';
+import { tKey } from '@shared/i18n/tKey';
+import { resolveLoyaltySettings, getTierPeriodStart, getEffectiveCustomerTierState } from '@shared/constants/loyaltySettings';
+import {
+  buildNotificationContent,
+  buildBilingualNotificationContent,
+  resolveOrderStatusText,
+  notificationDeliveryFields,
+} from '@shared/constants/notificationTemplates';
 
 // ==========================================
 // Interfaces
@@ -77,6 +87,77 @@ import {
   PayoutRequest
 } from '@shared/types';
 import { IRAQ_PROVINCES, SUBSCRIPTION_PLANS } from '@shared/constants';
+
+/** Skip setState when snapshot lists are unchanged — avoids full-app re-renders on every Firestore tick. */
+function listsEqualByFingerprint<T extends { id: string }>(
+  prev: T[],
+  next: T[],
+  fingerprint: (item: T) => string,
+): boolean {
+  if (prev === next) return true;
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < next.length; i++) {
+    if (prev[i]?.id !== next[i]?.id) return false;
+    if (fingerprint(prev[i]) !== fingerprint(next[i])) return false;
+  }
+  return true;
+}
+
+function storeListFingerprint(s: Store): string {
+  return [
+    s.shopName,
+    s.logo,
+    s.status,
+    s.subscriptionExpiry,
+    s.rating,
+    s.isVerified,
+    s.deliveryPrice,
+    s.isFreeDelivery,
+    s.province,
+    s.username,
+    (s.badges || []).join(','),
+  ].join('|');
+}
+
+function productListFingerprint(p: Product): string {
+  return [
+    p.name,
+    p.storeId,
+    p.status,
+    p.price,
+    p.finalPrice,
+    p.image,
+    p.inventory,
+    p.category,
+  ].join('|');
+}
+
+function orderListFingerprint(o: Order): string {
+  return [
+    o.status,
+    o.total,
+    o.merchantNotified,
+    o.merchantInboxCleared,
+    o.rejectionReason,
+    o.returnReason,
+    String(o.createdAt ?? ''),
+    String((o as { updatedAt?: unknown }).updatedAt ?? ''),
+  ].join('|');
+}
+
+function notificationListFingerprint(n: AppNotification): string {
+  return [n.read, n.title, n.message, n.type, String(n.createdAt ?? '')].join('|');
+}
+
+function applyListIfChanged<T extends { id: string }>(
+  setter: React.Dispatch<React.SetStateAction<T[]>>,
+  next: T[],
+  fingerprint: (item: T) => string,
+) {
+  startTransition(() => {
+    setter((prev) => (listsEqualByFingerprint(prev, next, fingerprint) ? prev : next));
+  });
+}
 import { resolveAllSubscriptionPlans } from '@shared/constants/merchantRenewalPlans';
 import { validateUserStatus } from '@shared/utils/userValidation';
 import { normalizeIraqiPhone } from '@shared/utils/phone';
@@ -127,8 +208,28 @@ export interface AppContextType {
   toggleFollowStore: (cid: string, sid: string) => void;
   toggleStoreNotification: (cid: string, sid: string) => void;
   placeOrder: (order: any, promoId?: string) => Promise<string>;
+  /** Skip cancel grace window and notify the merchant immediately. */
+  releaseOrderToMerchant: (orderId: string) => Promise<{ success: boolean; alreadyReleased?: boolean; message?: string }>;
   convertPointsToPromo: (cid: string, points: number) => Promise<{ success: boolean; code?: string; message: string }>;
-  addCustomerPoints: (cid: string, pts: number, reason?: 'share' | 'review' | 'promo') => void;
+  spinLuckyWheel: (cid: string) => Promise<{
+    success: boolean;
+    optionId?: string;
+    optionLabel?: string;
+    prizeType?: string;
+    pointsAwarded?: number;
+    costPoints?: number;
+    promoCode?: string | null;
+    externalDetails?: string | null;
+    pointsBalance?: number;
+    spinsUsedToday?: number;
+    dailyLimit?: number;
+    resetPeriodHours?: number;
+    periodStartedAt?: number;
+    periodEndsAt?: number;
+    spinsRemaining?: number | null;
+    message?: string;
+  }>;
+  addCustomerPoints: (cid: string, pts: number, reason?: 'share' | 'review' | 'promo') => Promise<number>;
   submitStoreReview: (review: any) => Promise<void>;
   submitProductReview: (review: any) => Promise<void>;
   resetCustomerPasswordSecure: (phone: string, otpCode: string, newPassword: string) => Promise<{ success: boolean; customer?: Customer; error?: string }>;
@@ -143,7 +244,7 @@ export interface AppContextType {
   refreshCustomerWalletPromos: () => Promise<void>;
   updateStoreReview: (id: string, data: Partial<StoreReview>) => Promise<void>;
   deleteStoreReview: (id: string) => Promise<void>;
-  registerMerchant: (data: any) => Promise<{ success: boolean; message: string } | undefined>;
+  registerMerchant: (data: any) => Promise<{ success: boolean; message: string; storeId?: string } | undefined>;
   refreshStore: (storeId: string) => Promise<void>;
   subscribeToStore: (storeId: string, onUpdate: (store: Store) => void) => () => void;
   updateStoreProfile: (data: Partial<Store>) => Promise<void>;
@@ -165,7 +266,7 @@ export interface AppContextType {
   redeemRechargeCode: (code: string, customerId: string) => Promise<number>;
   deletePromoCode: (id: string) => void;
   requestJoinFlashSale: (request: Omit<FlashSaleRequest, 'id'>) => Promise<void>;
-  sendMerchantFollowerNotifications: (storeId: string, title: string, message: string, type?: string) => Promise<number>;
+  sendMerchantFollowerNotifications: (storeId: string, title: string, message: string, type?: string, templateKey?: string) => Promise<number>;
   replaceOrderItems: (orderId: string, productId: string, quantity: number) => Promise<{ success: boolean; total?: number }>;
   setStoreCustomerBlock: (storeId: string, customerId: string, blocked: boolean) => Promise<boolean>;
   clearMerchantOrderInbox: (storeId: string, orderIds: string[]) => Promise<number>;
@@ -181,12 +282,14 @@ export interface AppContextType {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const AppContext = createContext<AppContextType | undefined>(undefined);
-
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Data States
-  const [stores, setStores] = useState<Store[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [stores, setStores] = useState<Store[]>(
+    () => StorageService.getCached<Store[]>('CATALOG_STORES') || [],
+  );
+  const [products, setProducts] = useState<Product[]>(
+    () => StorageService.getCached<Product[]>('CATALOG_PRODUCTS') || [],
+  );
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
@@ -206,12 +309,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   /** Restore persisted customer/merchant only once on cold start — not after signOut. */
   const initialSessionRestoredRef = useRef(false);
   const explicitSignOutRef = useRef(false);
+  /** After login, ignore stale Firestore cache that still has an old authUid briefly. */
+  const customerSessionGraceUntilRef = useRef(0);
 
   const [adminSettings, setAdminSettings] = useState(() => StorageService.get('ADMIN_SETTINGS') || { 
     autoApproveStores: true,
-    featuredStoreIds: [],
-    enableAutoNearby: true,
-    nearbyStoreIds: [],
+    enableVerifiedStoresCarousel: true,
+    verifiedStoresCarouselInterval: 4,
+    verifiedStoresCarouselExcludeIds: [],
     ads: [],
     adInterval: 5,
     merchantAdInterval: 5,
@@ -382,9 +487,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
 
         const linked = await linkStoreToAuthSession(storeWithId);
-        if (linked) {
+        if (linked?.ownerId === user.uid) {
           setCurrentMerchantState(linked);
+          return;
         }
+
+        // المتجر مربوط بجلسة أخرى — لا تُبقِ لوحة التاجر بدون صلاحية كتابة
+        StorageService.remove('LOGGED_IN_MERCHANT_ID');
+        setCurrentMerchantState(null);
       } catch (e: unknown) {
         if (!isFirestorePermissionDenied(e) && !isFirestoreOfflineError(e)) {
           console.warn('[AppContext] restore merchant session:', e);
@@ -515,37 +625,65 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     let productsRaf = 0;
 
     const scheduleStores = (data: Store[]) => {
-      prefetchImageUrls(data.slice(0, 20).map((s) => s.logo));
+      // Prefetch only first-screen logos (avoid WebView memory spikes)
+      prefetchImageUrls(data.slice(0, 8).map((s) => s.logo));
+      if (!isStaffSession) {
+        StorageService.setCached('CATALOG_STORES', data, 30 * 60 * 1000);
+      }
       cancelAnimationFrame(storesRaf);
       storesRaf = requestAnimationFrame(() => {
-        setStores(data);
-        setCurrentMerchantState((prev) => {
-          if (!prev?.id) return prev;
-          const fresh = data.find((s) => s.id === prev.id);
-          if (!fresh) return prev;
-          const merged = mergeStoreWithSecrets(fresh, {
-            storeId: prev.id,
-            walletBalance: prev.walletBalance,
-            payoutMethods: prev.payoutMethods,
-            mastercardNumber: prev.mastercardNumber,
-            zainCashNumber: prev.zainCashNumber,
+        applyListIfChanged(setStores, data, storeListFingerprint);
+        startTransition(() => {
+          setCurrentMerchantState((prev) => {
+            if (!prev?.id) return prev;
+            const fresh = data.find((s) => s.id === prev.id);
+            if (!fresh) return prev;
+            const merged = mergeStoreWithSecrets(fresh, {
+              storeId: prev.id,
+              walletBalance: prev.walletBalance,
+              payoutMethods: prev.payoutMethods,
+              mastercardNumber: prev.mastercardNumber,
+              zainCashNumber: prev.zainCashNumber,
+            });
+            const next = {
+              ...merged,
+              dashboardTourCompletedAt:
+                prev.dashboardTourCompletedAt ?? merged.dashboardTourCompletedAt,
+              contractAgreedAt: prev.contractAgreedAt ?? merged.contractAgreedAt,
+              terms_accepted: prev.terms_accepted ?? merged.terms_accepted,
+              signed_at: prev.signed_at ?? merged.signed_at,
+              ownerId: prev.ownerId ?? merged.ownerId,
+            };
+            if (
+              prev.shopName === next.shopName &&
+              prev.logo === next.logo &&
+              prev.status === next.status &&
+              prev.subscriptionExpiry === next.subscriptionExpiry &&
+              prev.walletBalance === next.walletBalance &&
+              prev.rating === next.rating &&
+              prev.isVerified === next.isVerified &&
+              prev.deliveryPrice === next.deliveryPrice &&
+              prev.dashboardTourCompletedAt === next.dashboardTourCompletedAt &&
+              prev.contractAgreedAt === next.contractAgreedAt &&
+              prev.terms_accepted === next.terms_accepted
+            ) {
+              return prev;
+            }
+            return next;
           });
-          return {
-            ...merged,
-            dashboardTourCompletedAt:
-              prev.dashboardTourCompletedAt ?? merged.dashboardTourCompletedAt,
-            contractAgreedAt: prev.contractAgreedAt ?? merged.contractAgreedAt,
-            terms_accepted: prev.terms_accepted ?? merged.terms_accepted,
-            signed_at: prev.signed_at ?? merged.signed_at,
-            ownerId: prev.ownerId ?? merged.ownerId,
-          };
         });
       });
     };
     const scheduleProducts = (data: Product[]) => {
-      prefetchImageUrls(data.slice(0, 24).map((p) => p.image));
+      prefetchImageUrls(data.slice(0, 12).map((p) => p.image));
+      // Never overwrite customer catalog cache with merchant store-scoped products
+      if (!isStaffSession) {
+        StorageService.setCached('CATALOG_PRODUCTS', data.slice(0, 120), 30 * 60 * 1000);
+      }
       cancelAnimationFrame(productsRaf);
-      productsRaf = requestAnimationFrame(() => setProducts(data));
+      productsRaf = requestAnimationFrame(() => {
+        applyListIfChanged(setProducts, data, productListFingerprint);
+      });
     };
 
     const snapshotOpts = { suppressPermissionDenied: true as const };
@@ -556,30 +694,66 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       snapshotOpts,
     ));
 
-    const productsQuery = isStaffSession
-      ? query(collection(db, 'products'), limit(isStaffSession ? APP_PRODUCTS_LIMIT_STAFF : APP_PRODUCTS_LIMIT_CUSTOMER))
-      : query(collection(db, 'products'), where('status', '==', 'published'), limit(isStaffSession ? APP_PRODUCTS_LIMIT_STAFF : APP_PRODUCTS_LIMIT_CUSTOMER));
+    // Merchant: store-scoped products only. Customer: published catalog.
+    const productsQuery =
+      isStaffSession && currentMerchant?.id
+        ? query(
+            collection(db, 'products'),
+            where('storeId', '==', currentMerchant.id),
+            limit(APP_PRODUCTS_LIMIT_STAFF),
+          )
+        : query(
+            collection(db, 'products'),
+            where('status', '==', 'published'),
+            limit(APP_PRODUCTS_LIMIT_CUSTOMER),
+          );
     unsubs.push(safeOnSnapshot(productsQuery, (snap) => {
       scheduleProducts(mapFirestoreDocs<Product>(snap));
     }, snapshotOpts));
 
     unsubs.push(safeOnSnapshot(
       query(collection(db, 'flash_sales'), limit(40)),
-      (snap) => setFlashSales(mapFirestoreDocs<FlashSale>(snap)),
+      (snap) => applyListIfChanged(setFlashSales, mapFirestoreDocs<FlashSale>(snap), (f) =>
+        [f.status, f.startTime, f.endTime, f.title].join('|')),
       snapshotOpts,
     ));
+
+    // Customer/guest catalog: approved flash products must be readable/listenable.
+    // Merchants overwrite this below with their store-scoped requests (all statuses).
+    if (!isStaffSession && !currentMerchant?.id) {
+      unsubs.push(safeOnSnapshot(
+        query(
+          collection(db, 'flash_sale_requests'),
+          where('status', '==', 'approved'),
+          limit(120),
+        ),
+        (snap) => applyListIfChanged(setFlashSaleRequests, mapFirestoreDocs<FlashSaleRequest>(snap), (r) =>
+          [r.status, r.storeId, r.flashSaleId, r.productId].join('|')),
+        snapshotOpts,
+      ));
+    }
 
     unsubs.push(safeOnSnapshot(doc(db, 'settings', 'global'), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        setAdminSettings(data);
-        StorageService.save('ADMIN_SETTINGS', data);
+        startTransition(() => {
+          setAdminSettings((prev) => {
+            try {
+              if (prev && JSON.stringify(prev) === JSON.stringify(data)) return prev;
+            } catch {
+              /* fall through */
+            }
+            StorageService.save('ADMIN_SETTINGS', data);
+            return data;
+          });
+        });
       }
     }, snapshotOpts));
 
     unsubs.push(safeOnSnapshot(
       query(collection(db, 'store_reviews'), orderBy('createdAt', 'desc'), limit(isStaffSession ? 500 : 150)),
-      (snap) => setStoreReviews(mapFirestoreDocs<StoreReview>(snap)),
+      (snap) => applyListIfChanged(setStoreReviews, mapFirestoreDocs<StoreReview>(snap), (r) =>
+        [r.storeId, r.customerId, r.rating, r.message, String(r.createdAt ?? '')].join('|')),
       snapshotOpts,
     ));
 
@@ -603,120 +777,200 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const storeId = currentMerchant.id;
       unsubs.push(safeOnSnapshot(
         query(collection(db, 'promo_codes'), where('storeId', '==', storeId)),
-        (snap) => setPromoCodes(mapFirestoreDocs<PromoCode>(snap)),
+        (snap) => applyListIfChanged(setPromoCodes, mapFirestoreDocs<PromoCode>(snap), (p) =>
+          [p.code, p.status, p.discountValue, p.discountType, String(p.expiresAt ?? '')].join('|')),
         snapshotOpts,
       ));
       unsubs.push(safeOnSnapshot(
         query(collection(db, 'orders'), where('storeId', '==', storeId), orderBy('createdAt', 'desc'), limit(400)),
-        (snap) => setOrders(mapFirestoreDocs<Order>(snap)),
+        (snap) => applyListIfChanged(setOrders, mapFirestoreDocs<Order>(snap), orderListFingerprint),
         snapshotOpts,
       ));
       unsubs.push(safeOnSnapshot(
         query(collection(db, 'notifications'), where('userId', '==', storeId), orderBy('createdAt', 'desc'), limit(100)),
-        (snap) => setNotifications(mapFirestoreDocs<AppNotification>(snap)),
+        (snap) => applyListIfChanged(setNotifications, mapFirestoreDocs<AppNotification>(snap), notificationListFingerprint),
         snapshotOpts,
       ));
       unsubs.push(safeOnSnapshot(query(collection(db, 'flash_sale_requests'), where('storeId', '==', storeId)), (snap) => {
-        setFlashSaleRequests(mapFirestoreDocs<FlashSaleRequest>(snap));
+        applyListIfChanged(setFlashSaleRequests, mapFirestoreDocs<FlashSaleRequest>(snap), (r) =>
+          [r.status, r.flashSaleId, r.productId].join('|'));
       }, snapshotOpts));
       unsubs.push(safeOnSnapshot(
         query(collection(db, 'payoutRequests'), where('merchantId', '==', storeId), orderBy('createdAt', 'desc'), limit(50)),
-        (snap) => setPayoutRequests(mapFirestoreDocs<PayoutRequest>(snap)),
+        (snap) => applyListIfChanged(setPayoutRequests, mapFirestoreDocs<PayoutRequest>(snap), (p) =>
+          [p.status, p.amount, String(p.createdAt ?? '')].join('|')),
         snapshotOpts,
       ));
       unsubs.push(safeOnSnapshot(doc(db, 'stores', storeId), (snap) => {
         if (!snap.exists()) return;
         const privateStore = { ...(snap.data() as Store), id: snap.id };
-        setCurrentMerchantState((prev) => {
-          if (!prev || prev.id !== storeId) return prev;
-          return mergeStoreWithSecrets(
-            { ...prev, ...privateStore, id: storeId },
-            {
-              storeId,
-              walletBalance: prev.walletBalance,
-              payoutMethods: prev.payoutMethods,
-            },
-          );
+        startTransition(() => {
+          setCurrentMerchantState((prev) => {
+            if (!prev || prev.id !== storeId) return prev;
+            const next = mergeStoreWithSecrets(
+              { ...prev, ...privateStore, id: storeId },
+              {
+                storeId,
+                walletBalance: prev.walletBalance,
+                payoutMethods: prev.payoutMethods,
+              },
+            );
+            if (
+              prev.shopName === next.shopName &&
+              prev.status === next.status &&
+              prev.subscriptionExpiry === next.subscriptionExpiry &&
+              prev.walletBalance === next.walletBalance &&
+              prev.logo === next.logo &&
+              prev.deliveryPrice === next.deliveryPrice
+            ) {
+              return prev;
+            }
+            return next;
+          });
         });
       }, snapshotOpts));
       unsubs.push(safeOnSnapshot(doc(db, 'store_secrets', storeId), (snap) => {
         const secrets = snap.exists()
           ? { ...(snap.data() as Record<string, unknown>), storeId: snap.id }
           : null;
-        setCurrentMerchantState((prev) => {
-          if (!prev || prev.id !== storeId) return prev;
-          return mergeStoreWithSecrets(prev, secrets as Parameters<typeof mergeStoreWithSecrets>[1]);
+        startTransition(() => {
+          setCurrentMerchantState((prev) => {
+            if (!prev || prev.id !== storeId) return prev;
+            const next = mergeStoreWithSecrets(prev, secrets as Parameters<typeof mergeStoreWithSecrets>[1]);
+            if (
+              prev.walletBalance === next.walletBalance &&
+              prev.mastercardNumber === next.mastercardNumber &&
+              prev.zainCashNumber === next.zainCashNumber &&
+              JSON.stringify(prev.payoutMethods || []) === JSON.stringify(next.payoutMethods || [])
+            ) {
+              return prev;
+            }
+            return next;
+          });
         });
       }, snapshotOpts));
       unsubs.push(safeOnSnapshot(collection(db, 'store_audience', storeId, 'members'), (snap) => {
-        setCustomers(
-          snap.docs.map((memberDoc) => {
-            const data = memberDoc.data() as Record<string, unknown>;
-            return {
-              id: memberDoc.id,
-              name: String(data.name || ''),
-              phone: String(data.phone || ''),
-              province: String(data.province || ''),
-              tier: (data.tier as Customer['tier']) || 'Silver',
-              followedStores: data.followed ? [storeId] : [],
-              storeNotifications: data.notifications ? [storeId] : [],
-              points: 0,
-              ordersCount: 0,
-              monthlyOrdersCount: 0,
-              isBlocked: Boolean(data.blocked),
-              joinedAt: '',
-            } as Customer;
-          }),
-        );
+        setCustomers((prev) => {
+          const next = snap.docs
+            .map((memberDoc) => {
+              const data = memberDoc.data() as Record<string, unknown>;
+              // Soft-deleted accounts are scrubbed server-side; skip any leftover mirror rows.
+              if (data.isDeleted === true) return null;
+              const name = String(data.name || '');
+              const phone = String(data.phone || '');
+              if (name === 'مستخدم محذوف' || phone.startsWith('deleted_')) return null;
+              return {
+                id: memberDoc.id,
+                name,
+                phone,
+                province: String(data.province || ''),
+                tier: (data.tier as Customer['tier']) || 'Silver',
+                followedStores: data.followed ? [storeId] : [],
+                storeNotifications: data.notifications ? [storeId] : [],
+                storeAudienceOrdered: Boolean(data.ordered),
+                points: 0,
+                ordersCount: 0,
+                monthlyOrdersCount: 0,
+                isBlocked: Boolean(data.blocked),
+                joinedAt: '',
+              } as Customer & { storeAudienceOrdered?: boolean };
+            })
+            .filter(Boolean) as Array<Customer & { storeAudienceOrdered?: boolean }>;
+
+          if (prev.length === next.length) {
+            const prevById = new Map(prev.map((c) => [c.id, c]));
+            const same = next.every((n) => {
+              const c = prevById.get(n.id) as (Customer & { storeAudienceOrdered?: boolean }) | undefined;
+              if (!c) return false;
+              return (
+                c.name === n.name &&
+                c.phone === n.phone &&
+                Boolean(c.followedStores?.includes(storeId)) === Boolean(n.followedStores?.includes(storeId)) &&
+                Boolean(c.storeNotifications?.includes(storeId)) === Boolean(n.storeNotifications?.includes(storeId)) &&
+                Boolean(c.storeAudienceOrdered) === Boolean(n.storeAudienceOrdered) &&
+                c.isBlocked === n.isBlocked &&
+                c.tier === n.tier
+              );
+            });
+            if (same) return prev;
+          }
+          return next;
+        });
       }, snapshotOpts));
     } else if (currentCustomer?.id) {
       const customerId = currentCustomer.id;
       unsubs.push(safeOnSnapshot(doc(db, 'customers', customerId), (snap) => {
         if (!snap.exists()) return;
         const data = { ...(snap.data() as Customer), id: snap.id };
-        setCustomers([data]);
-        // تجنّب إعادة رسم تطبيق الزبون عند تحديثات Firestore المتطابقة
-        setCurrentCustomerState((prev) => {
-          if (!prev || prev.id !== data.id) return data;
-          const same =
-            prev.points === data.points &&
-            prev.name === data.name &&
-            prev.phone === data.phone &&
-            prev.province === data.province &&
-            prev.address === data.address &&
-            prev.tier === data.tier &&
-            prev.isBlocked === data.isBlocked &&
-            prev.monthlyOrdersCount === data.monthlyOrdersCount &&
-            prev.ordersCount === data.ordersCount &&
-            prev.authUid === data.authUid &&
-            JSON.stringify(prev.followedStores || []) === JSON.stringify(data.followedStores || []) &&
-            JSON.stringify(prev.storeNotifications || []) === JSON.stringify(data.storeNotifications || []) &&
-            JSON.stringify(prev.blockedStoreIds || []) === JSON.stringify(data.blockedStoreIds || []) &&
-            JSON.stringify(prev.savedLocations || []) === JSON.stringify(data.savedLocations || []);
-          return same ? prev : { ...prev, ...data };
+        startTransition(() => {
+          setCustomers((prev) => {
+            const existing = prev.length === 1 ? prev[0] : null;
+            if (
+              existing &&
+              existing.id === data.id &&
+              existing.points === data.points &&
+              existing.name === data.name &&
+              existing.phone === data.phone &&
+              existing.tier === data.tier &&
+              existing.ordersCount === data.ordersCount &&
+              existing.monthlyOrdersCount === data.monthlyOrdersCount
+            ) {
+              return prev;
+            }
+            return [data];
+          });
+          // تجنّب إعادة رسم تطبيق الزبون عند تحديثات Firestore المتطابقة
+          setCurrentCustomerState((prev) => {
+            if (!prev || prev.id !== data.id) return data;
+            const uid = auth.currentUser?.uid;
+            // Cloud Function login updates authUid server-side; the first snapshot may
+            // still be a stale IndexedDB cache with the previous session's authUid.
+            const mergedAuthUid =
+              uid && prev.authUid === uid
+                ? prev.authUid
+                : (data.authUid ?? prev.authUid);
+            const same =
+              prev.points === data.points &&
+              prev.name === data.name &&
+              prev.phone === data.phone &&
+              prev.province === data.province &&
+              prev.address === data.address &&
+              prev.tier === data.tier &&
+              prev.isBlocked === data.isBlocked &&
+              prev.monthlyOrdersCount === data.monthlyOrdersCount &&
+              prev.ordersCount === data.ordersCount &&
+              prev.authUid === mergedAuthUid &&
+              prev.loyaltyStoreReviewRewarded === data.loyaltyStoreReviewRewarded &&
+              prev.loyaltyProductReviewRewarded === data.loyaltyProductReviewRewarded &&
+              JSON.stringify(prev.followedStores || []) === JSON.stringify(data.followedStores || []) &&
+              JSON.stringify(prev.storeNotifications || []) === JSON.stringify(data.storeNotifications || []) &&
+              JSON.stringify(prev.blockedStoreIds || []) === JSON.stringify(data.blockedStoreIds || []) &&
+              JSON.stringify(prev.savedLocations || []) === JSON.stringify(data.savedLocations || []);
+            return same ? prev : { ...prev, ...data, authUid: mergedAuthUid };
+          });
         });
       }, snapshotOpts));
       // يكفي لآخر طلبات تبويب الزبون + الطلب السريع (بدل 200)
       unsubs.push(safeOnSnapshot(
         query(collection(db, 'orders'), where('customerId', '==', customerId), orderBy('createdAt', 'desc'), limit(15)),
-        (snap) => setOrders(mapFirestoreDocs<Order>(snap)),
+        (snap) => applyListIfChanged(setOrders, mapFirestoreDocs<Order>(snap), orderListFingerprint),
         snapshotOpts,
       ));
       unsubs.push(safeOnSnapshot(
         query(collection(db, 'notifications'), where('userId', '==', customerId), orderBy('createdAt', 'desc'), limit(30)),
-        (snap) => setNotifications(mapFirestoreDocs<AppNotification>(snap)),
+        (snap) => applyListIfChanged(setNotifications, mapFirestoreDocs<AppNotification>(snap), notificationListFingerprint),
         snapshotOpts,
       ));
       setPromoCodes([]);
       setPayoutRequests([]);
-      setFlashSaleRequests([]);
+      // flashSaleRequests: kept via the shared approved-requests listener above
     } else {
       setPromoCodes([]);
       setCustomers([]);
       setOrders([]);
       setNotifications([]);
       setPayoutRequests([]);
-      setFlashSaleRequests([]);
+      // Guest browsing still loads approved flashSaleRequests from shared listener
     }
 
     return () => {
@@ -736,12 +990,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   }, [authInitialized, authLoading, currentMerchant?.id]);
 
+  useEffect(() => {
+    if (!authInitialized || authLoading || !currentMerchant?.id || !auth.currentUser) return;
+    void ensureStoreSessionForStorage(currentMerchant.id).catch((e) => {
+      console.warn('[AppContext] merchant storage session sync:', e);
+    });
+  }, [authInitialized, authLoading, currentMerchant?.id]);
+
   const setCurrentCustomer = (c: Customer | null) => {
     setCurrentCustomerState(c);
     if (c) {
       StorageService.save('LOGGED_IN_CUSTOMER_ID', c.id);
+      // Allow Firestore cache to catch up after verifyCustomerLogin links authUid.
+      customerSessionGraceUntilRef.current = Date.now() + 8000;
     } else {
       StorageService.remove('LOGGED_IN_CUSTOMER_ID');
+      customerSessionGraceUntilRef.current = 0;
     }
   };
 
@@ -794,10 +1058,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         : { accountType, storeId: currentMerchant?.id };
 
     if (accountType === 'customer' && !payload.customerId) {
-      throw new Error('لا يوجد حساب زبون مسجّل للحذف.');
+      throw new Error(tKey('errors.noCustomerToDelete', 'لا يوجد حساب زبون مسجّل للحذف.'));
     }
     if (accountType === 'merchant' && !payload.storeId) {
-      throw new Error('لا يوجد حساب تاجر مسجّل للحذف.');
+      throw new Error(tKey('errors.noMerchantToDelete', 'لا يوجد حساب تاجر مسجّل للحذف.'));
     }
 
     try {
@@ -865,12 +1129,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (!auth.currentUser) {
         await signInAnonymously(auth);
       }
+      if (!auth.currentUser) {
+        return { success: false, error: 'auth_required' };
+      }
+      // Ensure callable auth token matches the session we will link to authUid.
+      await auth.currentUser.getIdToken(true);
       const fn = httpsCallable<
         { phone: string; password: string },
         { success: boolean; customer?: Customer; error?: string }
       >(mahalakFunctions, 'verifyCustomerLogin');
       const result = await fn({ phone: normalizeIraqiPhone(phone), password: password.trim() });
-      return result.data ?? { success: false, error: 'unknown' };
+      const data = result.data ?? { success: false, error: 'unknown' };
+      if (data.success && data.customer) {
+        const uid = auth.currentUser.uid;
+        // Always bind the returned customer to the live Auth UID (CF already wrote it).
+        return {
+          ...data,
+          customer: { ...data.customer, authUid: data.customer.authUid || uid },
+        };
+      }
+      return data;
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code ?? '';
       console.warn('[AppContext] verifyCustomerLogin:', e);
@@ -964,12 +1242,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const phoneCheck = await checkPhoneAvailable(normalizedPhone);
     if (!phoneCheck.available) {
       if (phoneCheck.blocked || phoneCheck.entityType === 'blocked') {
-        throw new Error('هذا الرقم محظور من قبل إدارة النظام. تواصل مع الدعم لرفع الحظر.');
+        throw new Error(tKey('errors.phoneBlocked', 'هذا الرقم محظور من قبل إدارة النظام. تواصل مع الدعم لرفع الحظر.'));
       }
       if (phoneCheck.entityType === 'store') {
-        throw new Error('رقم الهاتف مسجل مسبقاً كتاجر! لا يمكن استخدامه لإنشاء حساب زبون.');
+        throw new Error(tKey('errors.phoneTakenAsMerchantForCustomer', 'رقم الهاتف مسجل مسبقاً كتاجر! لا يمكن استخدامه لإنشاء حساب زبون.'));
       }
-      throw new Error('رقم الهاتف مسجل مسبقاً! يرجى تسجيل الدخول أو استخدام رقم آخر.');
+      throw new Error(tKey('errors.phoneTaken', 'رقم الهاتف مسجل مسبقاً! يرجى تسجيل الدخول أو استخدام رقم آخر.'));
     }
 
     if (!auth.currentUser) {
@@ -1008,7 +1286,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ...(lat != null ? { lat } : {}),
       ...(lng != null ? { lng } : {}),
       ...(defaultLocationId ? { defaultLocationId } : {}),
-      points: loyalty.signupBonusPoints, 
+      points: 0,
       ordersCount: 0, 
       monthlyOrdersCount: 0,
       lastResetMonth: getTierPeriodStart(new Date(), loyalty.tierResetPeriodMonths),
@@ -1029,13 +1307,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         );
         await initPw({ customerId: id, password: String(signupPassword) });
       }
-      return newCust;
+      return { ...newCust, points: loyalty.signupBonusPoints };
     } catch (e) {
       if (e instanceof Error && !e.message.includes('Missing or insufficient permissions')) {
         throw e;
       }
       if (isFirestorePermissionDenied(e)) {
-        throw new Error('تعذر إنشاء الحساب. تأكد من الاتصال وحاول مرة أخرى.');
+        throw new Error(tKey('errors.registerFailed', 'تعذر إنشاء الحساب. تأكد من الاتصال وحاول مرة أخرى.'));
       }
       handleFirestoreError(e, OperationType.CREATE, 'customers/' + id);
     }
@@ -1115,7 +1393,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         { valid: boolean; code?: string; discount?: number; id?: string; message?: string }
       >(mahalakFunctions, 'validatePromoCode');
       const result = await fn(payload);
-      return result.data ?? { valid: false, message: 'تعذر التحقق من الكود' };
+      return result.data ?? { valid: false, message: tKey('errors.verifyPromoFailed', 'تعذر التحقق من الكود') };
     } catch (e) {
       return { valid: false, message: getCallableErrorMessage(e) };
     }
@@ -1173,6 +1451,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, message: 'اسم المستخدم مسجل مسبقاً من متجر آخر!' };
     }
 
+    if (!auth.currentUser) {
+      await signInAnonymously(auth);
+    }
+    if (!auth.currentUser?.uid) {
+      return { success: false, message: tKey('errors.sessionStartFailed', 'تعذر بدء الجلسة. حاول مجدداً.') };
+    }
+
     const { password: signupPassword, ...storeFields } = data;
     const id = 'store_' + Date.now();
     const autoApprove = adminSettings?.autoApproveStores !== false;
@@ -1210,14 +1495,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       }
       setCurrentMerchant(newStore);
-      return { success: true, message: 'تم' };
+      return { success: true, message: 'تم', storeId: id };
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       if (msg.includes('رقم الهاتف') || msg.includes('اسم المستخدم')) {
         return { success: false, message: msg };
       }
       console.error('[AppContext] registerMerchant:', e);
-      return { success: false, message: 'تعذر إنشاء المتجر. حاول مجدداً أو تواصل مع الدعم.' };
+      return { success: false, message: tKey('errors.createStoreFailed', 'تعذر إنشاء المتجر. حاول مجدداً أو تواصل مع الدعم.') };
     }
   };
 
@@ -1265,13 +1550,36 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const idToUpdate = data.id || currentMerchant?.id;
     if (!idToUpdate) return;
 
-    const ownerId = auth.currentUser?.uid || currentMerchant?.ownerId || '';
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      throw new Error(tKey('errors.loginRequiredToSave', 'يجب تسجيل الدخول أولاً لحفظ التعديلات.'));
+    }
+
+    // Firestore rules: ownsStore → ownerId == auth.uid
+    if (currentMerchant?.ownerId !== uid) {
+      const linked = await linkStoreToAuthSession(
+        currentMerchant ? { ...currentMerchant, id: idToUpdate } : ({ id: idToUpdate } as Store),
+      );
+      if (!linked || linked.ownerId !== uid) {
+        StorageService.remove('LOGGED_IN_MERCHANT_ID');
+        setCurrentMerchantState(null);
+        throw new Error(
+          tKey(
+            'errors.storeSessionExpired',
+            'انتهت صلاحية جلسة المتجر أو رُبط بجهاز آخر. سجّل الخروج ثم ادخل مجدداً بكلمة المرور.',
+          ),
+        );
+      }
+      setCurrentMerchantState(linked);
+    }
+
+    const ownerId = uid;
     const { payoutMethods } = data as Partial<Store> & { password?: string };
 
     if (data.username && currentMerchant && data.username !== currentMerchant.username) {
       const usernameCheck = await checkUsernameAvailable(data.username, idToUpdate);
       if (!usernameCheck.available) {
-         throw new Error("اسم المستخدم هذا مستخدم مسبقاً من قبل تاجر آخر.");
+         throw new Error(tKey('errors.usernameTaken', 'اسم المستخدم هذا مستخدم مسبقاً من قبل تاجر آخر.'));
       }
       
       if (currentMerchant.lastUsernameChange) {
@@ -1279,7 +1587,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const diffTime = Math.abs(new Date().getTime() - lastChangeDate.getTime());
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
         if (diffDays < 30) {
-           throw new Error(`لا يمكنك تغيير اسم المستخدم إلا مرة واحدة كل 30 يوم. آخر تغيير لك كان قبل ${diffDays} يوم.`);
+           throw new Error(
+             tKey(
+               'errors.usernameChangeCooldown',
+               `لا يمكنك تغيير اسم المستخدم إلا مرة واحدة كل 30 يوم. آخر تغيير لك كان قبل ${diffDays} يوم.`,
+               { days: diffDays },
+             ),
+           );
         }
       }
       
@@ -1290,20 +1604,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (payoutMethods) {
         await upsertStoreSecretsPayout(idToUpdate, ownerId, payoutMethods);
       }
-      const storePatch: Partial<Store> = { ...data };
-      delete (storePatch as Partial<Store> & { password?: string }).password;
+      const storePatch: Record<string, unknown> = { ...data };
+      delete storePatch.password;
       delete storePatch.walletBalance;
       delete storePatch.payoutMethods;
       delete storePatch.id;
-      if (storePatch.storeTheme !== undefined) {
-        storePatch.storeTheme = sanitizeStoreThemeForFirestore(storePatch.storeTheme);
+      // Firestore rejects undefined field values — drop them before updateDoc.
+      for (const key of Object.keys(storePatch)) {
+        if (storePatch[key] === undefined) delete storePatch[key];
       }
+      if (storePatch.storeTheme !== undefined) {
+        storePatch.storeTheme = sanitizeStoreThemeForFirestore(storePatch.storeTheme as Store['storeTheme']);
+      }
+      const patch = storePatch as Partial<Store>;
       // Eagerly update currentMerchant so the UI reflects changes immediately
       // (especially important when the user navigates away then comes back).
       if (currentMerchant?.id === idToUpdate) {
         setCurrentMerchantState((prev) => {
           if (!prev) return prev;
-          const next = { ...prev, ...storePatch };
+          const next = { ...prev, ...patch };
           if (payoutMethods) {
             return mergeStoreWithSecrets(next, { storeId: idToUpdate, payoutMethods });
           }
@@ -1315,16 +1634,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         );
       }
 
-      if (Object.keys(storePatch).length > 0) {
-        await updateDoc(doc(db, 'stores', idToUpdate), storePatch);
+      if (Object.keys(patch).length > 0) {
+        await updateDoc(doc(db, 'stores', idToUpdate), patch);
         setStores((prev) =>
-          prev.map((s) => (s.id === idToUpdate ? { ...s, ...storePatch } : s)),
+          prev.map((s) => (s.id === idToUpdate ? { ...s, ...patch } : s)),
         );
-        if (storePatch.storeTheme !== undefined) {
+        if (patch.storeTheme !== undefined) {
           try {
             await setDoc(
               doc(db, STORES_PUBLIC_COLLECTION, idToUpdate),
-              { storeTheme: storePatch.storeTheme },
+              { storeTheme: patch.storeTheme },
               { merge: true },
             );
           } catch {
@@ -1335,6 +1654,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, 'stores/' + idToUpdate);
     }
+  };
+
+  const ensureMerchantStoreForProductWrite = async (storeId: string) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      throw new Error(tKey('errors.loginRequiredToSave', 'يجب تسجيل الدخول أولاً لحفظ التعديلات.'));
+    }
+    if (!storeId) {
+      throw new Error(
+        tKey('errors.storeIdMissing', 'تعذر تحديد المتجر. سجّل الدخول مجدداً ثم حاول مرة أخرى.'),
+      );
+    }
+
+    if (currentMerchant?.ownerId !== uid || currentMerchant?.id !== storeId) {
+      const linked = await linkStoreToAuthSession(
+        currentMerchant?.id === storeId
+          ? currentMerchant
+          : ({ id: storeId } as Store),
+      );
+      if (!linked || linked.ownerId !== uid) {
+        StorageService.remove('LOGGED_IN_MERCHANT_ID');
+        setCurrentMerchantState(null);
+        throw new Error(
+          tKey(
+            'errors.storeSessionExpired',
+            'انتهت صلاحية جلسة المتجر أو رُبط بجهاز آخر. سجّل الخروج ثم ادخل مجدداً بكلمة المرور.',
+          ),
+        );
+      }
+      setCurrentMerchantState(linked);
+    }
+
+    await ensureStoreSessionForStorage(storeId);
   };
 
   const addProduct = async (data: any) => {
@@ -1350,11 +1702,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (imageUrl && imageUrl.startsWith('data:image')) {
       const storeId = String(data.storeId ?? '');
       try {
-        await ensureStoreSessionForStorage(storeId);
+        await ensureMerchantStoreForProductWrite(storeId);
         imageUrl = await uploadProductImageStorage(imageUrl, id, storeId);
       } catch (uploadErr) {
-        alert("فشل رفع الصورة إلى الخادم (Firebase Storage). يرجى التأكد من تفعيل Storage وقواعد الأمان (Storage Rules).");
-        throw new Error("Storage Upload Failed: " + (uploadErr instanceof Error ? uploadErr.message : String(uploadErr)), { cause: uploadErr });
+        const msg =
+          uploadErr instanceof Error
+            ? uploadErr.message
+            : 'فشل رفع الصورة إلى الخادم (Firebase Storage).';
+        throw new Error(msg, { cause: uploadErr });
       }
     }
 
@@ -1374,18 +1729,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // We should send a notification to customers who enabled notifications for this store
       if (customers.length > 0) {
         const storeName = stores.find(s => s.id === data.storeId)?.shopName || 'متجر';
-        const notifs = customers
-          .filter(c => c.storeNotifications?.includes(data.storeId))
-          .map(c => ({
-            userId: c.id,
-            role: 'customer',
-            title: `منتج جديد من ${storeName} ✨`,
-            message: `تمت إضافة منتج جديد: ${data.name}. سارع بالشراء الآن!`,
-            type: 'product',
-            targetId: id
-          }));
-        
-        if (notifs.length > 0) addBulkNotifications(notifs);
+        const content = buildBilingualNotificationContent(adminSettings, 'customer.newProduct', {
+          storeName,
+          productName: data.name,
+        });
+        if (content) {
+          const notifs = customers
+            .filter((c) => c.storeNotifications?.includes(data.storeId))
+            .map((c) => ({
+              userId: c.id,
+              role: 'customer',
+              title: content.title,
+              message: content.message,
+              titleCkb: content.titleCkb,
+              messageCkb: content.messageCkb,
+              templateKey: content.templateKey,
+              templateVars: content.templateVars,
+              type: 'product',
+              targetId: id,
+              ...notificationDeliveryFields(adminSettings, 'customer.newProduct'),
+            }));
+          if (notifs.length > 0) addBulkNotifications(notifs);
+        }
       }
 
     } catch (e: any) {
@@ -1402,13 +1767,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // Intercept new base64 / data URL images on edit and upload to Firebase Storage
       if (imageUrl && imageUrl.startsWith('data:image')) {
         try {
-          if (storeId) {
-            await ensureStoreSessionForStorage(storeId);
+          if (!storeId) {
+            throw new Error(
+              tKey('errors.storeIdMissing', 'تعذر تحديد المتجر. سجّل الدخول مجدداً ثم حاول مرة أخرى.'),
+            );
           }
+          await ensureMerchantStoreForProductWrite(storeId);
           imageUrl = await uploadProductImageStorage(imageUrl, id, storeId);
         } catch (uploadErr) {
-          alert("فشل رفع الصورة إلى الخادم (Firebase Storage). يرجى تسجيل الدخول مرة أخرى إذا استمر الخطأ.");
-          throw uploadErr;
+          const msg =
+            uploadErr instanceof Error
+              ? uploadErr.message
+              : 'فشل رفع الصورة إلى الخادم (Firebase Storage).';
+          throw new Error(msg, { cause: uploadErr });
         }
       }
 
@@ -1464,28 +1835,50 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await signInAnonymously(auth);
     }
     if (!auth.currentUser) {
-      throw new Error('يجب تسجيل الدخول أولاً.');
+      throw new Error(tKey('errors.loginRequired', 'يجب تسجيل الدخول أولاً.'));
     }
     // linkCustomerAuthUid is intentionally omitted here: placeOrderSecure already
     // validates ownership via customerAuthOwnsId server-side, and the auth session
     // is linked during login (verifyCustomerLogin). Calling it here adds an extra
     // Firestore read on every order with no benefit.
+    // No client retries: placeOrderSecure is not idempotent — a timeout after
+    // a successful write would create a duplicate order and feel like a hang.
     const fn = httpsCallable<
       Record<string, unknown>,
       { orderId: string; total: number; subtotal: number }
-    >(mahalakFunctions, 'placeOrderSecure');
+    >(mahalakFunctions, 'placeOrderSecure', { retries: 0, timeoutMs: 30_000 });
     const result = await fn({
       ...data,
       promoCode: promoCodeText || undefined,
     });
     const orderId = result.data?.orderId ?? '';
     if (!orderId) {
-      throw new Error('تعذر إنشاء الطلب. حاول مرة أخرى.');
+      throw new Error(tKey('errors.placeOrderFailed', 'تعذر إنشاء الطلب. حاول مرة أخرى.'));
     }
     if (promoCodeText) {
       refreshCustomerWalletPromos().catch(() => undefined);
     }
     return orderId;
+  };
+
+  const releaseOrderToMerchant = async (orderId: string) => {
+    try {
+      // No retries: avoids a long hang if the first call already succeeded.
+      const fn = httpsCallable<
+        { orderId: string },
+        { success: boolean; alreadyReleased?: boolean }
+      >(mahalakFunctions, 'releaseOrderToMerchantSecure', { retries: 0, timeoutMs: 20_000 });
+      const result = await fn({ orderId });
+      return {
+        success: Boolean(result.data?.success),
+        alreadyReleased: Boolean(result.data?.alreadyReleased),
+      };
+    } catch (e) {
+      return {
+        success: false,
+        message: getCallableErrorMessage(e, tKey('errors.releaseOrderFailed', 'تعذر إتمام الطلب وإرساله للمتجر.')),
+      };
+    }
   };
 
   const createPromoCode = async (data: any) => {
@@ -1510,62 +1903,80 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         && customers.length > 0
       ) {
         const storeName = stores.find(s => s.id === data.storeId)?.shopName || 'متجر';
-        await sendMerchantFollowerNotifications(
-          data.storeId,
-          `Promo ${storeName}`,
-          `Code: ${data.code}`,
-          'promo',
-        ).catch(() => undefined);
-        const notifs = customers
-          .filter(() => false)
-          .map(c => ({
-            userId: c.id,
-            role: 'customer',
-            title: `بروموكود جديد من ${storeName} 🎁`,
-            message: `تم إطلاق كود خصم جديد: ${data.code}. استفد منه الآن!`,
-            type: 'promo',
-            targetId: id,
-            sound: true
-          }));
-        if (notifs.length > 0) addBulkNotifications(notifs);
+        const followerContent = buildBilingualNotificationContent(adminSettings, 'customer.merchantFollowerPromo', {
+          storeName,
+          code: newPromo.code,
+          discountLabel: formatPromoDiscount(newPromo as any),
+        });
+        if (followerContent) {
+          await sendMerchantFollowerNotifications(
+            data.storeId,
+            followerContent.title,
+            followerContent.message,
+            'promo',
+            'customer.merchantFollowerPromo',
+          ).catch(() => undefined);
+        }
       } else if (data.storeId === 'ALL_STORES') {
         const notifs = [];
-        
-        // Notify customers
-        for (const c of customers) {
-          let shouldNotify = true;
-          if (data.targetProvinces?.length > 0 && !data.targetProvinces.includes(c.province)) shouldNotify = false;
-          if (shouldNotify) {
-            notifs.push({
-              userId: c.id,
-              role: 'customer',
-              title: `محلك 🎁`,
-              message: `عرض جديد بمناسبة العيد أو الفعاليات الخاصة! كود الخصم: ${data.code}`,
-              type: 'promo',
-              targetId: id,
-              sound: true
-            });
+        const customerContent = buildBilingualNotificationContent(adminSettings, 'customer.platformPromo', {
+          code: data.code,
+        });
+        const merchantContent = buildBilingualNotificationContent(adminSettings, 'merchant.platformPromo', {
+          code: data.code,
+        });
+
+        if (customerContent) {
+          for (const c of customers) {
+            let shouldNotify = true;
+            if (data.targetProvinces?.length > 0 && !data.targetProvinces.includes(c.province)) {
+              shouldNotify = false;
+            }
+            if (shouldNotify) {
+              notifs.push({
+                userId: c.id,
+                role: 'customer',
+                title: customerContent.title,
+                message: customerContent.message,
+                titleCkb: customerContent.titleCkb,
+                messageCkb: customerContent.messageCkb,
+                templateKey: customerContent.templateKey,
+                templateVars: customerContent.templateVars,
+                type: 'promo',
+                targetId: id,
+                ...notificationDeliveryFields(adminSettings, 'customer.platformPromo'),
+              });
+            }
           }
         }
 
-        // Notify merchants
-        for (const s of stores) {
-          let shouldNotify = true;
-          if (data.targetProvinces?.length > 0 && !data.targetProvinces.includes(s.province)) shouldNotify = false;
-          if (data.targetStores?.length > 0 && !data.targetStores.includes(s.id)) shouldNotify = false;
-          if (shouldNotify) {
-            notifs.push({
-              userId: s.id,
-              role: 'merchant',
-              title: `محلك 🎁`,
-              message: `تم إطلاق كود خصم جديد لزيادة مبيعاتك! كود الخصم: ${data.code}`,
-              type: 'system',
-              targetId: id,
-              sound: true
-            });
+        if (merchantContent) {
+          for (const s of stores) {
+            let shouldNotify = true;
+            if (data.targetProvinces?.length > 0 && !data.targetProvinces.includes(s.province)) {
+              shouldNotify = false;
+            }
+            if (data.targetStores?.length > 0 && !data.targetStores.includes(s.id)) {
+              shouldNotify = false;
+            }
+            if (shouldNotify) {
+              notifs.push({
+                userId: s.id,
+                role: 'merchant',
+                title: merchantContent.title,
+                message: merchantContent.message,
+                titleCkb: merchantContent.titleCkb,
+                messageCkb: merchantContent.messageCkb,
+                templateKey: merchantContent.templateKey,
+                templateVars: merchantContent.templateVars,
+                type: 'system',
+                targetId: id,
+                ...notificationDeliveryFields(adminSettings, 'merchant.platformPromo'),
+              });
+            }
           }
         }
-        
+
         if (notifs.length > 0) addBulkNotifications(notifs);
       }
 
@@ -1619,11 +2030,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (e) {
       console.warn('[AppContext] toggleFollowStore:', e);
       if (currentCustomer?.id === cid) {
-        setCurrentCustomerState(currentCustomer);
+        setCurrentCustomerState({ ...currentCustomer, followedStores: currentFollowed });
       }
       setCustomers((prev) =>
         prev.map((c) => (c.id === cid ? { ...c, followedStores: currentFollowed } : c)),
       );
+      throw e;
     }
   };
 
@@ -1684,21 +2096,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const authUid = auth.currentUser?.uid;
     const storeId = String(reviewData?.storeId || '');
     if (!authUid || !storeId) {
-      throw new Error('يجب تسجيل الدخول قبل إرسال التقييم.');
+      throw new Error(tKey('errors.loginRequiredReview', 'يجب تسجيل الدخول قبل إرسال التقييم.'));
     }
     const id = `${storeId}_${authUid}`;
     const newReview = { ...reviewData, id, createdAt: new Date().toISOString(), isReadByAdmin: false };
     try {
       await setDoc(doc(db, 'store_reviews', id), newReview);
       
-      // Send notification to the merchant
-      await addNotification({
-        userId: reviewData.storeId,
-        role: 'merchant',
-        title: 'تقييم جديد!',
-        message: `حصلت على استعراض ${reviewData.rating} نجوم من ${reviewData.customerName}`,
-        type: 'system',
+      const merchantReviewContent = buildBilingualNotificationContent(adminSettings, 'merchant.storeReview', {
+        rating: reviewData.rating,
+        customerName: reviewData.customerName,
       });
+      if (merchantReviewContent) {
+        await addNotification({
+          userId: reviewData.storeId,
+          role: 'merchant',
+          title: merchantReviewContent.title,
+          message: merchantReviewContent.message,
+          titleCkb: merchantReviewContent.titleCkb,
+          messageCkb: merchantReviewContent.messageCkb,
+          type: 'system',
+          templateKey: merchantReviewContent.templateKey,
+          templateVars: merchantReviewContent.templateVars,
+          targetId: id,
+          ...notificationDeliveryFields(adminSettings, 'merchant.storeReview'),
+        });
+      }
       
       // We could also recalculate the store's average rating here or on the backend
       const storeReviewsForStore = storeReviews.filter(r => r.storeId === reviewData.storeId);
@@ -1709,19 +2132,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
 
       // نقاط التقييم تُمنح تلقائياً عبر onStoreReviewCreated Cloud Function
-      if (reviewData.customerId) {
-        await addNotification({
-          userId: reviewData.customerId,
-          role: 'customer',
-          type: 'system',
-          title: '🎁 شكرًا على التقييم!',
-          message: storeReviewRewardNotificationMessage(resolveLoyaltySettings(adminSettings)),
-          sound: true
-        });
-      }
+      // (مرة واحدة لكل متجر؛ المكافأة لأول تقييم متجر فقط إن فُعّل من الأدمن)
 
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'store_reviews/' + id);
+      throw e;
     }
   };
 
@@ -1733,23 +2148,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     rating: number;
     message?: string;
   }) => {
-    const id = `prev_${Date.now()}`;
-    const newReview = {
-      ...reviewData,
+    const authUid = auth.currentUser?.uid;
+    const productId = String(reviewData?.productId || '');
+    if (!authUid || !productId) {
+      throw new Error(tKey('errors.loginRequiredReview', 'يجب تسجيل الدخول قبل إرسال التقييم.'));
+    }
+    const id = `${productId}_${authUid}`;
+    const trimmedMessage = reviewData.message?.trim();
+    const newReview: Record<string, unknown> = {
+      productId: reviewData.productId,
+      storeId: reviewData.storeId,
+      customerId: reviewData.customerId,
+      customerName: reviewData.customerName,
+      rating: reviewData.rating,
       id,
       createdAt: new Date().toISOString(),
     };
+    if (trimmedMessage) {
+      newReview.message = trimmedMessage;
+    }
     try {
       await setDoc(doc(db, 'product_reviews', id), newReview);
-      await addNotification({
-        userId: reviewData.storeId,
-        role: 'merchant',
-        title: 'تقييم منتج جديد',
-        message: `تقييم ${reviewData.rating} نجوم على ${reviewData.productId}`,
-        type: 'system',
-      });
+      // إشعار التاجر يُرسل من onProductReviewCreated (Admin SDK) — الزبون لا يملك صلاحية إنشاء إشعار للتاجر.
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'product_reviews/' + id);
+      throw e;
     }
   };
 
@@ -1885,29 +2308,40 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
 
       if (order?.customerId) {
-        let statusText = status;
-        let pSound = true;
-        if (status === 'accepted') { statusText = 'تم قبول طلبك بنجاح'; pSound = true; }
-        if (status === 'preparing') { statusText = 'طلبك قيد التجهيز'; pSound = false; }
-        if (status === 'shipped') { statusText = 'طلبك في الطريق إليك ومندوب التوصيل في طريقه'; pSound = false; }
-        if (status === 'delivered') { statusText = 'تم توصيل طلبك بنجاح. شكراً لك!'; pSound = true; }
-        if (status === 'rejected') { statusText = `تم رفض الطلب: ${reason || ''}`; pSound = true; }
-        if (status === 'returned') { statusText = `تم إرجاع الطلب: ${reason || ''}`; pSound = true; }
-        if (status === 'replaced') { statusText = `تم استبدال الطلب: ${reason || ''}`; pSound = true; }
-
+        const statusText = resolveOrderStatusText(adminSettings, status, reason, 'ar');
+        const statusTextCkb = resolveOrderStatusText(adminSettings, status, reason, 'ckb');
+        const pSound = !['preparing', 'shipped'].includes(status);
         const orderLabel =
           order.orderNumber != null && Number.isFinite(Number(order.orderNumber))
             ? `#${order.orderNumber}`
             : id;
-        await addNotification({
-          userId: order.customerId,
-          role: 'customer',
-          type: 'order',
-          title: 'تحديث حالة الطلب',
-          message: `طلب رقم ${orderLabel}: ${statusText}`,
-          targetId: id,
-          sound: pSound
+        const orderContent = buildBilingualNotificationContent(adminSettings, 'customer.orderStatus', {
+          orderLabel,
+          statusText,
         });
+        // Prefer Kurdish status text inside the Kurdish body template
+        const orderContentCkb = buildNotificationContent(
+          adminSettings,
+          'customer.orderStatus',
+          { orderLabel, statusText: statusTextCkb },
+          { lang: 'ckb' },
+        );
+        if (orderContent) {
+          await addNotification({
+            userId: order.customerId,
+            role: 'customer',
+            type: 'order',
+            title: orderContent.title,
+            message: orderContent.message,
+            titleCkb: orderContentCkb?.title ?? orderContent.titleCkb,
+            messageCkb: orderContentCkb?.message ?? orderContent.messageCkb,
+            templateKey: orderContent.templateKey,
+            templateVars: { orderLabel, statusText, statusTextCkb },
+            targetId: id,
+            sound: pSound,
+            inAppSound: pSound,
+          });
+        }
       }
     } catch (e: unknown) {
       handleFirestoreError(e, OperationType.UPDATE, 'orders/' + id);
@@ -1917,7 +2351,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const requestPayout = async (amount: number, methodUsed: 'zain_cash' | 'mastercard', methodDetails: string) => {
     if (!currentMerchant) return;
     if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error('المبلغ المطلوب غير صالح');
+      throw new Error(tKey('errors.invalidPayoutAmount', 'المبلغ المطلوب غير صالح'));
     }
     try {
       const merchantId = currentMerchant.id;
@@ -1931,7 +2365,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           (secretsSnap.data() as { walletBalance?: number } | undefined)?.walletBalance ?? 0;
         if (amount > currentBalance) {
           throw new Error(
-            `رصيدك الحالي (${currentBalance.toLocaleString()} د.ع) أقل من المبلغ المطلوب`,
+            tKey(
+              'errors.insufficientWalletBalance',
+              `رصيدك الحالي (${currentBalance.toLocaleString()} د.ع) أقل من المبلغ المطلوب`,
+              { balance: currentBalance.toLocaleString() },
+            ),
           );
         }
         const req: PayoutRequest = {
@@ -1967,6 +2405,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await updateDoc(doc(db, 'promo_codes', id), { status: newStatus });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, 'promo_codes/' + id);
+      throw e;
     }
   };
 
@@ -1986,20 +2425,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const convertPointsToPromo = async (cid: string, pointsRequired: number) => {
     const customer = customers.find(c => c.id === cid) ?? (currentCustomer?.id === cid ? currentCustomer : null);
-    if (!customer || customer.points < pointsRequired) return { success: false, message: 'عذراً، نقاطك غير كافية ❌' };
+    if (!customer || customer.points < pointsRequired) return { success: false, message: tKey('errors.insufficientPoints', 'عذراً، نقاطك غير كافية ❌') };
     if (!authOwnsCustomer(customer)) {
-      return { success: false, message: 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول الاستبدال.' };
+      return { success: false, message: tKey('errors.sessionExpiredRedeem', 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول الاستبدال.') };
     }
 
     try {
       const fn = httpsCallable<
         { customerId: string; pointsRequired: number },
-        { success: boolean; code?: string; discount?: number }
+        {
+          success: boolean;
+          code?: string;
+          discount?: number;
+          expiresAt?: string;
+          maxUses?: number;
+          validityDays?: number;
+        }
       >(mahalakFunctions, 'convertPointsToPromoSecure');
       const result = await fn({ customerId: cid, pointsRequired });
       const data = result.data;
       if (!data?.success || !data.code) {
-        return { success: false, message: 'عذراً، حدث خطأ ما' };
+        return { success: false, message: tKey('errors.genericSorry', 'عذراً، حدث خطأ ما') };
       }
 
       // Optimistic: deduct points locally so UI reflects immediately
@@ -2018,12 +2464,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         code: data.code,
         discountType: 'amount',
         discountValue: data.discount ?? 0,
-        maxUses: 1,
+        maxUses: data.maxUses ?? 1,
+        maxGlobalUses: data.maxUses ?? 1,
         usedCount: 0,
+        currentGlobalUses: 0,
         status: 'active',
         source: 'points',
         ownerCustomerId: cid,
         createdAt: new Date().toISOString(),
+        expiresAt: data.expiresAt || null,
+        expirationDate: data.expiresAt || null,
+        validityDays: data.validityDays,
       } as PromoCode;
       setCustomerWalletPromos(prev => {
         const withoutDupes = prev.filter(p => p.code !== data.code);
@@ -2033,14 +2484,94 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // Refresh in background to get the real Firestore document
       refreshCustomerWalletPromos().catch(() => undefined);
 
-      return { success: true, message: 'تم التحويل بنجاح ✅', code: data.code };
+      return { success: true, message: tKey('errors.pointsConvertSuccess', 'تم التحويل بنجاح ✅'), code: data.code };
     } catch (e) {
       const code = (e as { code?: string })?.code ?? '';
       if (code === 'functions/permission-denied' || code === 'permission-denied') {
-        return { success: false, message: 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول الاستبدال.' };
+        return { success: false, message: tKey('errors.sessionExpiredRedeem', 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول الاستبدال.') };
       }
       handleFirestoreError(e, OperationType.WRITE, 'convert_points');
-      return { success: false, message: getCallableErrorMessage(e, 'عذراً، حدث خطأ ما') };
+      return { success: false, message: getCallableErrorMessage(e, tKey('errors.genericSorry', 'عذراً، حدث خطأ ما')) };
+    }
+  };
+
+  const spinLuckyWheel = async (cid: string) => {
+    const customer = customers.find((c) => c.id === cid) ?? (currentCustomer?.id === cid ? currentCustomer : null);
+    if (!customer) return { success: false, message: tKey('errors.spinLoginRequired', 'سجّل الدخول أولاً لتجربة عجلة الحظ.') };
+    if (!authOwnsCustomer(customer)) {
+      return { success: false, message: tKey('errors.sessionExpiredSpin', 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول التدوير.') };
+    }
+
+    try {
+      const fn = httpsCallable<
+        { customerId: string },
+        {
+          success: boolean;
+          optionId: string;
+          optionLabel: string;
+          prizeType: string;
+          pointsAwarded: number;
+          costPoints: number;
+          promoCode?: string | null;
+          externalDetails?: string | null;
+          pointsBalance: number;
+          spinsUsedToday: number;
+          dailyLimit: number;
+          resetPeriodHours?: number;
+          periodStartedAt?: number;
+          periodEndsAt?: number;
+          spinsRemaining: number | null;
+        }
+      >(mahalakFunctions, 'spinLuckyWheel');
+      const result = await fn({ customerId: cid });
+      const data = result.data;
+      if (!data?.success || !data.optionId) {
+        return { success: false, message: tKey('errors.spinFailed', 'تعذر تدوير العجلة') };
+      }
+
+      if (currentCustomer?.id === cid) {
+        setCurrentCustomerState({
+          ...currentCustomer,
+          points: Number(data.pointsBalance ?? currentCustomer.points),
+          spinWheelDailyCount: data.spinsUsedToday,
+          spinWheelPeriodStartedAt: data.periodStartedAt ?? Date.now(),
+          spinWheelDailyDate: new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Baghdad',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(new Date()),
+        } as typeof currentCustomer);
+      }
+
+      if (data.promoCode) {
+        const optimisticPromo: PromoCode = {
+          id: `promo_sw_optimistic_${Date.now()}`,
+          storeId: 'ALL_STORES',
+          code: data.promoCode,
+          discountType: data.prizeType === 'promo_percent' ? 'percent' : 'amount',
+          discountValue: 0,
+          maxUses: 1,
+          usedCount: 0,
+          status: 'active',
+          source: 'spin_wheel',
+          ownerCustomerId: cid,
+          createdAt: new Date().toISOString(),
+        } as PromoCode;
+        setCustomerWalletPromos((prev) => {
+          const withoutDupes = prev.filter((p) => p.code !== data.promoCode);
+          return [optimisticPromo, ...withoutDupes];
+        });
+        refreshCustomerWalletPromos().catch(() => undefined);
+      }
+
+      return { success: true, ...data };
+    } catch (e) {
+      const code = (e as { code?: string })?.code ?? '';
+      if (code === 'functions/permission-denied' || code === 'permission-denied') {
+        return { success: false, message: tKey('errors.sessionExpiredSpin', 'انتهت صلاحية الجلسة. سجّل الدخول مجدداً ثم حاول التدوير.') };
+      }
+      return { success: false, message: getCallableErrorMessage(e, tKey('errors.spinFailed', 'تعذر تدوير العجلة')) };
     }
   };
 
@@ -2048,20 +2579,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const fn = httpsCallable<
         { customerId: string; points: number; reason: string },
-        { pointsAwarded: number }
+        { pointsAwarded: number; skipped?: boolean }
       >(mahalakFunctions, 'awardCustomerPoints');
       const result = await fn({ customerId: cid, points: pts, reason });
-      const awarded = result.data?.pointsAwarded ?? pts;
-      if (currentCustomer?.id === cid) {
+      const awarded = Number(result.data?.pointsAwarded || 0);
+      if (awarded > 0 && currentCustomer?.id === cid) {
         setCurrentCustomerState({ ...currentCustomer, points: currentCustomer.points + awarded });
       }
+      return awarded;
     } catch (e) {
       const code =
         e && typeof e === 'object' && 'code' in e
           ? String((e as { code?: string }).code)
           : '';
-      if (code === 'functions/resource-exhausted') return;
+      if (code === 'functions/resource-exhausted') return 0;
       console.warn('[AppContext] addCustomerPoints:', e);
+      return 0;
     }
   };
 
@@ -2070,13 +2603,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     title: string,
     message: string,
     type = 'promo',
+    templateKey?: string,
   ) => {
     try {
       const fn = httpsCallable<
-        { storeId: string; title: string; message: string; type?: string },
+        { storeId: string; title: string; message: string; type?: string; templateKey?: string },
         { sent: number }
       >(mahalakFunctions, 'sendMerchantFollowerNotifications');
-      const result = await fn({ storeId, title, message, type });
+      const result = await fn({ storeId, title, message, type, templateKey });
       await refreshStoreAudience();
       return result.data?.sent ?? 0;
     } catch (e) {
@@ -2136,7 +2670,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return result.data?.cleared ?? orderIds.length;
     } catch (e) {
       console.warn('[AppContext] clearMerchantOrderInbox:', e);
-      throw new Error(getCallableErrorMessage(e) || 'تعذر تصفير القائمة');
+      throw new Error(getCallableErrorMessage(e) || tKey('errors.clearInboxFailed', 'تعذر تصفير القائمة'));
     }
   };
 
@@ -2148,8 +2682,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         mahalakFunctions,
         'getStoreAudience',
       );
-      const result = await fn({ storeId });
-      setCustomers(result.data?.customers ?? []);
+      // Sync server mirror only — `store_audience/.../members` listener is the UI source of truth.
+      // Writing customers here races the mirror and makes audience counts flicker.
+      await fn({ storeId });
     } catch (e) {
       console.warn('[AppContext] refreshStoreAudience:', e);
     }
@@ -2165,7 +2700,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }) => {
     const storeId = currentMerchant?.id;
     if (!storeId) {
-      throw new Error('يجب تسجيل الدخول كتاجر لإرسال الهدية.');
+      throw new Error(tKey('errors.loginRequiredGift', 'يجب تسجيل الدخول كتاجر لإرسال الهدية.'));
     }
     const fn = httpsCallable<
       {
@@ -2243,6 +2778,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (e) {
       setNotifications(prev);
       handleFirestoreError(e, OperationType.DELETE, 'notifications/' + id);
+      throw e;
     }
   };
 
@@ -2264,7 +2800,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (e) {
       setNotifications(prev);
       handleFirestoreError(e, OperationType.DELETE, 'delete_all_notifications');
-      return 0;
+      throw e;
     }
   };
 
@@ -2273,81 +2809,151 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await deleteDoc(doc(db, 'promo_codes', id));
     } catch (e) {
       handleFirestoreError(e, OperationType.DELETE, 'promo_codes/' + id);
+      throw e;
     }
   };
 
- const requestJoinFlashSale = async (request: Omit<FlashSaleRequest, 'id'>) => {
+  const requestJoinFlashSale = async (request: Omit<FlashSaleRequest, 'id'>) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      throw new Error(tKey('errors.loginRequiredFlashJoin', 'يجب تسجيل الدخول أولاً لإرسال طلب المشاركة.'));
+    }
+
+    const storeId = request.storeId || currentMerchant?.id;
+    if (!storeId) {
+      throw new Error(tKey('errors.storeIdMissing', 'تعذر تحديد المتجر. سجّل الدخول مجدداً ثم حاول مرة أخرى.'));
+    }
+
+    // Firestore rules: ownsStore(storeId) → stores/{id}.ownerId == auth.uid
+    if (currentMerchant?.ownerId !== uid || currentMerchant?.id !== storeId) {
+      const linked = await linkStoreToAuthSession(
+        currentMerchant
+          ? { ...currentMerchant, id: storeId }
+          : ({ id: storeId } as Store),
+      );
+      if (!linked || linked.ownerId !== uid) {
+        StorageService.remove('LOGGED_IN_MERCHANT_ID');
+        setCurrentMerchantState(null);
+        throw new Error(
+          tKey(
+            'errors.storeSessionExpiredFlash',
+            'انتهت صلاحية جلسة المتجر. سجّل الخروج ثم ادخل مجدداً بكلمة المرور لإرسال طلب المشاركة.',
+          ),
+        );
+      }
+      setCurrentMerchantState(linked);
+    }
+
     const id = 'fsr_' + Date.now();
+    const payload = Object.fromEntries(
+      Object.entries({
+        ...request,
+        id,
+        storeId,
+        status: request.status || 'pending',
+        createdAt: serverTimestamp(),
+      }).filter(([, v]) => v !== undefined),
+    );
+
     try {
-      await setDoc(doc(db, 'flash_sale_requests', id), { ...request, id, createdAt: serverTimestamp() });
-    } catch (e) {
+      await setDoc(doc(db, 'flash_sale_requests', id), payload);
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code ?? '';
+      if (code === 'permission-denied') {
+        throw new Error(
+          tKey(
+            'errors.flashJoinPermissionDenied',
+            'ليس لديك صلاحية إرسال طلب المشاركة. سجّل الخروج ثم ادخل مجدداً بكلمة المرور.',
+          ),
+        );
+      }
       handleFirestoreError(e, OperationType.CREATE, 'flash_sale_requests/' + id);
     }
   };
 
- const getCustomerSeqId = useCallback((id: string | undefined | null) => {
-    if (!id) return '';
-    const customer = customers.find((c) => c.id === id);
-    if (customer?.customerNumber != null && customer.customerNumber > 0) {
-      return formatCustomerSeqId(customer.customerNumber);
+  const orderSeqById = useMemo(() => {
+    const map = new Map<string, string>();
+    let needsLegacySort = false;
+    for (const order of orders) {
+      if (order?.orderNumber != null && Number.isFinite(Number(order.orderNumber))) {
+        map.set(order.id, String(order.orderNumber));
+      } else {
+        needsLegacySort = true;
+      }
     }
-    const sorted = [...customers].sort((a, b) => {
-      const getVal = (cust: Customer) => {
-        if (cust.joinedAt) return new Date(cust.joinedAt).getTime();
-        if ((cust as any).createdAt) {
-          const timestamp = (cust as any).createdAt;
-          if (timestamp && typeof timestamp.toMillis === 'function') {
+    if (needsLegacySort) {
+      const sorted = [...orders].sort((a, b) => {
+        const getVal = (o: Order) => {
+          if (!o.createdAt) return 0;
+          const timestamp = o.createdAt as unknown as {
+            toMillis?: () => number;
+            seconds?: number;
+          };
+          if (typeof timestamp?.toMillis === 'function') return timestamp.toMillis();
+          if (typeof timestamp?.seconds === 'number') return timestamp.seconds * 1000;
+          return new Date(String(o.createdAt)).getTime() || 0;
+        };
+        const valA = getVal(a);
+        const valB = getVal(b);
+        if (valA !== valB) return valA - valB;
+        return a.id.localeCompare(b.id);
+      });
+      sorted.forEach((o, index) => {
+        if (!map.has(o.id)) map.set(o.id, String(index + 1));
+      });
+    }
+    return map;
+  }, [orders]);
+
+  const customerSeqById = useMemo(() => {
+    const map = new Map<string, string>();
+    let needsLegacySort = false;
+    for (const customer of customers) {
+      if (customer?.customerNumber != null && customer.customerNumber > 0) {
+        map.set(customer.id, formatCustomerSeqId(customer.customerNumber));
+      } else {
+        needsLegacySort = true;
+      }
+    }
+    if (needsLegacySort) {
+      const sorted = [...customers].sort((a, b) => {
+        const getVal = (cust: Customer) => {
+          if (cust.joinedAt) return new Date(cust.joinedAt).getTime();
+          const timestamp = (cust as { createdAt?: { toMillis?: () => number; seconds?: number } | string }).createdAt;
+          if (timestamp && typeof timestamp === 'object' && typeof timestamp.toMillis === 'function') {
             return timestamp.toMillis();
           }
-          if (timestamp && typeof timestamp.seconds === 'number') {
+          if (timestamp && typeof timestamp === 'object' && typeof timestamp.seconds === 'number') {
             return timestamp.seconds * 1000;
           }
-          return new Date(timestamp).getTime();
-        }
-        if (cust.id.startsWith('cust_')) {
-          const num = parseInt(cust.id.substring(5));
-          if (!isNaN(num)) return num;
-        }
-        return 0;
-      };
-      const valA = getVal(a);
-      const valB = getVal(b);
-      if (valA !== valB) return valA - valB;
-      return a.id.localeCompare(b.id);
-    });
-    const index = sorted.findIndex(c => c.id === id);
-    return index !== -1 ? formatCustomerSeqId(index + 1) : '';
+          if (typeof timestamp === 'string') return new Date(timestamp).getTime() || 0;
+          if (cust.id.startsWith('cust_')) {
+            const num = parseInt(cust.id.substring(5), 10);
+            if (!Number.isNaN(num)) return num;
+          }
+          return 0;
+        };
+        const valA = getVal(a);
+        const valB = getVal(b);
+        if (valA !== valB) return valA - valB;
+        return a.id.localeCompare(b.id);
+      });
+      sorted.forEach((c, index) => {
+        if (!map.has(c.id)) map.set(c.id, formatCustomerSeqId(index + 1));
+      });
+    }
+    return map;
   }, [customers]);
+
+  const getCustomerSeqId = useCallback((id: string | undefined | null) => {
+    if (!id) return '';
+    return customerSeqById.get(id) || '';
+  }, [customerSeqById]);
 
   const getOrderSeqId = useCallback((id: string | undefined | null) => {
     if (!id) return '';
-    const order = orders.find(o => o.id === id);
-    if (order?.orderNumber != null && Number.isFinite(Number(order.orderNumber))) {
-      return String(order.orderNumber);
-    }
-    // Legacy fallback when orderNumber is missing (pre-sync orders).
-    const sorted = [...orders].sort((a, b) => {
-      const getVal = (o: Order) => {
-        if (o.createdAt) {
-          const timestamp = (o as any).createdAt;
-          if (timestamp && typeof timestamp.toMillis === 'function') {
-            return timestamp.toMillis();
-          }
-          if (timestamp && typeof timestamp.seconds === 'number') {
-            return timestamp.seconds * 1000;
-          }
-          return new Date(timestamp).getTime();
-        }
-        return 0;
-      };
-      const valA = getVal(a);
-      const valB = getVal(b);
-      if (valA !== valB) return valA - valB;
-      return a.id.localeCompare(b.id);
-    });
-    const index = sorted.findIndex(o => o.id === id);
-    return index !== -1 ? String(index + 1) : '';
-  }, [orders]);
+    return orderSeqById.get(id) || '';
+  }, [orderSeqById]);
 
   // Auto-restore customer only when Auth UID owns the document
   useEffect(() => {
@@ -2378,6 +2984,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!targetId || stores.length === 0) return;
     const found = stores.find(s => s.id === targetId);
     if (!found || found.status === 'suspended') return;
+
+    // جلسة دخول ناجحة حديثة — لا تُسقِطها بسبب كاش stores القديم
+    if (currentMerchant?.id === found.id && currentMerchant.ownerId === uid) {
+      return;
+    }
+
     if (found.ownerId === uid) {
       if (!currentMerchant || currentMerchant.id !== found.id || currentMerchant.ownerId !== uid) {
         setCurrentMerchantState({ ...found, ownerId: uid });
@@ -2385,11 +2997,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return;
     }
     void linkStoreToAuthSession(found).then((linked) => {
-      if (linked) {
+      if (linked?.ownerId === uid) {
         setCurrentMerchantState(linked);
-      } else if (!currentMerchant) {
-        setCurrentMerchantState(found);
+        return;
       }
+      // لا تُنشئ جلسة تاجر «يتيمة» بدون ownsStore — اطلب تسجيل الدخول مجدداً
+      StorageService.remove('LOGGED_IN_MERCHANT_ID');
+      setCurrentMerchantState(null);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stores]);
@@ -2422,32 +3036,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             );
 
             if (!hasExisting) {
-              const id = 'sub_alert_' + store.id + '_' + diffDays + '_' + store.subscriptionExpiry.replace(/[^0-9]/g, '');
-              let message = '';
-              let title = '';
+              const subKey =
+                diffDays === 7
+                  ? 'merchant.subscription.7days'
+                  : diffDays === 2
+                    ? 'merchant.subscription.2days'
+                    : 'merchant.subscription.1day';
+              const content = buildBilingualNotificationContent(adminSettings, subKey, {
+                ownerName: store.ownerName,
+                shopName: store.shopName,
+                expiryDate: store.subscriptionExpiry,
+              });
+              if (!content) continue;
 
-              if (diffDays === 7) {
-                title = '⚠️ اقتراب انتهاء الاشتراك (7 أيام)';
-                message = 'مرحباً ' + store.ownerName + '، ينتهي اشتراك متجرك المميز "' + store.shopName + '" خلال 7 أيام بتاريخ ' + store.subscriptionExpiry + '. يرجى التجديد الآن لضمان بقاء المتجر مفعلاً واستمرار تلقي الطلبات.';
-              } else if (diffDays === 2) {
-                title = '🚨 تنبيه هام: يومين فقط لانتهاء الاشتراك!';
-                message = 'عزيزي التاجر، اشتراكك سينتهي بعد 48 ساعة فقط (' + store.subscriptionExpiry + '). لم يتلقى المتجر أي تجديد بعد. يرجى تجديد اشتراكك فوراً تلافياً لتعليق المتجر أو إخفاء منتجاتك عن زبائنك.';
-              } else if (diffDays === 1) {
-                title = '🔥 تنبيه حرج جداً: اشتراكك ينتهي غداً!';
-                message = 'انتباه! غداً سيتم وقف اشتراك متجر "' + store.shopName + '" تلقائياً. الموعد النهائي هو ' + store.subscriptionExpiry + '. يرجى تجديد الباقة فوراً لمنع تعليق المتجر.';
-              }
-
+              const id =
+                'sub_alert_' +
+                store.id +
+                '_' +
+                diffDays +
+                '_' +
+                store.subscriptionExpiry.replace(/[^0-9]/g, '');
               const n = {
                 id,
                 userId: store.id,
                 role: 'merchant' as const,
-                title,
-                message,
+                title: content.title,
+                message: content.message,
+                titleCkb: content.titleCkb,
+                messageCkb: content.messageCkb,
+                templateKey: content.templateKey,
+                templateVars: content.templateVars,
                 read: false,
                 createdAt: new Date().toISOString(),
                 type: 'subscription' as const,
                 targetId: String(diffDays),
-                objectId: store.subscriptionExpiry
+                objectId: store.subscriptionExpiry,
+                ...notificationDeliveryFields(adminSettings, subKey),
               };
 
               await setDoc(doc(db, 'notifications', id), n);
@@ -2474,10 +3098,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!uid) return;
     if (authOwnsCustomer(currentCustomer)) return;
 
-    console.warn('[AppContext] customer session desynced from Auth — clearing local session');
-    StorageService.remove('LOGGED_IN_CUSTOMER_ID');
-    setCurrentCustomerState(null);
-    setCustomerWalletPromos([]);
+    const clearDesyncedSession = () => {
+      console.warn('[AppContext] customer session desynced from Auth — clearing local session');
+      StorageService.remove('LOGGED_IN_CUSTOMER_ID');
+      setCurrentCustomerState(null);
+      setCustomerWalletPromos([]);
+    };
+
+    // Right after login the Firestore cache can briefly report the previous authUid.
+    const remaining = customerSessionGraceUntilRef.current - Date.now();
+    if (remaining > 0) {
+      const timer = window.setTimeout(() => {
+        const liveUid = auth.currentUser?.uid;
+        setCurrentCustomerState((prev) => {
+          if (!prev?.id || !liveUid) return prev;
+          if (prev.id === liveUid || prev.authUid === liveUid) return prev;
+          console.warn('[AppContext] customer session desynced from Auth — clearing local session');
+          StorageService.remove('LOGGED_IN_CUSTOMER_ID');
+          setCustomerWalletPromos([]);
+          return null;
+        });
+      }, remaining + 100);
+      return () => window.clearTimeout(timer);
+    }
+
+    clearDesyncedSession();
   }, [authInitialized, authLoading, currentCustomer, authOwnsCustomer]);
 
   useEffect(() => {
@@ -2501,7 +3146,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setCurrentCustomer, setCurrentMerchant, logoutSession, deleteUserAccountSecure,
       registerCustomer, lookupCustomerByPhone, checkPhoneAvailable, checkUsernameAvailable, verifyCustomerLogin, verifyMerchantLogin, linkCustomerAuthUid, updateCustomerProfile, resetCustomerPasswordSecure, resetStorePasswordSecure,
       validatePromoCode, refreshCustomerWalletPromos,
-      toggleFollowStore, toggleStoreNotification, placeOrder, convertPointsToPromo, addCustomerPoints,
+      toggleFollowStore, toggleStoreNotification, placeOrder, releaseOrderToMerchant, convertPointsToPromo, spinLuckyWheel, addCustomerPoints,
       submitStoreReview, submitProductReview, updateStoreReview, deleteStoreReview,
       registerMerchant, refreshStore, subscribeToStore, updateStoreProfile, addProduct, updateProduct, deleteProduct,
       createPromoCode, updatePromoCode, togglePromoCodeStatus, updateOrder, updateOrderStatus, requestPayout,
@@ -2515,9 +3160,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       refreshStoreAudience,
     ]);
 
+  const authSessionValue = useMemo(
+    () => ({
+      currentCustomer,
+      currentMerchant,
+      authLoading,
+      authInitialized,
+    }),
+    [currentCustomer, currentMerchant, authLoading, authInitialized],
+  );
+
   return (
-    <AppContext.Provider value={contextValue}>
-      {!authLoading ? children : (
+    <AuthSessionContext.Provider value={authSessionValue}>
+      <AppContextStore.Provider value={contextValue}>
+        {!authLoading ? children : (
         <div className="fixed inset-0 w-full h-full z-50 flex flex-col items-center justify-center bg-[#0B1320]">
           {/* Subtle brand ambient blobs */}
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -2565,7 +3221,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             </motion.div>
           </motion.div>
         </div>
-      )}
-    </AppContext.Provider>
+        )}
+      </AppContextStore.Provider>
+    </AuthSessionContext.Provider>
   );
 };

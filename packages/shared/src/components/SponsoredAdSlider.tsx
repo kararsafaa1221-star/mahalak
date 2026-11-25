@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import {
   getSponsoredAdBadge,
   getSponsoredAdDesc,
@@ -42,10 +43,13 @@ export function SponsoredAdSlider({
   onAdClick,
   className = '',
   size = 'full',
-  defaultTitle = 'اكتشف أفضل العروض في منطقتك!',
-  defaultDesc = 'تسوّق الآن مع محلك',
+  defaultTitle,
+  defaultDesc,
   badgeLabel,
 }: SponsoredAdSliderProps) {
+  const { t } = useTranslation();
+  const resolvedDefaultTitle = defaultTitle ?? t('ads.defaultTitle');
+  const resolvedDefaultDesc = defaultDesc ?? t('ads.defaultDesc');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
@@ -121,8 +125,8 @@ export function SponsoredAdSlider({
       {stackedSlides.map(({ ad, idx }) => {
         const isActive = idx === currentIndex;
         const isClickable = Boolean(onAdClick) && isSponsoredAdClickable(ad);
-        const title = getSponsoredAdTitle(ad, defaultTitle);
-        const desc = getSponsoredAdDesc(ad, defaultDesc);
+        const title = getSponsoredAdTitle(ad, resolvedDefaultTitle);
+        const desc = getSponsoredAdDesc(ad, resolvedDefaultDesc);
         const slideBadge = getSponsoredAdBadge(ad, badgeLabel);
         return (
         <div
@@ -138,7 +142,7 @@ export function SponsoredAdSlider({
             key={ad.url || `slide-${idx}`}
             src={ad.url || undefined}
             className="w-full h-full object-cover transition-transform duration-[8s] ease-out group-hover:scale-110 filter brightness-[0.85] contrast-[1.05]"
-            alt={title || 'إعلان ممول'}
+            alt={title || t('ads.sponsoredAlt')}
             draggable={false}
           />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-black/10 flex flex-col justify-end p-2.5 sm:p-3.5 md:p-4">
@@ -182,7 +186,7 @@ export function SponsoredAdSlider({
               prevAd();
             }}
             className="sponsored-ad-slider__nav sponsored-ad-slider__nav--prev w-9 h-9 sm:w-11 sm:h-11 bg-black/20 hover:bg-vibrant-purple text-white hover:scale-105 backdrop-blur-md rounded-full transition-all duration-300 flex items-center justify-center border border-white/20 shadow-lg cursor-pointer md:opacity-0 md:group-hover:opacity-100"
-            aria-label="السابق"
+            aria-label={t('common.previous')}
           >
             <ChevronRight size={20} className="stroke-[3] sm:w-[22px] sm:h-[22px]" />
           </button>
@@ -193,7 +197,7 @@ export function SponsoredAdSlider({
               nextAd();
             }}
             className="sponsored-ad-slider__nav sponsored-ad-slider__nav--next w-9 h-9 sm:w-11 sm:h-11 bg-black/20 hover:bg-vibrant-purple text-white hover:scale-105 backdrop-blur-md rounded-full transition-all duration-300 flex items-center justify-center border border-white/20 shadow-lg cursor-pointer md:opacity-0 md:group-hover:opacity-100"
-            aria-label="التالي"
+            aria-label={t('common.next')}
           >
             <ChevronLeft size={20} className="stroke-[3] sm:w-[22px] sm:h-[22px]" />
           </button>
@@ -210,7 +214,7 @@ export function SponsoredAdSlider({
               goToIndex(idx);
             }}
             className={`h-2 rounded-full transition-all duration-300 cursor-pointer ${idx === currentIndex ? 'w-6 bg-vibrant-purple' : 'w-2 bg-white/50 hover:bg-white'}`}
-            aria-label={`شريحة ${idx + 1}`}
+            aria-label={t('ads.slideAria', { number: idx + 1 })}
           />
         ))}
       </div>

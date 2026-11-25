@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getFunctions } from 'firebase/functions';
+import { httpsCallable } from './callMahalakFunction';
 import { doc, setDoc } from 'firebase/firestore';
 import { app, auth, db } from './firebase';
 import { requestAndroidNotificationPermission } from './permissions';
@@ -303,6 +304,14 @@ export async function createNotificationChannels() {
       importance: 5,
       visibility: 1,
       vibration: true,
+    });
+    await PushNotifications.createChannel({
+      id: 'admin_broadcasts_silent',
+      name: 'إشعارات الإدارة (صامت)',
+      description: 'رسائل من لوحة الأدمن مُعرَّفة كصامتة من مركز الإشعارات',
+      importance: 2,
+      visibility: 1,
+      vibration: false,
     });
   } catch {
     notificationChannelsCreated = false;

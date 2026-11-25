@@ -32,8 +32,10 @@ export type CustomerBackSnapshot = {
   showPrivacyPolicy: boolean;
   showAboutUs: boolean;
   showMyInfo: boolean;
+  showAccountSettings: boolean;
   showSavedLocations: boolean;
   showWallet: boolean;
+  showSpinWheel: boolean;
   showOrderSuccess: boolean;
   showPasswordChange: boolean;
   showStoreProductCategories: boolean;
@@ -63,8 +65,10 @@ export type CustomerBackActions = {
   setShowPrivacyPolicy: (show: boolean) => void;
   setShowAboutUs: (show: boolean) => void;
   setShowMyInfo: (show: boolean) => void;
+  setShowAccountSettings: (show: boolean) => void;
   setShowSavedLocations: (show: boolean) => void;
   setShowWallet: (show: boolean) => void;
+  setShowSpinWheel: (show: boolean) => void;
   setShowOrderSuccess: (show: boolean) => void;
   setShowPasswordChange: (show: boolean) => void;
   setShowStoreProductCategories: (show: boolean) => void;
@@ -266,8 +270,16 @@ export function useCustomerAndroidBack({
         a.setShowMyInfo(false);
         return true;
       }
+      if (snapshot.showAccountSettings) {
+        a.setShowAccountSettings(false);
+        return true;
+      }
       if (snapshot.showWallet) {
         a.setShowWallet(false);
+        return true;
+      }
+      if (snapshot.showSpinWheel) {
+        a.setShowSpinWheel(false);
         return true;
       }
       if (snapshot.showPasswordChange) {

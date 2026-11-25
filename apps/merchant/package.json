@@ -1,7 +1,7 @@
 {
   "name": "@mahalak/merchant",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.14",
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.config.ts",
@@ -10,8 +10,10 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.1.0",
+    "@capacitor/browser": "^8.0.4",
     "@capacitor/geolocation": "^8.2.0",
     "@capacitor/push-notifications": "^8.1.1",
+    "html-to-image": "^1.11.13",
     "onesignal-cordova-plugin": "^5.4.0"
   }
 }

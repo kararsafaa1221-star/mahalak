@@ -1,46 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import { RefreshCw, WifiOff } from 'lucide-react';
+import { WifiOff, RefreshCw } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { probeNetwork } from '../hooks/useNetworkStatus';
 
 interface OnlineGateProps {
   children: React.ReactNode;
 }
 
-// يمنع استخدام التطبيق بدون انترنت حتى تكون النسخة Online بالكامل.
+/** Optional hard gate — production apps use NetworkStatusBanner (soft) instead. */
 export const OnlineGate: React.FC<OnlineGateProps> = ({ children }) => {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
-  // navigator.onLine وحده غير كاف داخل Android WebView، لذلك نعمل طلب حقيقي للانترنت.
   const checkRealConnection = async () => {
-    if (!navigator.onLine) {
-      setStatus('offline');
-      return false;
-    }
-
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 6000);
-
-    try {
-      await fetch(`https://www.gstatic.com/generate_204?t=${Date.now()}`, {
-        method: 'GET',
-        mode: 'no-cors',
-        cache: 'no-store',
-        signal: controller.signal
-      });
-      setStatus('online');
-      return true;
-    } catch {
-      setStatus('offline');
-      return false;
-    } finally {
-      window.clearTimeout(timeout);
-    }
+    const online = await probeNetwork(6000);
+    setStatus(online ? 'online' : 'offline');
+    return online;
   };
 
   useEffect(() => {
-    const initConnection = async () => {
-      await checkRealConnection();
-    };
-    initConnection();
+    void checkRealConnection();
 
     const handleOnline = () => {
       setStatus('checking');
@@ -80,19 +59,17 @@ export const OnlineGate: React.FC<OnlineGateProps> = ({ children }) => {
         <div className="w-16 h-16 rounded-2xl bg-red-500/20 text-red-300 flex items-center justify-center mx-auto mb-5">
           <WifiOff size={34} />
         </div>
-        <h1 className="text-2xl font-black mb-2">لا يوجد اتصال بالانترنت</h1>
+        <h1 className="text-2xl font-black mb-2">{t('network.offline')}</h1>
         <p className="text-sm text-slate-300 leading-relaxed mb-6">
-          {status === 'checking'
-            ? 'جار التحقق من الاتصال بالخادم...'
-            : 'تطبيق محلك يعمل Online بالكامل ويحتاج اتصال انترنت حقيقي حتى يتم تحميل البيانات وحفظها في قاعدة البيانات.'}
+          {status === 'checking' ? t('network.checking') : t('network.weak')}
         </p>
         <button
           onClick={recheckConnection}
           disabled={status === 'checking'}
-          className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold flex items-center justify-center gap-2 transition"
+          className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold flex items-center justify-center gap-2 transition touch-target"
         >
           <RefreshCw size={18} className={status === 'checking' ? 'animate-spin' : ''} />
-          <span>{status === 'checking' ? 'جار التحقق...' : 'إعادة المحاولة'}</span>
+          <span>{status === 'checking' ? t('network.checking') : t('common.retry')}</span>
         </button>
       </div>
     </div>

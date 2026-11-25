@@ -13,6 +13,7 @@ export const CAPACITOR_ALLOW_NAVIGATION = [
   'gstatic.com',
   'cdn.onesignal.com',
   'onesignal.com',
+  'staticimgly.com',
   'openstreetmap.org',
   'tile.openstreetmap.org',
   'cdnjs.cloudflare.com',

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Copy, Check } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface CopyButtonProps {
   text: string | null | undefined;
@@ -8,6 +9,7 @@ interface CopyButtonProps {
 }
 
 export const CopyButton: React.FC<CopyButtonProps> = ({ text, className = "", size = 12 }) => {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async (e: React.MouseEvent) => {
@@ -42,7 +44,7 @@ export const CopyButton: React.FC<CopyButtonProps> = ({ text, className = "", si
       onClick={handleCopy}
       type="button"
       className={`inline-flex items-center justify-center p-1 rounded-md text-slate-400 hover:text-purple-600 hover:bg-purple-50 active:scale-90 transition-all cursor-pointer ${className}`}
-      title={copied ? "تم النسخ!" : "نسخ الكود"}
+      title={copied ? t('common.copied') : t('common.copy')}
     >
       {copied ? (
         <Check size={size} className="text-emerald-500 scale-110 transition-transform duration-200" />

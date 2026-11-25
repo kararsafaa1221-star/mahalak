@@ -1,9 +1,17 @@
-import { httpsCallable } from 'firebase/functions';
+import { getMahalakCallableError, httpsCallable } from './callMahalakFunction';
 import { auth, mahalakFunctions } from './firebase';
 import type { Store } from '@shared/types';
 
 async function refreshAuthToken(): Promise<void> {
   await auth.currentUser?.getIdToken(true);
+}
+
+async function readMerchantStoreClaim(): Promise<string | undefined> {
+  const user = auth.currentUser;
+  if (!user) return undefined;
+  const token = await user.getIdTokenResult();
+  const claim = token.claims.merchantStoreId;
+  return claim != null ? String(claim) : undefined;
 }
 
 /** Links a store document to the current Firebase Auth session (ownerId + Storage claims). */
@@ -46,12 +54,44 @@ export async function ensureStoreSessionForStorage(storeId: string): Promise<voi
     mahalakFunctions,
     'syncStoreOwnerSession',
   );
-  const result = await sync({ storeId });
+
+  let result: { data?: { success: boolean; ownerId: string } };
+  try {
+    result = await sync({ storeId });
+  } catch (error) {
+    throw new Error(
+      getMahalakCallableError(
+        error,
+        'تعذر ربط المتجر بالجلسة. تحقق من الإنترنت ثم سجّل الدخول مرة أخرى.',
+      ),
+    );
+  }
+
   await refreshAuthToken();
   const linkedOwnerId = result.data?.ownerId ?? uid;
 
   if (linkedOwnerId !== uid) {
     throw new Error('تعذر ربط المتجر بجلسة Firebase. يرجى تسجيل الدخول مرة أخرى.');
+  }
+
+  let claimStoreId = await readMerchantStoreClaim();
+  if (claimStoreId !== String(storeId)) {
+    try {
+      await sync({ storeId });
+      await refreshAuthToken();
+      claimStoreId = await readMerchantStoreClaim();
+    } catch (error) {
+      throw new Error(
+        getMahalakCallableError(
+          error,
+          'تعذر تفعيل صلاحية رفع الصور. سجّل الخروج ثم ادخل مجدداً.',
+        ),
+      );
+    }
+  }
+
+  if (claimStoreId !== String(storeId)) {
+    throw new Error('صلاحية رفع الصور غير مفعّلة لهذا المتجر. سجّل الخروج ثم ادخل مجدداً بكلمة المرور.');
   }
 }
 

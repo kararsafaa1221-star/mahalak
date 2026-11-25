@@ -29,9 +29,9 @@ import { handleFirestoreError, OperationType } from '@shared/lib/firestoreUtils'
 import { BLOCKED_PHONES, type BlockedPhoneRecord } from '@shared/lib/uniquenessRegistry';
 import { setupPushNotifications } from '../lib/pushNotifications';
 import { warnIfOneSignalNotConfigured } from '../lib/onesignalConfig';
-import { getAdminAuthErrorMessage, verifyDashboardAdmin, mapAdminDoc } from '../lib/adminAuth';
+import { getAdminAuthErrorMessage, verifyDashboardAdmin, mapAdminDoc, isOutsideWorkHours } from '../lib/adminAuth';
+import { showToast } from '../utils/alerts';
 import { syncAdminStorageClaims } from '@shared/lib/storeAuth';
-import type { DashboardAdminRole } from '../lib/adminAuth';
 import {
   canAccessTab as checkTabAccess,
   hasPermission,
@@ -39,6 +39,7 @@ import {
   canModifyAdminRecord,
   canDeleteAdminRecord,
   canReadActivityLogs,
+  capPermissionsToActor,
   resolvePermissions,
   type AdminPanelTab,
   type DashboardPermission,
@@ -47,7 +48,11 @@ import { buildAdminActor } from '../lib/adminActionRunner';
 import { formatCustomerSeqId } from '@shared/utils/customerId';
 import { buildLocalizedLogFields } from '../lib/activityLogI18n';
 import { logActivity } from '../services/activityLogger';
-import { createAdminService, type AdminServiceContext } from '../services/adminService';
+import {
+  createAdminService,
+  type AdminServiceContext,
+  type ReadyMadeNotificationTarget,
+} from '../services/adminService';
 import {
   createUserAccount,
   updateUserAccount,
@@ -82,7 +87,7 @@ export interface AdminContextType {
   adminEmail: string | null;
   adminUid: string | null;
   currentAdminDoc: Admin | null;
-  adminRole: DashboardAdminRole | null;
+  adminRole: string | null;
   adminPermissions: DashboardPermission[];
   adminStaff: Admin[];
   activityLogs: ActivityLog[];
@@ -91,7 +96,8 @@ export interface AdminContextType {
   updateAdminStaff: (
     uid: string,
     data: {
-      role: DashboardAdminRole;
+      /** One of the 5 built-in roles, or a custom role id (settings/global.customRoles). */
+      role: string;
       permissions?: string[];
       name?: string;
       status?: string;
@@ -99,12 +105,18 @@ export interface AdminContextType {
       province?: string;
       area?: string;
       isSuspended?: boolean;
+      photoUrl?: string;
+      isTimeRestricted?: boolean;
+      workStartTime?: string;
+      workEndTime?: string;
     },
   ) => Promise<void>;
   createAdminStaff: (data: CreateAdminAccountPayload) => Promise<{ uid: string }>;
   toggleAdminStatus: (uid: string, active: boolean) => Promise<void>;
   deleteAdminStaff: (uid: string) => Promise<void>;
   updateAdminCredentials: (uid: string, data: { email?: string; password?: string }) => Promise<void>;
+  /** Self-service — every staff member (including the owner) may update their own name/photo, regardless of role permissions. */
+  updateMyProfile: (data: { name?: string; photoUrl?: string }) => Promise<void>;
   logAdminActivity: (action: string, details?: string) => Promise<void>;
   adminSettings: any;
   subscriptionPlans: SubscriptionPlan[];
@@ -129,6 +141,11 @@ export interface AdminContextType {
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: (userId: string, role: 'customer' | 'merchant' | 'admin') => void;
   sendAdminNotification: (t: string, m: string, target: string) => Promise<void>;
+  sendReadyMadeNotification: (
+    templateKey: string,
+    target: ReadyMadeNotificationTarget,
+    manualVars: Record<string, string>,
+  ) => Promise<void>;
 
   // Orders
   updateOrder: (id: string, data: Partial<Order>) => Promise<void>;
@@ -169,6 +186,10 @@ export interface AdminContextType {
   createFlashSale: (data: Omit<FlashSale, 'id'>) => Promise<void>;
   updateFlashSaleStatus: (id: string, status: FlashSale['status']) => void;
   updateFlashSaleDates: (id: string, startTime: string, endTime: string) => void;
+  updateFlashSale: (
+    id: string,
+    data: Partial<Pick<FlashSale, 'title' | 'description' | 'startTime' | 'endTime' | 'status'>>,
+  ) => Promise<void>;
   deleteFlashSale: (id: string) => void;
   requestJoinFlashSale: (request: Omit<FlashSaleRequest, 'id'>) => Promise<void>;
   updateFlashSaleRequestStatus: (id: string, status: FlashSaleRequest['status']) => void;
@@ -210,7 +231,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
   const [adminUid, setAdminUid] = useState<string | null>(null);
   const [currentAdminDoc, setCurrentAdminDoc] = useState<Admin | null>(null);
-  const [adminRole, setAdminRole] = useState<DashboardAdminRole | null>(null);
+  const [adminRole, setAdminRole] = useState<string | null>(null);
   const [adminPermissions, setAdminPermissions] = useState<DashboardPermission[]>([]);
   const [adminStaff, setAdminStaff] = useState<Admin[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
@@ -219,9 +240,9 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [adminSettings, setAdminSettings] = useState<any>(() =>
     StorageService.get('ADMIN_SETTINGS') || {
       autoApproveStores: true,
-      featuredStoreIds: [],
-      enableAutoNearby: true,
-      nearbyStoreIds: [],
+      enableVerifiedStoresCarousel: true,
+      verifiedStoresCarouselInterval: 4,
+      verifiedStoresCarouselExcludeIds: [],
       ads: [],
       adInterval: 5,
       merchantAdInterval: 5,
@@ -296,7 +317,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const updateAdminStaff = async (
     uid: string,
     data: {
-      role: DashboardAdminRole;
+      role: string;
       permissions?: string[];
       name?: string;
       status?: string;
@@ -304,6 +325,10 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       province?: string;
       area?: string;
       isSuspended?: boolean;
+      photoUrl?: string;
+      isTimeRestricted?: boolean;
+      workStartTime?: string;
+      workEndTime?: string;
     },
   ) => {
     const target = adminStaff.find((member) => member.id === uid);
@@ -319,6 +344,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       ...(data.phone !== undefined ? { phone: data.phone } : {}),
       ...(data.province !== undefined ? { province: data.province } : {}),
       ...(data.area !== undefined ? { area: data.area } : {}),
+      ...(data.photoUrl !== undefined ? { photoUrl: data.photoUrl } : {}),
       updatedAt: serverTimestamp(),
     };
     if (data.status !== undefined) payload.status = data.status;
@@ -329,7 +355,19 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     }
     if (data.permissions !== undefined) {
-      payload.permissions = data.permissions;
+      // Nobody with adminManagement access can grant a page they don't have
+      // access to themself — owner is exempt (always full access).
+      payload.permissions = capPermissionsToActor(currentAdminDoc, data.permissions as DashboardPermission[]);
+    }
+    // Time restriction never applies to the owner — ignore it silently for that role.
+    if (data.role !== 'owner') {
+      if (data.isTimeRestricted !== undefined) payload.isTimeRestricted = data.isTimeRestricted;
+      if (data.workStartTime !== undefined) payload.workStartTime = data.workStartTime;
+      if (data.workEndTime !== undefined) payload.workEndTime = data.workEndTime;
+    } else {
+      payload.isTimeRestricted = false;
+      payload.workStartTime = '';
+      payload.workEndTime = '';
     }
     await adminService.updateStaff(uid, payload, staffLogMeta(uid));
   };
@@ -341,7 +379,14 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (data.role === 'owner' && currentAdminDoc?.role !== 'owner') {
       throw new Error('Only owner can create owner accounts.');
     }
-    const result = await adminService.createStaff(data.email, () => createUserAccount(data));
+    // Nobody with adminManagement access can grant a page they don't have
+    // access to themself — owner is exempt (always full access). The Cloud
+    // Function re-validates this server-side too.
+    const cappedData: CreateAdminAccountPayload = {
+      ...data,
+      permissions: data.permissions ? capPermissionsToActor(currentAdminDoc, data.permissions as DashboardPermission[]) : data.permissions,
+    };
+    const result = await adminService.createStaff(cappedData.email, () => createUserAccount(cappedData));
     return { uid: result.uid };
   };
 
@@ -368,6 +413,21 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
     if (!data.email && !data.password) return;
     await adminService.updateStaffCredentials(uid, () => updateUserAccount({ uid, ...data }), staffLogMeta(uid));
+  };
+
+  // Self-service profile edit — deliberately bypasses canModifyAdminRecord /
+  // canAccessAdminManagement: every staff member (owner included) may always
+  // update their own name and photo, even without adminManagement access.
+  const updateMyProfile = async (data: { name?: string; photoUrl?: string }) => {
+    if (!adminUid) {
+      throw new Error('You must be signed in to update your profile.');
+    }
+    const payload: Record<string, unknown> = {};
+    if (data.name !== undefined) payload.name = data.name;
+    if (data.photoUrl !== undefined) payload.photoUrl = data.photoUrl;
+    if (Object.keys(payload).length === 0) return;
+    await updateDoc(doc(db, 'admins', adminUid), payload);
+    setCurrentAdminDoc((prev) => (prev ? { ...prev, ...payload } as Admin : prev));
   };
 
   // ==========================================
@@ -447,6 +507,55 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (!currentAdmin || !adminUid) return;
     void setupPushNotifications(adminUid, 'admins');
   }, [currentAdmin, adminUid]);
+
+  // ==========================================
+  // Presence heartbeat — self-only write, applies to every dashboard staff
+  // including the owner (this is not "editing admin data", just an ephemeral
+  // online-status ping scoped to the signed-in user's own document).
+  // ==========================================
+  useEffect(() => {
+    if (!currentAdmin || !adminUid) return;
+
+    const pingOnline = () => {
+      updateDoc(doc(db, 'admins', adminUid), {
+        isOnline: true,
+        lastActiveAt: serverTimestamp(),
+      }).catch(() => undefined);
+    };
+
+    pingOnline();
+    const heartbeat = setInterval(pingOnline, 45_000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') pingOnline();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [currentAdmin, adminUid]);
+
+  // ==========================================
+  // Time-restriction enforcement — force logout mid-session the moment the
+  // clock leaves the allowed work-hours window. Never applies to the owner
+  // (guarded inside isOutsideWorkHours itself).
+  // ==========================================
+  useEffect(() => {
+    if (!currentAdmin || !currentAdminDoc) return;
+
+    const checkWorkHours = () => {
+      if (isOutsideWorkHours(currentAdminDoc)) {
+        showToast('warning', 'تم تسجيل الخروج تلقائياً', 'انتهت ساعات العمل المسموح بها لحسابك.');
+        signOut(auth).catch(() => undefined);
+      }
+    };
+
+    checkWorkHours();
+    const interval = setInterval(checkWorkHours, 30_000);
+    return () => clearInterval(interval);
+  }, [currentAdmin, currentAdminDoc]);
 
   useEffect(() => {
     if (!currentAdmin || !canAccessAdminManagement(currentAdminDoc)) {
@@ -529,7 +638,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const fn = httpsCallable(getFunctions(app), 'listDashboardCustomers');
         const result = await fn();
         const rows = Array.isArray(result.data) ? result.data : [];
-        setCustomers(rows as Customer[]);
+        setCustomers((rows as Customer[]).filter((c) => !c.isDeleted));
       } catch (e) {
         console.warn('[AdminContext] listDashboardCustomers failed:', e);
       }
@@ -537,7 +646,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     const unsubStores = onSnapshot(
       query(collection(db, 'stores'), limit(ADMIN_STORES_LIMIT)),
-      snap => setStores(mapDocs<Store>(snap)),
+      snap => setStores(mapDocs<Store>(snap).filter((s) => !s.isDeleted)),
     );
 
     const unsubProducts = onSnapshot(
@@ -550,7 +659,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     // the initial load and avoids a duplicate full-collection fetch on login.
     const unsubCust = onSnapshot(
       query(collection(db, 'customers'), limit(ADMIN_CUSTOMERS_LIMIT)),
-      (snap) => setCustomers(mapDocs<Customer>(snap)),
+      (snap) => setCustomers(mapDocs<Customer>(snap).filter((c) => !c.isDeleted)),
       (err) => {
         console.warn('[AdminContext] customers listener error, falling back to callable:', err);
         void loadCustomersViaFunction();
@@ -653,6 +762,9 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const adminLogout = async () => {
     try {
+      if (adminUid) {
+        await updateDoc(doc(db, 'admins', adminUid), { isOnline: false, lastActiveAt: serverTimestamp() }).catch(() => undefined);
+      }
       await signOut(auth);
     } catch (e) {
     }
@@ -772,6 +884,14 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const sendAdminNotification = async (t: string, m: string, target: string) => {
     await adminService.sendBroadcast(t, m, target, buildSvcCtx());
+  };
+
+  const sendReadyMadeNotification = async (
+    templateKey: string,
+    target: ReadyMadeNotificationTarget,
+    manualVars: Record<string, string>,
+  ) => {
+    await adminService.sendReadyMadeNotification(templateKey, target, manualVars, buildSvcCtx());
   };
 
   // ==========================================
@@ -987,6 +1107,17 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  const updateFlashSale = async (
+    id: string,
+    data: Partial<Pick<FlashSale, 'title' | 'description' | 'startTime' | 'endTime' | 'status'>>,
+  ) => {
+    try {
+      await adminService.updateFlashSale(id, data, buildSvcCtx());
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, 'flash_sales/' + id);
+    }
+  };
+
   const deleteFlashSale = async (id: string) => {
     try {
       await adminService.deleteFlashSale(id, buildSvcCtx());
@@ -1148,12 +1279,12 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       notifications, payoutRequests, flashSales, flashSaleRequests, storeReviews,
       currentAdmin, adminEmail, adminUid, currentAdminDoc, adminRole, adminPermissions, adminStaff,
       activityLogs, hasPermission: hasPermissionFn, canAccessTab, updateAdminStaff,
-      createAdminStaff, toggleAdminStatus, deleteAdminStaff, updateAdminCredentials,
+      createAdminStaff, toggleAdminStatus, deleteAdminStaff, updateAdminCredentials, updateMyProfile,
       logAdminActivity,
       adminSettings, subscriptionPlans, authLoading,
       getCustomerSeqId, getOrderSeqId, setOrders,
       adminLogin, adminLogout, setCurrentAdmin, setCurrentCustomer, setCurrentMerchant,
-      addNotification, addBulkNotifications, markNotificationAsRead, markAllNotificationsAsRead, sendAdminNotification,
+      addNotification, addBulkNotifications, markNotificationAsRead, markAllNotificationsAsRead, sendAdminNotification, sendReadyMadeNotification,
       updateOrder, updateOrderStatus, completePayout,
       createPromoCode, updatePromoCode, togglePromoCodeStatus, deletePromoCode,
       generateRechargeCodes, redeemRechargeCode, deleteRechargeCode,
@@ -1161,7 +1292,7 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       adminUpdateStore, toggleStoreBan, deleteStore,
       toggleCustomerBlock, resetCustomerPoints, deleteCustomer, blockedAccounts, unblockBlockedPhone,
       updateAdminSettings,
-      createFlashSale, updateFlashSaleStatus, updateFlashSaleDates, deleteFlashSale,
+      createFlashSale, updateFlashSaleStatus, updateFlashSaleDates, updateFlashSale, deleteFlashSale,
       requestJoinFlashSale, updateFlashSaleRequestStatus,
       submitStoreReview, updateStoreReview, deleteStoreReview,
       addProduct, deleteProduct, updateProduct,

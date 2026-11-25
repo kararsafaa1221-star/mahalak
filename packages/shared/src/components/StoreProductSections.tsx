@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronLeft, Plus, Share2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { Product } from '../types';
 import { ProductImage } from './ProductImage';
+import { VirtualizedGrid } from './VirtualizedGrid';
 import {
   BULK_QUANTITY_LABEL,
   getProductAvailabilityLabel,
@@ -22,10 +24,15 @@ import {
   themeFieldTextStyle,
   type ResolvedStoreTheme,
 } from '../utils/storeTheme';
+import { formatStoreUsername } from '../utils/storeIdentity';
+import { VerifiedBadge } from './VerifiedBadge';
+import { OfferPercentBadge, formatProductOfferBadgeLabel } from './OfferPercentBadge';
 
 export interface StoreProductSectionsProps {
   products: Product[];
   getStoreName: (product: Product) => string;
+  getStoreUsername?: (product: Product) => string | undefined;
+  getStoreVerified?: (product: Product) => boolean;
   storeCategoryId?: string;
   variant?: 'default' | 'onDark';
   emptyTitle?: string;
@@ -38,9 +45,11 @@ export interface StoreProductSectionsProps {
   showStoreName?: boolean;
 }
 
-function StoreProductCard({
+const StoreProductCard = React.memo(function StoreProductCard({
   product,
   storeName,
+  storeUsername,
+  storeVerified = false,
   layout = 'scroll',
   priority = false,
   storeTheme,
@@ -52,6 +61,8 @@ function StoreProductCard({
 }: {
   product: Product;
   storeName: string;
+  storeUsername?: string;
+  storeVerified?: boolean;
   layout?: 'scroll' | 'grid';
   priority?: boolean;
   storeTheme?: ResolvedStoreTheme;
@@ -61,6 +72,7 @@ function StoreProductCard({
   onStoreClick?: (product: Product) => void;
   showStoreName?: boolean;
 }) {
+  const { t } = useTranslation();
   const theme = storeTheme ?? resolveStoreTheme(null);
   const footerGradient = storeProductCardGradientProps(theme);
   const shareBtn = storeGradientProps(theme);
@@ -74,9 +86,9 @@ function StoreProductCard({
     : undefined;
   const addBtnClass = theme.enabled
     ? ''
-    : 'text-white border border-white bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] [background-clip:unset] [-webkit-background-clip:unset] hover:bg-[#fff700] hover:text-deep-navy';
+    : 'welcome-btn-pulse text-white border border-white/40 bg-white/10 hover:bg-[#fff700] hover:text-deep-navy';
   const cardTextStyle = theme.enabled ? themeFieldTextStyle(theme.fields.productCardTextColor) : undefined;
-  const storeNameClassName = `inline-flex self-start max-w-full px-2 py-0.5 rounded-lg border text-[9px] font-bold truncate mb-auto ${
+  const storeNameClassName = `inline-flex flex-col gap-0 self-start max-w-full px-2 py-0.5 rounded-lg border text-[9px] font-bold mb-auto text-right ${
     theme.enabled ? '' : 'border-white text-white'
   }`;
   const storeNameStyle = theme.enabled
@@ -85,6 +97,20 @@ function StoreProductCard({
         borderColor: `${theme.fields.productCardTextColor.solid}55`,
       }
     : undefined;
+  const storeHandle = formatStoreUsername(storeUsername);
+  const storeBadgeContent = (
+    <>
+      <span className="inline-flex items-center gap-1 min-w-0 max-w-full">
+        <span className="truncate leading-tight">{storeName}</span>
+        {storeVerified && <VerifiedBadge size={10} className="shrink-0" />}
+      </span>
+      {storeHandle ? (
+        <span className="truncate max-w-full text-[8px] font-bold opacity-80 leading-tight" dir="ltr">
+          {storeHandle}
+        </span>
+      ) : null}
+    </>
+  );
 
   return (
     <article
@@ -92,53 +118,66 @@ function StoreProductCard({
       className={`${layout === 'scroll' ? 'w-[148px] sm:w-[168px] shrink-0 snap-start' : 'w-full'} rounded-2xl border transition-all duration-300 cursor-pointer group overflow-hidden flex flex-col ${
         theme.enabled
           ? 'bg-white border-white shadow-sm hover:shadow-md'
-          : 'welcome-card-glow welcome-card-border-glow bg-white/5 border-white/30 backdrop-blur-md shadow-lg shadow-black/20 hover:shadow-xl hover:shadow-vibrant-purple/25 hover:-translate-y-0.5'
+          : 'welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border-white/30 backdrop-blur-md shadow-lg shadow-black/20 hover:shadow-xl hover:shadow-vibrant-purple/25 hover:-translate-y-0.5'
       }`}
     >
-      <div className={`relative aspect-square p-2 ${theme.enabled ? 'bg-slate-50' : 'bg-white/10'}`}>
+      <div className={`relative aspect-square p-2 ${theme.enabled ? 'bg-slate-50' : 'bg-white/10 border-b border-white/10'}`}>
         <ProductImage
           src={product.image}
           alt={product.name}
           size="custom"
           priority={priority}
           objectFit="contain"
+          variant={theme.enabled ? 'light' : 'dark'}
           className="w-full h-full"
           imageClassName="group-hover:scale-105 transition-transform duration-500"
         />
         {product.specialOffer && (
-          <span className={`absolute top-2 right-2 text-[8px] font-black px-2 py-0.5 rounded-md border ${
+          <span className={`absolute bottom-2 right-2 text-[8px] font-black px-2 py-0.5 rounded-md border z-[15] ${
             theme.enabled
               ? 'bg-amber-100 text-amber-800 border-amber-200/80'
-              : 'bg-gradient-to-r from-[#7B3DFF] to-[#0B1320] text-white border-white'
+              : 'bg-white/15 text-[#fff700] border-white/30 backdrop-blur-sm'
           }`}>
             {product.specialOffer}
           </span>
         )}
-        {product.discountType !== 'none' && (
-          <span className="absolute bottom-2 left-2 bg-rose-500/90 text-white text-[8px] font-black px-1.5 py-0.5 rounded-md border border-white/20">
-            {product.discountType === 'percent' ? `-${product.discountValue}%` : 'خصم'}
-          </span>
-        )}
+        {(() => {
+          const offerLabel = formatProductOfferBadgeLabel(product, t('products.discount'));
+          return offerLabel ? (
+            <OfferPercentBadge
+              label={offerLabel}
+              variant="pill"
+              size="sm"
+              placement="card"
+            />
+          ) : null;
+        })()}
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             onShareProduct(product);
           }}
-          className={`absolute top-2 left-2 z-10 p-1.5 text-white border border-white rounded-lg shadow-sm active:scale-95 transition-transform ${shareBtn.className}`}
-          style={shareBtn.style}
-          aria-label="مشاركة المنتج"
+          className={`absolute top-2 left-2 z-10 p-1.5 text-white border border-white/40 rounded-lg shadow-sm active:scale-95 transition-transform ${
+            theme.enabled ? shareBtn.className : 'welcome-btn-pulse bg-white/10 backdrop-blur-sm'
+          }`}
+          style={theme.enabled ? shareBtn.style : undefined}
+          aria-label={t('products.shareProduct')}
         >
           <Share2 size={12} />
         </button>
       </div>
 
       <div
-        className={`p-2.5 flex flex-col flex-1 text-right min-h-[108px] ${footerGradient.className}`}
-        style={footerGradient.style}
+        className={`p-2.5 flex flex-col flex-1 text-right min-h-[108px] ${
+          theme.enabled
+            ? footerGradient.className
+            : 'border-t border-white/15'
+        }`}
+        style={theme.enabled ? footerGradient.style : undefined}
       >
         <h4
-          className="font-extrabold text-[11px] sm:text-xs line-clamp-2 leading-snug mb-1.5"
+          className={`font-extrabold text-[11px] sm:text-xs line-clamp-2 leading-snug mb-1.5 ${theme.enabled ? '' : 'text-white'}`}
           style={cardTextStyle}
         >
           {product.name}
@@ -170,12 +209,17 @@ function StoreProductCard({
               }}
               className={`${storeNameClassName} cursor-pointer hover:bg-white/10 transition-colors`}
               style={storeNameStyle}
+              title={storeHandle ? `${storeName} ${storeHandle}` : storeName}
             >
-              {storeName}
+              {storeBadgeContent}
             </button>
           ) : (
-            <span className={storeNameClassName} style={storeNameStyle}>
-              {storeName}
+            <span
+              className={storeNameClassName}
+              style={storeNameStyle}
+              title={storeHandle ? `${storeName} ${storeHandle}` : storeName}
+            >
+              {storeBadgeContent}
             </span>
           )
         )}
@@ -204,7 +248,7 @@ function StoreProductCard({
             }}
             className={`relative z-10 w-7 h-7 rounded-lg flex items-center justify-center transition-colors shrink-0 active:scale-95 shadow-sm ${addBtnClass}`}
             style={addBtnStyle}
-            aria-label="أضف إلى السلة"
+            aria-label={t('products.addToCart')}
           >
             <Plus size={14} strokeWidth={2.5} />
           </button>
@@ -212,11 +256,13 @@ function StoreProductCard({
       </div>
     </article>
   );
-}
+});
 
 function SectionBlock({
   section,
   getStoreName,
+  getStoreUsername,
+  getStoreVerified,
   expanded,
   onToggleExpand,
   onProductClick,
@@ -229,6 +275,8 @@ function SectionBlock({
 }: {
   section: StoreProductSection;
   getStoreName: (product: Product) => string;
+  getStoreUsername?: (product: Product) => string | undefined;
+  getStoreVerified?: (product: Product) => boolean;
   expanded: boolean;
   onToggleExpand: () => void;
   onProductClick: (product: Product) => void;
@@ -239,52 +287,84 @@ function SectionBlock({
   onDark?: boolean;
   storeTheme?: ResolvedStoreTheme;
 }) {
+  const { t } = useTranslation();
   const visibleProducts = sectionPreviewProducts(section, expanded);
   const hasMore = section.products.length > visibleProducts.length;
 
+  const useWelcomeTitle = onDark && !storeTheme?.enabled;
+
   return (
     <section className="scroll-mt-28">
-      <div className="flex items-center justify-between gap-3 mb-3 px-0.5">
-        <h3 className={`font-black text-sm sm:text-base ${onDark ? 'text-white' : 'text-slate-900'}`}>{section.title}</h3>
+      <div
+        className={`flex items-center justify-between gap-3 mb-3 ${
+          useWelcomeTitle
+            ? 'welcome-card-glow welcome-card-border-glow welcome-card-shimmer bg-white/5 border border-white/30 backdrop-blur-md rounded-2xl px-3 py-2.5'
+            : 'px-0.5'
+        }`}
+      >
+        <h3
+          className={`font-black text-sm sm:text-base flex items-center gap-2 min-w-0 ${
+            onDark ? 'text-white' : 'text-slate-900'
+          }`}
+        >
+          {useWelcomeTitle && (
+            <span className="w-1.5 h-5 shrink-0 rounded-full bg-gradient-to-b from-[#B18CFF] to-[#7B3DFF] shadow-[0_0_10px_rgba(123,61,255,0.55)]" />
+          )}
+          <span className="truncate">{section.title}</span>
+        </h3>
         {(hasMore || expanded) && section.products.length > 4 && (
           <button
             type="button"
             onClick={onToggleExpand}
-            className={`flex items-center gap-0.5 text-xs sm:text-sm font-bold hover:underline shrink-0 ${onDark ? 'text-[#E9DAFF]' : 'text-[#c41e3a]'}`}
+            className={`flex items-center gap-0.5 text-xs sm:text-sm font-bold shrink-0 ${
+              useWelcomeTitle
+                ? 'welcome-btn-pulse text-white bg-white/10 border border-white/25 rounded-xl px-2.5 py-1 hover:bg-white/15'
+                : onDark
+                  ? 'text-[#E9DAFF] hover:underline'
+                  : 'text-[#c41e3a] hover:underline'
+            }`}
           >
-            {expanded ? 'عرض أقل' : 'عرض الكل'}
+            {expanded ? t('products.showLess') : t('products.showAll')}
             {!expanded && <ChevronLeft size={16} className="rotate-180" />}
           </button>
         )}
       </div>
 
       {expanded ? (
-        <div className="grid grid-cols-2 min-[420px]:grid-cols-3 sm:grid-cols-4 gap-3">
-          {section.products.map((product) => (
+        <VirtualizedGrid
+          items={section.products}
+          estimateRowHeight={260}
+          overscan={2}
+          gridClassName="grid grid-cols-2 min-[420px]:grid-cols-3 sm:grid-cols-4 gap-3"
+          getItemKey={(product) => product.id}
+          renderItem={(product, index) => (
             <StoreProductCard
-              key={product.id}
               layout="grid"
               product={product}
               storeName={getStoreName(product)}
+              storeUsername={getStoreUsername?.(product)}
+              storeVerified={getStoreVerified?.(product) ?? false}
               storeTheme={storeTheme}
-              priority
+              priority={index < 6}
               onProductClick={onProductClick}
               onAddToCart={onAddToCart}
               onShareProduct={onShareProduct}
               onStoreClick={onStoreClick}
               showStoreName={showStoreName}
             />
-          ))}
-        </div>
+          )}
+        />
       ) : (
         <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x snap-mandatory -mx-1 px-1">
-          {visibleProducts.map((product) => (
+          {visibleProducts.map((product, index) => (
             <StoreProductCard
               key={product.id}
               product={product}
               storeName={getStoreName(product)}
+              storeUsername={getStoreUsername?.(product)}
+              storeVerified={getStoreVerified?.(product) ?? false}
               storeTheme={storeTheme}
-              priority
+              priority={index < 4}
               onProductClick={onProductClick}
               onAddToCart={onAddToCart}
               onShareProduct={onShareProduct}
@@ -301,10 +381,12 @@ function SectionBlock({
 export const StoreProductSections: React.FC<StoreProductSectionsProps> = ({
   products,
   getStoreName,
+  getStoreUsername,
+  getStoreVerified,
   storeCategoryId,
   variant = 'onDark',
-  emptyTitle = 'لا توجد منتجات حالياً',
-  emptySubtitle = 'لم ينشر هذا المتجر منتجات بعد.',
+  emptyTitle,
+  emptySubtitle,
   storeTheme,
   onProductClick,
   onAddToCart,
@@ -312,7 +394,10 @@ export const StoreProductSections: React.FC<StoreProductSectionsProps> = ({
   onStoreClick,
   showStoreName = true,
 }) => {
+  const { t } = useTranslation();
   const onDark = variant === 'onDark';
+  const resolvedEmptyTitle = emptyTitle ?? t('products.emptyStoreTitle');
+  const resolvedEmptySubtitle = emptySubtitle ?? t('products.emptyStoreSubtitle');
   const theme = storeTheme ?? resolveStoreTheme(null);
   const emptyPanel = storeGradientProps(theme);
   const sections = useMemo(
@@ -336,7 +421,7 @@ export const StoreProductSections: React.FC<StoreProductSectionsProps> = ({
           className={`font-black text-lg mb-2 ${theme.enabled ? '' : 'text-white'}`}
           style={theme.enabled ? themeFieldTextStyle(theme.fields.productCardTextColor) : undefined}
         >
-          {emptyTitle}
+          {resolvedEmptyTitle}
         </p>
         <p
           className={`text-xs font-bold ${theme.enabled ? '' : 'text-white/70'}`}
@@ -346,13 +431,13 @@ export const StoreProductSections: React.FC<StoreProductSectionsProps> = ({
               : undefined
           }
         >
-          {emptySubtitle}
+          {resolvedEmptySubtitle}
         </p>
       </div>
     ) : (
       <div className="py-20 text-center bg-white rounded-3xl border border-slate-100 shadow-sm px-8">
-        <p className="text-violet font-black text-lg mb-2">{emptyTitle}</p>
-        <p className="text-slate-400 text-xs font-bold">{emptySubtitle}</p>
+        <p className="text-violet font-black text-lg mb-2">{resolvedEmptyTitle}</p>
+        <p className="text-slate-400 text-xs font-bold">{resolvedEmptySubtitle}</p>
       </div>
     );
   }
@@ -364,6 +449,8 @@ export const StoreProductSections: React.FC<StoreProductSectionsProps> = ({
           key={section.id}
           section={section}
           getStoreName={getStoreName}
+          getStoreUsername={getStoreUsername}
+          getStoreVerified={getStoreVerified}
           expanded={!!expandedSections[section.id]}
           onDark={onDark}
           storeTheme={storeTheme}

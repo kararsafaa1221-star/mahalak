@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { AlertTriangle, Check } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   MapContainer,
   TileLayer,
@@ -21,6 +22,12 @@ L.Icon.Default.mergeOptions({
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
 });
 
+/** Nominatim Accept-Language: Arabic or Kurdish (Sorani) with Arabic fallback for Iraq maps. */
+function nominatimAcceptLanguage(lng: string): string {
+  const base = (lng || "ar").toLowerCase().split("-")[0];
+  return base === "ckb" || base === "ku" ? "ckb,ku,ar" : "ar";
+}
+
 interface LocationPickerProps {
   onLocationSelect: (lat: number, lng: number, address: string) => void;
   initialLat?: number;
@@ -39,7 +46,9 @@ function LocationMarker({
   setAddress,
   onLocationSelect,
 }: any) {
+  const { t, i18n } = useTranslation();
   const map = useMap();
+  const acceptLang = nominatimAcceptLanguage(i18n.language);
 
   useEffect(() => {
     if (position) {
@@ -56,10 +65,14 @@ function LocationMarker({
   });
 
   const fetchAddress = async (lat: number, lng: number) => {
-    let address = `إحداثيات: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    let address = t('locationPicker.coordinates', {
+      lat: lat.toFixed(6),
+      lng: lng.toFixed(6),
+    });
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ar`,
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=${encodeURIComponent(acceptLang)}`,
+        { headers: { "Accept-Language": acceptLang } },
       );
       const data = await response.json();
       if (data.display_name) {
@@ -83,6 +96,7 @@ function GpsLocateControl({
   onLocate: () => void;
   isLoading: boolean;
 }) {
+  const { t } = useTranslation();
   const map = useMap();
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const onLocateRef = useRef(onLocate);
@@ -94,8 +108,8 @@ function GpsLocateControl({
     const button = L.DomUtil.create("button", "mahalak-gps-button", container) as HTMLButtonElement;
 
     button.type = "button";
-    button.title = "تحديد موقعي الحالي";
-    button.innerHTML = `${GPS_ICON_SVG}<span>تحديد موقعي (GPS)</span>`;
+    button.title = t('locationPicker.gpsCurrentTitle');
+    button.innerHTML = `${GPS_ICON_SVG}<span>${t('locationPicker.gpsCurrentLabel')}</span>`;
 
     L.DomEvent.disableClickPropagation(container);
     L.DomEvent.disableScrollPropagation(container);
@@ -116,14 +130,16 @@ function GpsLocateControl({
       buttonRef.current = null;
       control.remove();
     };
-  }, [map]);
+  }, [map, t]);
 
   useEffect(() => {
     const button = buttonRef.current;
     if (!button) return;
+    button.title = t('locationPicker.gpsCurrentTitle');
+    button.innerHTML = `${GPS_ICON_SVG}<span>${t('locationPicker.gpsCurrentLabel')}</span>`;
     button.disabled = isLoading;
     button.classList.toggle("is-loading", isLoading);
-  }, [isLoading]);
+  }, [isLoading, t]);
 
   return null;
 }
@@ -133,18 +149,19 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
   initialLat,
   initialLng,
   required = true,
-  label = "تحديد الموقع على الخريطة",
+  label,
   labelClassName = "block text-xs font-bold text-gray-500 mb-1",
   hintClassName = "text-[10px] text-gray-400 font-bold text-center mb-1",
   inputClassName = "text-white",
   height = "h-64",
 }) => {
+  const { t, i18n } = useTranslation();
+  const acceptLang = nominatimAcceptLanguage(i18n.language);
+  const displayLabel = label ?? t('locationPicker.label');
   const [position, setPosition] = useState<{ lat: number; lng: number } | null>(
     initialLat && initialLng ? { lat: initialLat, lng: initialLng } : null,
   );
-  const [address, setAddress] = useState<string>(
-    initialLat && initialLng ? "تم تحديد الموقع مسبقاً" : "",
-  );
+  const [address, setAddress] = useState<string>("");
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -157,11 +174,14 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
   const handlePositionSuccess = useCallback(async (lat: number, lng: number) => {
     setPosition({ lat, lng });
 
-    let addr = `إحداثيات: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    let addr = t('locationPicker.coordinates', {
+      lat: lat.toFixed(6),
+      lng: lng.toFixed(6),
+    });
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ar`,
-        { headers: { "Accept-Language": "ar" } }
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=${encodeURIComponent(acceptLang)}`,
+        { headers: { "Accept-Language": acceptLang } }
       );
       const data = await response.json();
       if (data.display_name) {
@@ -173,7 +193,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
     setAddress(addr);
     onLocationSelect(lat, lng, addr);
     setIsLoading(false);
-  }, [onLocationSelect]);
+  }, [acceptLang, onLocationSelect, t]);
 
   const handlePositionError = useCallback(async (err: any) => {
     try {
@@ -184,17 +204,21 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         const lng = ipData.longitude;
         setPosition({ lat, lng });
         const addr = `${ipData.city || ''}, ${ipData.region || ''}, ${ipData.country_name || ''}`;
-        setAddress(addr || `إحداثيات التقريبية: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-        onLocationSelect(lat, lng, addr || `إحداثيات التقريبية: ${lat.toFixed(6)}`);
-        setError("تم تحديد موقع تقريبي بناءً على شبكة الإنترنت. يرجى تعديله يدوياً لمزيد من الدقة.");
+        const approxCoords = t('locationPicker.approxCoordinates', {
+          lat: lat.toFixed(6),
+          lng: lng.toFixed(6),
+        });
+        setAddress(addr || approxCoords);
+        onLocationSelect(lat, lng, addr || approxCoords);
+        setError(t('locationPicker.approxLocationWarning'));
       } else {
          throw new Error("IP fallback failed");
       }
     } catch {
-       setError("لا يمكن تحديد الموقع حالياً. يرجى اختيار الموقع من الخريطة بالضغط عليها أو البحث.");
+       setError(t('locationPicker.cannotLocate'));
     }
     setIsLoading(false);
-  }, [onLocationSelect]);
+  }, [onLocationSelect, t]);
 
   const getCurrentLocation = useCallback(async () => {
     setIsLoading(true);
@@ -207,7 +231,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         if (permission.location !== 'granted') {
            const req = await Geolocation.requestPermissions();
            if (req.location !== 'granted') {
-              setError("لم يتم منح صلاحيات الوصول للموقع.");
+              setError(t('locationPicker.permissionDenied'));
               setIsLoading(false);
               return;
            }
@@ -216,7 +240,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         handlePositionSuccess(pos.coords.latitude, pos.coords.longitude);
       } else {
         if (!navigator.geolocation) {
-          setError("المتصفح لا يدعم خدمة تحديد الموقع");
+          setError(t('locationPicker.browserUnsupported'));
           setIsLoading(false);
           return;
         }
@@ -229,20 +253,20 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
     } catch(err) {
        handlePositionError(err);
     }
-  }, [handlePositionSuccess, handlePositionError]);
+  }, [handlePositionSuccess, handlePositionError, t]);
 
   useEffect(() => {
     if (initialLat && initialLng && !position) {
       const initLocation = () => {
         setPosition({ lat: initialLat, lng: initialLng });
-        setAddress("تم تحديد الموقع مسبقاً");
+        setAddress(t('locationPicker.alreadySelected'));
       };
       initLocation();
     } else if (!initialLat && !initialLng && !position && !hasAutoLocated.current) {
       hasAutoLocated.current = true;
       getCurrentLocation();
     }
-  }, [initialLat, initialLng, position, getCurrentLocation]);
+  }, [initialLat, initialLng, position, getCurrentLocation, t]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -253,7 +277,8 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
     setError("");
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&accept-language=ar&limit=1`
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&accept-language=${encodeURIComponent(acceptLang)}&limit=1`,
+        { headers: { "Accept-Language": acceptLang } },
       );
       const data = await response.json();
       if (data && data.length > 0) {
@@ -263,26 +288,26 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         setAddress(data[0].display_name);
         onLocationSelect(lat, lng, data[0].display_name);
       } else {
-        setError("لم يتم العثور على نتائج للبحث. يرجى المحاولة بكلمات مختلفة.");
+        setError(t('locationPicker.noSearchResults'));
       }
     } catch {
-      setError("حدث خطأ أثناء البحث.");
+      setError(t('locationPicker.searchError'));
     }
     setIsSearching(false);
   };
 
   return (
     <div className="space-y-3">
-      {label && (
+      {displayLabel && (
         <label className={labelClassName}>
-          📍 {label} {required && <span className="text-red-500">*</span>}
+          📍 {displayLabel} {required && <span className="text-red-500">*</span>}
         </label>
       )}
 
       <div className="flex gap-2">
         <input 
           type="text" 
-          placeholder="ابحث عن منطقة، حي، أو مدينة..."
+          placeholder={t('locationPicker.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && searchLocation()}
@@ -294,7 +319,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
           disabled={isSearching}
           className="bg-indigo-50 text-deep-navy px-4 py-2 rounded-xl text-sm font-bold active:scale-95 disabled:opacity-50"
         >
-          {isSearching ? "جاري البحث..." : "بحث"}
+          {isSearching ? t('locationPicker.searching') : t('common.search')}
         </button>
       </div>
 
@@ -335,27 +360,22 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
           <div className={`absolute inset-0 ${height} rounded-2xl bg-white/50 backdrop-blur-sm flex flex-col items-center justify-center z-[1002] pointer-events-none`}>
             <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-2"></div>
             <span className="text-xs font-bold text-indigo-600 shadow-sm">
-              جارٍ تحديد موقعك...
+              {t('locationPicker.locating')}
             </span>
           </div>
         )}
       </div>
 
       <p className={hintClassName}>
-        💡 يمكنك التحريك والضغط على الخريطة لتحديد موقعك بدقة
+        {t('locationPicker.hint')}
       </p>
 
       {position && (
-        <div className="bg-gradient-to-r from-vibrant-purple to-deep-navy border border-[#FFF700] text-[#FFF700] p-3 rounded-xl flex items-start gap-2">
-          <Check size={16} className="text-[#FFF700] shrink-0 mt-0.5" />
-          <div>
-            <p className="text-xs font-bold text-[#FFF700] mb-0.5">
-              تم تحديد الموقع!
-            </p>
-            <p className="text-[10px] text-white leading-tight line-clamp-2">
-              {address}
-            </p>
-          </div>
+        <div className="bg-gradient-to-r from-vibrant-purple to-deep-navy border border-[#FFF700] text-[#FFF700] p-3 rounded-xl flex items-center gap-2">
+          <Check size={16} className="text-[#FFF700] shrink-0" />
+          <p className="text-xs font-bold text-[#FFF700]">
+            {t('locationPicker.selectedSuccess')}
+          </p>
         </div>
       )}
 
@@ -369,7 +389,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       {required && !position && !isLoading && !error && (
         <p className="text-[10px] text-orange-500 font-bold flex items-center space-x-1 space-x-reverse">
           <AlertTriangle size={12} />
-          <span>تحديد الموقع إجباري لتسهيل التوصيل وتحديد المسافات</span>
+          <span>{t('locationPicker.requiredHint')}</span>
         </p>
       )}
     </div>

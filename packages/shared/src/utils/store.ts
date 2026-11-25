@@ -72,6 +72,7 @@ export function isStoreVisibleToCustomer(
   s: Store,
   opts?: { blockedStoreIds?: string[] | null },
 ): boolean {
+  if (s.isDeleted) return false;
   if (s.isBanned || s.status === 'suspended') return false;
   if (s.status !== 'active') return false;
   if (opts?.blockedStoreIds?.includes(s.id)) return false;

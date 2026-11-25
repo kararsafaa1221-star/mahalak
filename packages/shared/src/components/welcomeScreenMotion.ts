@@ -1,47 +1,35 @@
 export const welcomeSlideVariants = {
-  hidden: {
-    opacity: 0,
-    x: -64,
-    scale: 0.86,
-    filter: 'blur(12px)',
-  },
+  hidden: { opacity: 0, y: 12 },
   visible: {
     opacity: 1,
-    x: 0,
-    scale: 1,
-    filter: 'blur(0px)',
+    y: 0,
     transition: {
-      duration: 0.45,
-      staggerChildren: 0.11,
-      delayChildren: 0.06,
-      ease: [0.22, 1, 0.36, 1],
+      duration: 0.22,
+      staggerChildren: 0.04,
+      delayChildren: 0.02,
     },
   },
   exit: {
     opacity: 0,
-    x: 64,
-    scale: 0.9,
-    filter: 'blur(8px)',
-    transition: { duration: 0.28 },
+    y: -8,
+    transition: { duration: 0.15 },
   },
 };
 
 export const welcomeSlideItemVariants = {
-  hidden: { opacity: 0, y: 28, scale: 0.94 },
+  hidden: { opacity: 0, y: 8 },
   visible: {
     opacity: 1,
     y: 0,
-    scale: 1,
-    transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] },
+    transition: { duration: 0.18 },
   },
 };
 
 export const welcomeIconVariants = {
-  hidden: { opacity: 0, scale: 0.2, rotate: -180 },
+  hidden: { opacity: 0, scale: 0.92 },
   visible: {
     opacity: 1,
     scale: 1,
-    rotate: 0,
-    transition: { type: 'spring', stiffness: 320, damping: 14 },
+    transition: { duration: 0.18 },
   },
 };

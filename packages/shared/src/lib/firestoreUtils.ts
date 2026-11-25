@@ -10,10 +10,16 @@ import {
 } from 'firebase/firestore';
 import { auth } from './firebase';
 
-/** Firestore rejects `undefined` field values; omit them before writes. */
-export function stripUndefinedFields<T extends Record<string, unknown>>(data: T): T {
+/** Firestore rejects `undefined` field values; omit them before writes (nested-safe). */
+export function stripUndefinedFields<T>(data: T): T {
+  if (data === null || typeof data !== 'object') return data;
+  if (Array.isArray(data)) {
+    return data.map((item) => stripUndefinedFields(item)) as T;
+  }
   return Object.fromEntries(
-    Object.entries(data).filter(([, value]) => value !== undefined),
+    Object.entries(data as Record<string, unknown>)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, stripUndefinedFields(value)]),
   ) as T;
 }
 

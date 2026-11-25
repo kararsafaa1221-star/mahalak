@@ -1,6 +1,8 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { Upload, X, Image as ImageIcon, Camera } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { computeCoverDimensions, normalizeImageForEditing } from '../utils/imageCrop';
+import i18n from '../i18n';
 
 // =======================================================
 // مكون رفع ومعالجة الصور للهواتف والموقع - منصة محلك
@@ -40,14 +42,14 @@ export const resizeImage = (file: File, maxWidth: number = 800, maxHeight: numbe
       };
       
       img.onerror = () => {
-        reject(new Error('فشل معالجة وقراءة ملف الصورة الحالي.'));
+        reject(new Error(i18n.t('imageUploader.errors.processReadFailed')));
       };
       
       img.src = result;
     };
     
     reader.onerror = () => {
-      reject(new Error('فشل قراءة الملف المختار من الذاكرة.'));
+      reject(new Error(i18n.t('imageUploader.errors.fileReadFailed')));
     };
     
     reader.readAsDataURL(file);
@@ -72,17 +74,20 @@ interface ImageUploaderProps {
 export const ImageUploader: React.FC<ImageUploaderProps> = ({
   value,
   onChange,
-  label = 'صورة المنتج',
+  label,
   labelClassName = 'block text-xs font-black text-slate-500 mb-1',
-  placeholder = 'اضغط لإضافة صورة المنتج',
+  placeholder,
   placeholderClassName,
   hideSourceHint = false,
   emptyVariant = 'default',
   aspectRatio = 'square',
-  maxSizeMB = 5,
+  maxSizeMB = 0,
   required = false,
   className = ''
 }) => {
+  const { t } = useTranslation();
+  const displayLabel = label ?? t('imageUploader.productImageLabel');
+  const displayPlaceholder = placeholder ?? t('imageUploader.placeholder');
   const isBrandEmpty = emptyVariant === 'brand' && !value;
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -133,15 +138,15 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
     // التحقق من نوع الملف
     if (!file.type.startsWith('image/')) {
-      setError('يرجى اختيار ملف صورة صالح (JPG, PNG, WebP)');
+      setError(t('imageUploader.errors.invalidType'));
       setIsLoading(false);
       return;
     }
 
-    // التحقق من حجم الملف كعتبة عليا
+    // التحقق من حجم الملف (maxSizeMB <= 0 = بدون حد)
     const fileSizeMB = file.size / (1024 * 1024);
-    if (fileSizeMB > maxSizeMB) {
-      setError(`حجم الصورة كبير جداً. الحد الأقصى المسموح به هو ${maxSizeMB} ميجابايت.`);
+    if (maxSizeMB > 0 && fileSizeMB > maxSizeMB) {
+      setError(t('imageUploader.errors.fileTooLarge', { max: maxSizeMB }));
       setIsLoading(false);
       return;
     }
@@ -154,7 +159,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       setPosition({ x: 0, y: 0 });
       setIsLoading(false);
     } catch (err: any) {
-      setError(err?.message || 'حدث خطأ أثناء تحميل الصورة.');
+      setError(err?.message || t('imageUploader.errors.loadFailed'));
       setIsLoading(false);
     }
   };
@@ -183,7 +188,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         canvas.height = targetHeight;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          throw new Error('فشل إنشاء بيئة الرسم للقص.');
+          throw new Error(t('imageUploader.errors.canvasFailed'));
         }
         
         // تعبئة خلفية بيضاء نقية
@@ -227,13 +232,13 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         onChange(croppedBase64);
         setEditingImage(null);
       } catch (err: any) {
-        setError(err?.message || 'حدث خطأ غير متوقع أثناء حفظ وتعديل الصورة.');
+        setError(err?.message || t('imageUploader.errors.saveFailed'));
       } finally {
         setIsLoading(false);
       }
     };
     img.onerror = () => {
-      setError('فشل تحميل الصورة المحددة لمعالجتها.');
+      setError(t('imageUploader.errors.processFailed'));
       setIsLoading(false);
     };
     img.src = editingImage;
@@ -324,9 +329,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
   return (
     <div className={`space-y-2 ${className}`} dir="rtl">
-      {label && (
+      {displayLabel && (
         <label className={labelClassName}>
-          {label} {required && <span className="text-red-500">*</span>}
+          {displayLabel} {required && <span className="text-red-500">*</span>}
         </label>
       )}
 
@@ -350,7 +355,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         {isLoading && (
           <div className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center z-20">
             <div className="w-10 h-10 border-4 border-vibrant-purple border-t-transparent rounded-full animate-spin mb-2"></div>
-            <span className="text-xs font-black text-vibrant-purple animate-pulse">جاري ضغط وضبط حجم الصورة...</span>
+            <span className="text-xs font-black text-vibrant-purple animate-pulse">{t('imageUploader.compressing')}</span>
           </div>
         )}
 
@@ -359,10 +364,10 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
           <div className="relative w-full h-full group">
             <img 
               src={value} 
-              alt="صورة المنتج المعالجة" 
+              alt={t('imageUploader.previewAlt')}
               className="w-full h-full object-cover"
               onError={() => {
-                setError('حدث خطأ أثناء عرض الصورة الحالية.');
+                setError(t('imageUploader.errors.displayFailed'));
               }}
             />
             
@@ -372,25 +377,25 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                 type="button"
                 onClick={() => setShowChooser(true)}
                 className="p-3 bg-white hover:bg-slate-100 text-slate-800 rounded-xl transition shadow-lg flex items-center gap-1.5 text-xs font-black"
-                title="تغيير الصورة الحالي للمنتج"
+                title={t('imageUploader.changeImageTitle')}
               >
                 <Camera size={16} className="text-vibrant-purple" />
-                <span>تغيير الصورة</span>
+                <span>{t('imageUploader.changeImage')}</span>
               </button>
               <button 
                 type="button"
                 onClick={handleRemove}
                 className="p-3 bg-rose-500 hover:bg-rose-600 text-white rounded-xl transition shadow-lg flex items-center gap-1.5 text-xs font-black"
-                title="حذف الصورة"
+                title={t('imageUploader.deleteImageTitle')}
               >
                 <X size={16} />
-                <span>حذف</span>
+                <span>{t('common.delete')}</span>
               </button>
             </div>
 
             {/* علامة اكتمال الرفع والمطابقة */}
             <div className="absolute top-3 right-3 px-2 py-1 bg-emerald-500 text-white text-[10px] font-black rounded-full flex items-center gap-1 shadow">
-              <span>جاهزة ومضغوطة</span>
+              <span>{t('imageUploader.readyCompressed')}</span>
             </div>
           </div>
         ) : (
@@ -412,11 +417,11 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
             <span className={`text-xs font-black text-center ${
               placeholderClassName ?? (isBrandEmpty ? 'text-white' : 'text-slate-800')
             }`}>
-              {placeholder}
+              {displayPlaceholder}
             </span>
             {!hideSourceHint && (
               <span className="text-[10px] text-slate-400 mt-1 font-bold">
-                اضغط لفتح (الكاميرا 📸 / المعرض 🖼️)
+                {t('imageUploader.sourceHint')}
               </span>
             )}
           </button>
@@ -444,15 +449,15 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
       {/* نافذة المنبثقة لاختيار المصدر (Camera or Gallery) */}
       {showChooser && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[300] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl border border-slate-100 animate-slide-up sm:animate-fade-in">
+        <div className="fixed inset-0 bg-deep-navy/70 backdrop-blur-md z-[300] flex items-end sm:items-center justify-center p-4">
+          <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-t-3xl sm:rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl animate-slide-up sm:animate-fade-in text-white">
             {/* رأس النافذة */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <span className="text-xs font-black text-slate-800">إضافة صورة</span>
+            <div className="px-6 py-4 border-b border-white/15 flex items-center justify-between bg-white/5">
+              <span className="text-xs font-black text-white">{t('imageUploader.addImage')}</span>
               <button 
                 type="button" 
                 onClick={() => setShowChooser(false)}
-                className="p-1 hover:bg-slate-200 rounded-lg transition text-slate-400 hover:text-slate-700"
+                className="p-1 hover:bg-white/15 rounded-lg transition text-white/60 hover:text-white"
               >
                 <X size={18} />
               </button>
@@ -460,7 +465,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
             {/* الخيارات المتوفرة */}
             <div className="p-5 space-y-3">
-              <p className="text-[11px] text-slate-400 font-black mb-1 text-center">اختر الوسيلة المفضلة لإضافة لقطة للصورة:</p>
+              <p className="text-[11px] text-white/55 font-black mb-1 text-center">{t('imageUploader.chooseMethod')}</p>
               
               {/* خيار التقاط صورة الكاميرا */}
               <button
@@ -469,10 +474,10 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                   setError('');
                   cameraInputRef.current?.click();
                 }}
-                className="w-full py-3.5 px-4 bg-vibrant-purple/10 text-vibrant-purple hover:bg-vibrant-purple/20 border border-vibrant-purple/20 rounded-2xl flex items-center justify-center gap-3 transition font-black text-xs animate-pulse-once"
+                className="w-full py-3.5 px-4 bg-vibrant-purple/25 text-[#E8D5FF] hover:bg-vibrant-purple/40 border border-vibrant-purple/40 rounded-2xl flex items-center justify-center gap-3 transition font-black text-xs animate-pulse-once"
               >
                 <Camera size={18} />
-                <span>التقاط لقطة فورية بالكاميرا 📸</span>
+                <span>{t('imageUploader.takePhoto')}</span>
               </button>
 
               {/* خيار اختيار من استوديو الهاتف */}
@@ -482,19 +487,19 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                   setError('');
                   galleryInputRef.current?.click();
                 }}
-                className="w-full py-3.5 px-4 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-2xl flex items-center justify-center gap-3 transition font-black text-xs"
+                className="w-full py-3.5 px-4 bg-white/5 hover:bg-white/10 text-white border border-white/25 rounded-2xl flex items-center justify-center gap-3 transition font-black text-xs"
               >
-                <ImageIcon size={18} className="text-slate-500" />
-                <span>اختيار من استوديو الصور (المعرض) 🖼️</span>
+                <ImageIcon size={18} className="text-white/70" />
+                <span>{t('imageUploader.chooseGallery')}</span>
               </button>
 
               {/* زر إلغاء الإغلاق */}
               <button
                 type="button"
                 onClick={() => setShowChooser(false)}
-                className="w-full py-2.5 text-center text-slate-400 hover:text-slate-600 transition font-bold text-xs"
+                className="w-full py-2.5 text-center text-white/50 hover:text-white transition font-bold text-xs"
               >
-                إلغاء الأمر
+                {t('imageUploader.cancelAction')}
               </button>
             </div>
           </div>
@@ -504,17 +509,17 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       {/* نافذة التحرير المتقدمة للتحكم في الصورة بالتكبير والتصغير والتحريك */}
       {editingImage && (
         <div className="fixed inset-0 bg-deep-navy/80 backdrop-blur-md z-[400] flex items-center justify-center p-4 animate-fade-in" dir="rtl">
-          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-100 scale-95 hover:scale-100 transition-transform duration-300">
+          <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-3xl w-full max-w-md overflow-hidden shadow-2xl scale-95 hover:scale-100 transition-transform duration-300 text-white">
             
             {/* رأس المودال */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+            <div className="px-6 py-4 border-b border-white/15 flex items-center justify-between bg-white/5">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-black text-violet">تحرير وتعديل مقاس الصورة 📐</span>
+                <span className="text-xs font-black text-[#fff700]">{t('imageUploader.cropTitle')}</span>
               </div>
               <button 
                 type="button" 
                 onClick={() => setEditingImage(null)}
-                className="p-1 hover:bg-slate-200 rounded-lg transition text-slate-400 hover:text-slate-700"
+                className="p-1 hover:bg-white/15 rounded-lg transition text-white/60 hover:text-white"
               >
                 <X size={18} />
               </button>
@@ -522,8 +527,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
             {/* محتوى المودال */}
             <div className="p-6 flex flex-col items-center">
-              <p className="text-[11px] text-slate-500 font-extrabold text-center mb-4 leading-relaxed">
-                قم بالتحكم بحجم الصورة بالتكبير والتصغير وتعديل الموضع المناسب من خلال السحب، ليظهر بالشكل الذي تريده تماماً.
+              <p className="text-[11px] text-white/65 font-extrabold text-center mb-4 leading-relaxed">
+                {t('imageUploader.cropInstructions')}
               </p>
 
               {/* حاوية منطقة القص */}
@@ -546,7 +551,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                 >
                   <img 
                     src={editingImage} 
-                    alt="تحرير المعاينة" 
+                    alt={t('imageUploader.cropPreviewAlt')}
                     draggable={false}
                     className="absolute pointer-events-none max-w-none select-none"
                     style={{
@@ -564,17 +569,17 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
               {/* عناصر التحكم بالتكبير والتصغير */}
               <div className="w-full mt-6 space-y-3 px-2">
-                <div className="flex items-center justify-between text-[11px] font-black text-slate-500">
-                  <span>المقياس المباشر: {(zoom * 100).toFixed(0)}%</span>
-                  <span className="text-vibrant-purple">اسحب لتعديل الاتجاه ↔️</span>
+                <div className="flex items-center justify-between text-[11px] font-black text-white/60">
+                  <span>{t('imageUploader.scaleLabel', { percent: (zoom * 100).toFixed(0) })}</span>
+                  <span className="text-[#E8D5FF]">{t('imageUploader.dragHint')}</span>
                 </div>
                 
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() => setZoom(prev => Math.max(1, prev - 0.15))}
-                    className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl flex items-center justify-center font-black active:scale-90 transition-all text-sm cursor-pointer select-none"
-                    title="تصغير الصورة"
+                    className="w-10 h-10 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-xl flex items-center justify-center font-black active:scale-90 transition-all text-sm cursor-pointer select-none"
+                    title={t('imageUploader.zoomOut')}
                   >
                     -
                   </button>
@@ -586,14 +591,14 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                     step={0.01}
                     value={zoom}
                     onChange={(e) => setZoom(parseFloat(e.target.value))}
-                    className="flex-1 accent-[#7B3DFF] h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer"
+                    className="flex-1 accent-[#7B3DFF] h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer"
                   />
 
                   <button
                     type="button"
                     onClick={() => setZoom(prev => Math.min(4, prev + 0.15))}
-                    className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl flex items-center justify-center font-black active:scale-90 transition-all text-sm cursor-pointer select-none"
-                    title="تكبير الصورة"
+                    className="w-10 h-10 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-xl flex items-center justify-center font-black active:scale-90 transition-all text-sm cursor-pointer select-none"
+                    title={t('imageUploader.zoomIn')}
                   >
                     +
                   </button>
@@ -606,29 +611,29 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                       setZoom(1);
                       setPosition({ x: 0, y: 0 });
                     }}
-                    className="px-4 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 rounded-lg text-[10px] font-black active:scale-95 transition-all cursor-pointer"
+                    className="px-4 py-1.5 bg-white/5 hover:bg-white/10 text-white/70 border border-white/25 rounded-lg text-[10px] font-black active:scale-95 transition-all cursor-pointer"
                   >
-                    إعادة ضبط المقاس 🔄
+                    {t('imageUploader.resetScale')}
                   </button>
                 </div>
               </div>
             </div>
 
             {/* أزرار الحفظ والإلغاء */}
-            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-3">
+            <div className="px-6 py-4 border-t border-white/15 bg-white/5 flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setEditingImage(null)}
-                className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer"
+                className="px-5 py-2.5 bg-white/5 border border-white/25 hover:bg-white/10 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer"
               >
-                إلغاء
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
                 onClick={handleCropConfirm}
                 className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all shadow-md shadow-emerald-500/20 hover:shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer"
               >
-                <span>حفظ وتأكيد الصورة 🌿</span>
+                <span>{t('imageUploader.saveConfirm')}</span>
               </button>
             </div>
 

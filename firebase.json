@@ -1,4 +1,7 @@
 {
+  "remoteconfig": {
+    "template": "remote_config.json"
+  },
   "firestore": {
     "database": "default",
     "rules": "firestore.rules",

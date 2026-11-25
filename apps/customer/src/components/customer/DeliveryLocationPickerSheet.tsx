@@ -1,11 +1,12 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Briefcase, Check, Home, MapPin, Plus } from 'lucide-react';
 import type { CustomerSavedLocation } from '@shared/types';
 import { WelcomeScreenBackground } from '@shared/components/WelcomeScreenBackground';
 
-function savedLocationIcon(label: string) {
-  if (label === 'البيت') return Home;
-  if (label === 'العمل') return Briefcase;
+function savedLocationIcon(label: string, homeLabel: string, workLabel: string) {
+  if (label === homeLabel || label === 'البيت') return Home;
+  if (label === workLabel || label === 'العمل') return Briefcase;
   return MapPin;
 }
 
@@ -26,28 +27,38 @@ export const DeliveryLocationPickerSheet: React.FC<DeliveryLocationPickerSheetPr
   onSelect,
   onManageLocations,
 }) => {
+  const { t } = useTranslation();
   if (!open) return null;
+
+  const homeLabel = t('locations.home');
+  const workLabel = t('locations.work');
 
   return (
     <div className="fixed inset-0 z-[70] flex flex-col justify-end" dir="rtl">
       <button
         type="button"
         className="absolute inset-0 bg-deep-navy/70 backdrop-blur-sm cursor-default"
-        aria-label="إغلاق قائمة المواقع"
+        aria-label={t('locations.pickerCloseAria')}
         onClick={onClose}
       />
       <div className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy rounded-t-3xl shadow-2xl border border-white/30 overflow-hidden text-right animate-slide-up max-h-[72vh] flex flex-col">
         <WelcomeScreenBackground lite />
         <div className="relative z-10 flex flex-col max-h-[72vh]">
           <div className="welcome-card-shimmer p-4 border-b border-white/15 bg-white/5 backdrop-blur-md">
-            <p className="text-sm font-black text-white">موقع التوصيل</p>
-            <p className="text-[11px] text-white/55 font-bold mt-0.5">البيت، العمل، أو أي موقع آخر</p>
+            <p className="text-sm font-black text-white">{t('locations.pickerTitle')}</p>
+            <p className="text-[11px] text-white/55 font-bold mt-0.5">{t('locations.pickerSubtitle')}</p>
           </div>
 
           <div className="overflow-y-auto divide-y divide-white/10 flex-1">
             {locations.map((loc) => {
-              const LocIcon = savedLocationIcon(loc.label);
+              const LocIcon = savedLocationIcon(loc.label, homeLabel, workLabel);
               const isActive = activeLocationId === loc.id;
+              const displayLabel =
+                loc.label === 'البيت'
+                  ? homeLabel
+                  : loc.label === 'العمل'
+                    ? workLabel
+                    : loc.label;
               return (
                 <button
                   key={loc.id}
@@ -63,8 +74,8 @@ export const DeliveryLocationPickerSheet: React.FC<DeliveryLocationPickerSheetPr
                   </div>
                   <div className="flex-1 min-w-0 text-right">
                     <p className="text-sm font-black text-white">
-                      {loc.label}
-                      {loc.isDefault ? ' · الافتراضي' : ''}
+                      {displayLabel}
+                      {loc.isDefault ? t('locations.defaultSuffix') : ''}
                     </p>
                     <p className="text-[11px] text-white/50 font-bold truncate">
                       {loc.province}{loc.area ? ` — ${loc.area}` : ''}
@@ -76,7 +87,7 @@ export const DeliveryLocationPickerSheet: React.FC<DeliveryLocationPickerSheetPr
             })}
             {locations.length === 0 && (
               <p className="p-6 text-center text-xs text-white/45 font-bold">
-                لا توجد مواقع محفوظة بعد
+                {t('locations.emptySaved')}
               </p>
             )}
           </div>
@@ -90,7 +101,7 @@ export const DeliveryLocationPickerSheet: React.FC<DeliveryLocationPickerSheetPr
             className="welcome-btn-pulse w-full p-4 flex items-center justify-center gap-2 border-t border-white/15 text-white bg-white/5 hover:bg-white/10 transition-colors shrink-0"
           >
             <Plus size={16} />
-            <span className="text-sm font-black">إضافة أو تعديل موقع</span>
+            <span className="text-sm font-black">{t('locations.addOrEdit')}</span>
           </button>
         </div>
       </div>

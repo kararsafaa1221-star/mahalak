@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion } from 'motion/react';
 import {
   ArrowRightLeft,
@@ -12,6 +13,8 @@ import {
 } from 'lucide-react';
 import type { Product, Store } from '@shared/types';
 import { ProductImage } from '@shared/components/ProductImage';
+import { StoreIdentity } from '@shared/components/StoreIdentity';
+import { isStoreVerified } from '@shared/utils/storeVerification';
 import { WelcomeScreenBackground } from '@shared/components/WelcomeScreenBackground';
 import {
   buildProductPriceComparison,
@@ -35,14 +38,19 @@ export interface ProductComparePanelProps {
 function CompareProductCard({
   item,
   storeName,
+  storeUsername,
+  storeVerified = false,
   onSelect,
   onAddToCart,
 }: {
   item: ProductPriceComparison;
   storeName: string;
+  storeUsername?: string;
+  storeVerified?: boolean;
   onSelect: () => void;
   onAddToCart: () => void;
 }) {
+  const { t } = useTranslation();
   const { product, comparePrice, diff, relation } = item;
   const badgeClass =
     relation === 'cheaper'
@@ -79,16 +87,23 @@ function CompareProductCard({
         <h4 className="font-extrabold text-white text-[11px] sm:text-xs line-clamp-2 leading-snug mb-1.5">
           {product.name}
         </h4>
-        <span className="inline-flex self-start max-w-full px-2 py-0.5 rounded-lg border border-white/30 text-[9px] font-bold text-white truncate mb-auto">
-          <StoreIcon size={9} className="ml-1 shrink-0" />
-          {storeName}
+        <span className="inline-flex items-start gap-1 self-start max-w-full px-2 py-0.5 rounded-lg border border-white/30 text-white mb-auto">
+          <StoreIcon size={9} className="mt-0.5 shrink-0" />
+          <StoreIdentity
+            name={storeName}
+            username={storeUsername}
+            verified={storeVerified}
+            size="xs"
+            nameClassName="text-white"
+            usernameClassName="text-white/70"
+          />
         </span>
         <div className="mt-2 pt-2 border-t border-white/15 flex items-end justify-between gap-1">
           <div className="min-w-0">
-            <span className="block text-[8px] text-white/55 font-bold mb-0.5">السعر</span>
+            <span className="block text-[8px] text-white/55 font-bold mb-0.5">{t('compare.priceLabel')}</span>
             <span className="font-black text-[#fff700] text-sm leading-none">
               {comparePrice.toLocaleString('ar-IQ')}
-              <span className="text-[9px] font-bold text-white mr-0.5">د.ع</span>
+              <span className="text-[9px] font-bold text-white mr-0.5">{t('common.currency')}</span>
             </span>
           </div>
           <button
@@ -98,7 +113,7 @@ function CompareProductCard({
               onAddToCart();
             }}
             className="welcome-btn-pulse relative z-10 w-7 h-7 text-white border border-white/40 bg-white/10 hover:bg-[#fff700] hover:text-deep-navy rounded-lg flex items-center justify-center transition-colors shrink-0 active:scale-95 shadow-sm"
-            aria-label="أضف إلى السلة"
+            aria-label={t('compare.addToCartAria')}
           >
             <Plus size={14} strokeWidth={2.5} />
           </button>
@@ -121,24 +136,29 @@ function CompareSection({
   onSelectProduct: (product: Product) => void;
   onAddToCart: (product: Product) => void;
 }) {
+  const { t } = useTranslation();
   if (!items.length) return null;
 
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-2 px-0.5">
         <h4 className="font-black text-sm text-white">{title}</h4>
-        <span className="text-[10px] font-bold text-white/55 bg-white/10 border border-white/20 px-2 py-0.5 rounded-full">{items.length} منتج</span>
+        <span className="text-[10px] font-bold text-white/55 bg-white/10 border border-white/20 px-2 py-0.5 rounded-full">{t('compare.productCount', { count: items.length })}</span>
       </div>
       <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x snap-mandatory -mx-1 px-1">
-        {items.map((item) => (
+        {items.map((item) => {
+          const store = storeMap.get(item.product.storeId);
+          return (
           <CompareProductCard
             key={item.product.id}
             item={item}
-            storeName={storeMap.get(item.product.storeId)?.shopName || 'متجر'}
+            storeName={store?.shopName || t('productDetail.defaultStore')}
+            storeUsername={store?.username}
+            storeVerified={isStoreVerified(store)}
             onSelect={() => onSelectProduct(item.product)}
             onAddToCart={() => onAddToCart(item.product)}
           />
-        ))}
+        );})}
       </div>
     </section>
   );
@@ -153,6 +173,7 @@ export const ProductComparePanel: React.FC<ProductComparePanelProps> = ({
   onSelectProduct,
   onAddToCart,
 }) => {
+  const { t } = useTranslation();
   const comparisons = useMemo(() => {
     const similar = getSimilarProducts(baseProduct, products);
     return sortComparisonsByPrice(similar.map((product) => buildProductPriceComparison(baseProduct, product)));
@@ -185,17 +206,17 @@ export const ProductComparePanel: React.FC<ProductComparePanelProps> = ({
               className="welcome-btn-pulse flex items-center gap-1.5 text-white bg-white/15 hover:bg-white/25 border border-white/25 rounded-xl px-3 py-2 text-[11px] font-black transition-all active:scale-95 shrink-0"
             >
               <ChevronRight size={16} />
-              <span>رجوع</span>
+              <span>{t('productDetail.back')}</span>
             </button>
             <div className="min-w-0 text-center flex-1">
-              <h3 className="font-black text-white text-sm sm:text-base">مقارنة الأسعار</h3>
-              <p className="text-[10px] text-white/70 font-bold truncate">المنتجات المشابهة في متاجر أخرى</p>
+              <h3 className="font-black text-white text-sm sm:text-base">{t('compare.title')}</h3>
+              <p className="text-[10px] text-white/70 font-bold truncate">{t('compare.subtitle')}</p>
             </div>
             <button
               type="button"
               onClick={onClose}
               className="p-2 text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl border border-white/20 transition-colors shrink-0"
-              aria-label="إغلاق"
+              aria-label={t('common.close')}
             >
               <X size={16} />
             </button>
@@ -214,11 +235,11 @@ export const ProductComparePanel: React.FC<ProductComparePanelProps> = ({
                 />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-[10px] font-bold text-white/55 mb-1">المنتج الحالي</p>
+                <p className="text-[10px] font-bold text-white/55 mb-1">{t('compare.currentProduct')}</p>
                 <h4 className="font-black text-white text-sm line-clamp-2 leading-snug">{baseProduct.name}</h4>
                 <p className="text-[#fff700] font-black text-base mt-1">
                   {basePrice.toLocaleString('ar-IQ')}
-                  <span className="text-[10px] text-white/80 mr-1">د.ع</span>
+                  <span className="text-[10px] text-white/80 mr-1">{t('common.currency')}</span>
                 </p>
               </div>
             </div>
@@ -226,15 +247,15 @@ export const ProductComparePanel: React.FC<ProductComparePanelProps> = ({
             {comparisons.length > 0 && (
               <div className="grid grid-cols-3 gap-2 mt-4">
                 <div className="rounded-xl bg-emerald-500/10 border border-emerald-400/20 px-2 py-2 text-center">
-                  <p className="text-[9px] text-emerald-300 font-bold">أرخص</p>
+                  <p className="text-[9px] text-emerald-300 font-bold">{t('compare.cheaper')}</p>
                   <p className="text-sm font-black text-emerald-200">{summary.cheaper}</p>
                 </div>
                 <div className="rounded-xl bg-white/10 border border-white/15 px-2 py-2 text-center">
-                  <p className="text-[9px] text-white/60 font-bold">نفس السعر</p>
+                  <p className="text-[9px] text-white/60 font-bold">{t('compare.samePrice')}</p>
                   <p className="text-sm font-black text-white">{summary.same}</p>
                 </div>
                 <div className="rounded-xl bg-rose-500/10 border border-rose-400/20 px-2 py-2 text-center">
-                  <p className="text-[9px] text-rose-300 font-bold">أغلى</p>
+                  <p className="text-[9px] text-rose-300 font-bold">{t('compare.expensive')}</p>
                   <p className="text-sm font-black text-rose-200">{summary.expensive}</p>
                 </div>
               </div>
@@ -245,29 +266,29 @@ export const ProductComparePanel: React.FC<ProductComparePanelProps> = ({
             {comparisons.length === 0 ? (
               <div className="py-16 text-center rounded-[2rem] border border-white/20 bg-white/5 px-6 welcome-card-border-glow">
                 <Info size={36} className="mx-auto mb-3 text-white/35" />
-                <p className="font-black text-white text-sm mb-1">لا توجد منتجات مشابهة حالياً</p>
+                <p className="font-black text-white text-sm mb-1">{t('compare.emptyTitle')}</p>
                 <p className="text-[11px] font-bold text-white/55 leading-relaxed">
-                  لم نعثر على منتجات مماثلة في متاجر أخرى. جرّب لاحقاً أو ابحث في تبويب المنتجات.
+                  {t('compare.emptyHint')}
                 </p>
               </div>
             ) : (
               <>
                 <CompareSection
-                  title="خيارات أرخص"
+                  title={t('compare.cheaperSection')}
                   items={cheaperItems}
                   storeMap={storeMap}
                   onSelectProduct={onSelectProduct}
                   onAddToCart={onAddToCart}
                 />
                 <CompareSection
-                  title="نفس السعر تقريباً"
+                  title={t('compare.sameSection')}
                   items={sameItems}
                   storeMap={storeMap}
                   onSelectProduct={onSelectProduct}
                   onAddToCart={onAddToCart}
                 />
                 <CompareSection
-                  title="خيارات أعلى سعراً"
+                  title={t('compare.expensiveSection')}
                   items={expensiveItems}
                   storeMap={storeMap}
                   onSelectProduct={onSelectProduct}

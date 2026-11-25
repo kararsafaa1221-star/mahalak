@@ -4,15 +4,18 @@
 // =======================================================
 
 import React, { useState, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Upload, Camera, Sparkles, Check, AlertCircle, RefreshCw, Eye, Image as ImageIcon } from 'lucide-react';
 import { removeBackgroundOptimized } from '@shared/utils/backgroundRemoval';
+import { ensureStoreSessionForStorage } from '@shared/lib/storeAuth';
 
 // Interfaces
 interface ProductUploaderProps {
   onUploadSuccess: (downloadUrl: string) => void;
   onUploadError?: (error: Error) => void;
-  folderPath?: string; // e.g. "products"
+  /** Firestore store id — required for Storage rules path products/images/{storeId}/… */
+  storeId: string;
 }
 
 /**
@@ -64,8 +67,9 @@ const resizeImageFileToBlob = (file: File, maxWidth = 800, maxHeight = 800): Pro
 export const ProductUploader: React.FC<ProductUploaderProps> = ({
   onUploadSuccess,
   onUploadError,
-  folderPath = 'products',
+  storeId,
 }) => {
+  const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Pipeline Step State
@@ -107,12 +111,16 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
       const localResultUrl = URL.createObjectURL(outputBlob);
       setProcessedImageUrl(localResultUrl);
 
-      // Step 3: Secure Upload to Firebase Storage
+      // Step 3: Secure Upload to Firebase Storage (merchant-scoped path)
       setCurrentStep('uploading');
+      if (!storeId) {
+        throw new Error('Store id is required for product image upload.');
+      }
+      await ensureStoreSessionForStorage(storeId);
       const storage = getStorage();
-      const fileExtension = 'png'; // Preserves transparency
+      const fileExtension = 'png';
       const uniqueFileName = `${Date.now()}_optimized.${fileExtension}`;
-      const storageRef = ref(storage, `${folderPath}/${uniqueFileName}`);
+      const storageRef = ref(storage, `products/images/${storeId}/${uniqueFileName}`);
 
       await uploadBytes(storageRef, outputBlob, { contentType: 'image/png' });
       const downloadUrl = await getDownloadURL(storageRef);
@@ -121,7 +129,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
       setCurrentStep('completed');
       onUploadSuccess(downloadUrl);
     } catch (err: any) {
-      const errorMessage = err?.message || 'Failed processing or uploading. Please try another image.';
+      const errorMessage = err?.message || t('merchant.products.upload.processFailed');
       setErrorMsg(errorMessage);
       setCurrentStep('idle');
       if (onUploadError) {
@@ -143,7 +151,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
   };
 
   return (
-    <div className="w-full max-w-xl mx-auto bg-white border border-slate-100 rounded-3xl p-6 shadow-xl font-sans" dir="rtl">
+    <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full max-w-xl mx-auto rounded-3xl p-6 shadow-xl font-sans text-white" dir="rtl">
       {/* Hidden Native Chooser */}
       <input
         type="file"
@@ -160,8 +168,8 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
             <Sparkles size={20} className="animate-pulse" />
           </div>
           <div>
-            <h3 className="text-base font-black text-slate-800">تجهيز ومُعالجة صور المنتجات</h3>
-            <p className="text-xs text-slate-400 font-bold">تفريغ تلقائي بالذكاء الاصطناعي مع ضغط ذكي فوري</p>
+            <h3 className="text-base font-black text-slate-800">{t('merchant.products.upload.title')}</h3>
+            <p className="text-xs text-slate-400 font-bold">{t('merchant.products.upload.subtitle')}</p>
           </div>
         </div>
         {currentStep === 'completed' && (
@@ -170,7 +178,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
             className="text-xs bg-slate-50 hover:bg-slate-100 text-slate-500 font-black px-3 py-1.5 rounded-xl border border-slate-200/50 transition flex items-center gap-1.5"
           >
             <RefreshCw size={13} />
-            <span>صورة جديدة</span>
+            <span>{t('merchant.products.upload.newImage')}</span>
           </button>
         )}
       </div>
@@ -180,7 +188,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
         <div className="mb-5 bg-rose-50 border border-rose-100/80 p-4 rounded-2xl text-rose-600 text-xs font-bold leading-relaxed flex gap-2.5 items-start">
           <AlertCircle size={18} className="shrink-0 text-rose-500 mt-0.5" />
           <div className="space-y-1">
-            <span className="font-extrabold text-rose-800">حدث خطأ أثناء المعالجة:</span>
+            <span className="font-extrabold text-rose-800">{t('merchant.products.upload.errorTitle')}</span>
             <p className="font-medium text-[11px] leading-normal">{errorMsg}</p>
           </div>
         </div>
@@ -196,8 +204,8 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
               <Upload size={30} />
             </div>
             <div className="space-y-1">
-              <span className="text-sm font-black text-slate-800">اختر صورة المنتج للبدء فوراً</span>
-              <p className="text-xs text-slate-400 font-bold">يدعم التقاط الصور بالكاميرا أو إحضارها مباشرة من الاستوديو</p>
+              <span className="text-sm font-black text-slate-800">{t('merchant.products.upload.idleTitle')}</span>
+              <p className="text-xs text-slate-400 font-bold">{t('merchant.products.upload.idleHint')}</p>
             </div>
             
             <button
@@ -206,7 +214,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
               className="py-3 px-6 bg-vibrant-purple hover:bg-[#823ce6] text-white text-xs font-black rounded-xl transition shadow-md hover:shadow-lg flex items-center gap-2"
             >
               <Camera size={16} />
-              <span>التقاط أو تصفح المعرض 📸</span>
+              <span>{t('merchant.products.upload.pickImage')}</span>
             </button>
           </div>
         )}
@@ -215,9 +223,9 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
         {currentStep === 'resizing' && (
           <div className="space-y-3 flex flex-col items-center">
             <div className="w-12 h-12 border-4 border-vibrant-purple border-t-transparent rounded-full animate-spin"></div>
-            <span className="text-sm font-black text-vibrant-purple animate-pulse">جاري ضغط حجم الصورة وتقليص دقتها...</span>
+            <span className="text-sm font-black text-vibrant-purple animate-pulse">{t('merchant.products.upload.resizing')}</span>
             <p className="text-[11px] text-slate-400 font-bold max-w-xs leading-normal">
-              نقوم بضغط الصورة أولاً محلياً لتجنب استهلاك باقة الإنترنت وحماية ذاكرة المتصفح من الانهيار.
+              {t('merchant.products.upload.resizingHint')}
             </p>
           </div>
         )}
@@ -238,9 +246,9 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
             </div>
 
             <div className="space-y-1">
-              <span className="text-xs font-black text-slate-800">جاري مسح ومعالجة خلفية المنتج... {progressPercentage}%</span>
+              <span className="text-xs font-black text-slate-800">{t('merchant.products.upload.bgRemoving', { percent: progressPercentage })}</span>
               <p className="text-[10px] text-slate-400 font-bold leading-normal">
-                جاري تفعيل نموذج الذكاء الاصطناعي محلياً على المتصفح لمعالجة الخطوط وتفريغ الأطراف.
+                {t('merchant.products.upload.bgRemovingHint')}
               </p>
             </div>
           </div>
@@ -250,8 +258,8 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
         {currentStep === 'uploading' && (
           <div className="space-y-3 flex flex-col items-center">
             <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-            <span className="text-sm font-black text-emerald-600 animate-pulse">جاري رفع الملف المعالج لـ Cloud Storage...</span>
-            <p className="text-[11px] text-slate-400 font-semibold">توفير الصورة الناتجة في مخزن Firebase الآمن.</p>
+            <span className="text-sm font-black text-emerald-600 animate-pulse">{t('merchant.products.upload.uploading')}</span>
+            <p className="text-[11px] text-slate-400 font-semibold">{t('merchant.products.upload.uploadingHint')}</p>
           </div>
         )}
 
@@ -260,7 +268,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
           <div className="space-y-4 w-full flex flex-col items-center">
             <div className="grid grid-cols-2 gap-4 w-full max-w-md">
               <div className="space-y-1">
-                <span className="text-[10px] text-slate-400 font-black block">الصورة الأصلية:</span>
+                <span className="text-[10px] text-slate-400 font-black block">{t('merchant.products.upload.originalLabel')}</span>
                 <div className="aspect-square rounded-xl bg-slate-100 overflow-hidden border border-slate-200">
                   <img 
                     src={originalFile ? URL.createObjectURL(originalFile) : ''} 
@@ -270,7 +278,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
                 </div>
               </div>
               <div className="space-y-1">
-                <span className="text-[10px] text-emerald-500 font-black block">الصورة المعالجة (شفاف):</span>
+                <span className="text-[10px] text-emerald-500 font-black block">{t('merchant.products.upload.processedLabel')}</span>
                 <div 
                   className="aspect-square rounded-xl overflow-hidden border border-emerald-200 flex items-center justify-center p-2"
                   style={{
@@ -295,8 +303,8 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
                   <Check size={14} />
                 </div>
                 <div className="text-right">
-                  <span className="text-xs font-black text-emerald-800 block">تم رفع الصورة بنجاح وتفريغها</span>
-                  <span className="text-[10px] text-emerald-500 font-bold">الرابط جاهز لحفظ مواصفات المنتج الجديد</span>
+                  <span className="text-xs font-black text-emerald-800 block">{t('merchant.products.upload.successTitle')}</span>
+                  <span className="text-[10px] text-emerald-500 font-bold">{t('merchant.products.upload.successHint')}</span>
                 </div>
               </div>
               
@@ -305,7 +313,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
                 target="_blank"
                 rel="noreferrer"
                 className="p-2 hover:bg-emerald-100/50 rounded-xl transition text-emerald-600 hover:text-emerald-700"
-                title="معاينة الصورة بكامل دقتها"
+                title={t('merchant.products.upload.previewFull')}
               >
                 <Eye size={16} />
               </a>
@@ -319,7 +327,7 @@ export const ProductUploader: React.FC<ProductUploaderProps> = ({
         <div className="mt-4 flex items-center gap-2 bg-slate-50 border border-slate-100 p-3.5 rounded-2xl text-slate-400">
           <ImageIcon size={16} className="shrink-0 text-slate-400" />
           <span className="text-[10px] leading-normal font-bold">
-            💡 نصيحة: للتمكن من عزل ومسح الخلفية بنجاح ووضوح؛ يُفضل وضع المنتج على طاولة ذات لون مغاير للأطراف ومع إضاءة كافية ومناسبة.
+            {t('merchant.products.upload.tip')}
           </span>
         </div>
       )}

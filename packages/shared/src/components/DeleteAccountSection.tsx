@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, ChevronLeft, Loader2, Trash2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useTranslation } from 'react-i18next';
 import { WelcomeScreenBackground } from './WelcomeScreenBackground';
 
 type Props = {
@@ -17,6 +18,7 @@ export const DeleteAccountSection: React.FC<Props> = ({
   variant = 'glass',
   className = '',
 }) => {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export const DeleteAccountSection: React.FC<Props> = ({
       await onConfirmDelete();
       setOpen(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'تعذر حذف الحساب. حاول مجدداً أو تواصل مع الدعم.');
+      setError(e instanceof Error ? e.message : t('profile.deleteAccountError'));
     } finally {
       setBusy(false);
     }
@@ -58,8 +60,8 @@ export const DeleteAccountSection: React.FC<Props> = ({
               <Trash2 size={20} />
             </div>
             <div className="text-right min-w-0">
-              <h3 className="font-black text-[#E8ECF4] text-sm">حذف الحساب</h3>
-              <p className="text-[10px] text-slate-400 font-bold">حذف دائم لبياناتك</p>
+              <h3 className="font-black text-[#E8ECF4] text-sm">{t('profile.deleteAccount')}</h3>
+              <p className="text-[10px] text-slate-400 font-bold">{t('profile.deleteAccountPermanentHint')}</p>
             </div>
           </div>
           <ChevronLeft size={20} className="text-slate-400 shrink-0" />
@@ -82,8 +84,8 @@ export const DeleteAccountSection: React.FC<Props> = ({
             <Trash2 size={20} />
           </div>
           <div className="text-right">
-            <span className="text-sm font-black text-white block">حذف الحساب</span>
-            <span className="text-[10px] text-white/50 font-bold">حذف دائم لبياناتك</span>
+            <span className="text-sm font-black text-white block">{t('profile.deleteAccount')}</span>
+            <span className="text-[10px] text-white/50 font-bold">{t('profile.deleteAccountPermanentHint')}</span>
           </div>
         </div>
         <ChevronLeft size={18} className="text-white/50 group-hover:translate-x-1 transition-transform" />
@@ -106,7 +108,7 @@ export const DeleteAccountSection: React.FC<Props> = ({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 12 }}
               onClick={(e) => e.stopPropagation()}
-              className="relative welcome-card-glow welcome-card-border-glow bg-deep-navy rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden border border-white/30"
+              className="relative merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden text-white"
             >
               <WelcomeScreenBackground lite />
               <div className="relative z-10">
@@ -116,7 +118,7 @@ export const DeleteAccountSection: React.FC<Props> = ({
                       <AlertTriangle size={22} />
                     </div>
                     <div>
-                      <h3 className="font-black text-lg leading-tight">تأكيد حذف الحساب</h3>
+                      <h3 className="font-black text-lg leading-tight">{t('profile.deleteAccountConfirmTitle')}</h3>
                       <p className="text-xs text-white/60 font-bold mt-1">{accountLabel}</p>
                     </div>
                   </div>
@@ -125,7 +127,7 @@ export const DeleteAccountSection: React.FC<Props> = ({
                     disabled={busy}
                     onClick={() => setOpen(false)}
                     className="p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 transition disabled:opacity-50"
-                    aria-label="إغلاق"
+                    aria-label={t('common.close')}
                   >
                     <X size={18} />
                   </button>
@@ -133,17 +135,17 @@ export const DeleteAccountSection: React.FC<Props> = ({
 
                 <div className="p-6 space-y-4 text-right text-white">
                   <p className="text-sm font-bold text-white/80 leading-relaxed">
-                    هذا الإجراء <span className="text-rose-300">نهائي ولا يمكن التراجع عنه</span>.
-                    سيتم حذف بيانات حسابك الشخصية من منصة محلك، بما في ذلك:
+                    <span className="text-rose-300">{t('profile.deleteAccountPermanentHint')}</span>
+                    {' '}
+                    {t('profile.deleteAccountConfirmBody')}
                   </p>
                   <ul className="text-xs font-bold text-white/65 space-y-2 list-disc list-inside">
-                    <li>الاسم ورقم الهاتف ومواقع التوصيل المحفوظة</li>
-                    <li>نقاط الولاء والإعدادات الشخصية</li>
-                    <li>بيانات تسجيل الدخول (Firebase Auth)</li>
+                    <li>{t('profile.deleteAccountBullet1')}</li>
+                    <li>{t('profile.deleteAccountBullet2')}</li>
+                    <li>{t('profile.deleteAccountBullet3')}</li>
                   </ul>
                   <p className="text-[11px] text-white/50 font-bold leading-relaxed bg-white/5 border border-white/15 rounded-xl p-3">
-                    قد تُحتفظ بعض السجلات التشغيلية (مثل الطلبات السابقة) بشكل مجهول لأغراض قانونية
-                    ومحاسبية وفق سياسة الخصوصية.
+                    {t('profile.deleteAccountLegal')}
                   </p>
 
                   {error && (
@@ -162,12 +164,12 @@ export const DeleteAccountSection: React.FC<Props> = ({
                       {busy ? (
                         <>
                           <Loader2 size={18} className="animate-spin" />
-                          جاري الحذف...
+                          {t('profile.deleteAccountDeleting')}
                         </>
                       ) : (
                         <>
                           <Trash2 size={18} />
-                          نعم، احذف حسابي نهائياً
+                          {t('profile.deleteAccountConfirmBtn')}
                         </>
                       )}
                     </button>
@@ -177,7 +179,7 @@ export const DeleteAccountSection: React.FC<Props> = ({
                       onClick={() => setOpen(false)}
                       className="w-full py-3.5 bg-white/10 hover:bg-white/15 text-white font-black rounded-2xl transition border border-white/20"
                     >
-                      إلغاء
+                      {t('common.cancel')}
                     </button>
                   </div>
                 </div>

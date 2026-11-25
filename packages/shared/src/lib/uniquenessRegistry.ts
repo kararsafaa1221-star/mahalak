@@ -10,6 +10,7 @@ import {
 import { db } from './firebase';
 import { stripUndefinedFields } from './firestoreUtils';
 import { normalizeIraqiPhone } from '../utils/phone';
+import { tKey } from '../i18n/tKey';
 
 export const UNIQUE_PHONES = 'unique_phones';
 export const UNIQUE_USERNAMES = 'unique_usernames';
@@ -52,9 +53,15 @@ export async function isUsernameRegistered(username: string): Promise<boolean> {
 
 function phoneTakenMessage(entityType?: string): string {
   if (entityType === 'store') {
-    return 'رقم الهاتف مسجل مسبقاً كتاجر! لا يمكن إنشاء حساب جديد بنفس الرقم.';
+    return tKey(
+      'errors.phoneTakenMerchant',
+      'رقم الهاتف مسجل مسبقاً كتاجر! لا يمكن إنشاء حساب جديد بنفس الرقم.',
+    );
   }
-  return 'رقم الهاتف مسجل مسبقاً كزبون! لا يمكن استخدامه لإنشاء حساب آخر.';
+  return tKey(
+    'errors.phoneTakenCustomer',
+    'رقم الهاتف مسجل مسبقاً كزبون! لا يمكن استخدامه لإنشاء حساب آخر.',
+  );
 }
 
 export function assertPhoneAvailableInTransaction(
@@ -72,7 +79,7 @@ export function assertUsernameAvailableInTransaction(
   if (!usernameSnap.exists()) return;
   const existing = usernameSnap.data();
   if (existing?.storeId === storeId) return;
-  throw new Error('اسم المستخدم مسجل مسبقاً من متجر آخر!');
+  throw new Error(tKey('errors.usernameTaken', 'اسم المستخدم مسجل مسبقاً من متجر آخر!'));
 }
 
 export function claimPhoneInTransaction(
@@ -83,7 +90,7 @@ export function claimPhoneInTransaction(
 ): string {
   const phoneKey = normalizePhoneKey(phone);
   if (!phoneKey || phoneKey.length < 12) {
-    throw new Error('رقم الهاتف غير صالح');
+    throw new Error(tKey('errors.phoneInvalid', 'رقم الهاتف غير صالح'));
   }
   const ref = doc(db, UNIQUE_PHONES, phoneKey);
   tx.set(ref, {
@@ -103,7 +110,7 @@ export function claimUsernameInTransaction(
 ): string {
   const usernameKey = normalizeUsernameKey(username);
   if (!usernameKey || usernameKey.length < 3) {
-    throw new Error('اسم المستخدم غير صالح');
+    throw new Error(tKey('errors.usernameInvalid', 'اسم المستخدم غير صالح'));
   }
   const ref = doc(db, UNIQUE_USERNAMES, usernameKey);
   tx.set(ref, {
@@ -126,7 +133,7 @@ export async function createCustomerWithUniquePhone(
   await runTransaction(db, async (tx) => {
     const blockedSnap = await tx.get(doc(db, BLOCKED_PHONES, phoneKey));
     if (blockedSnap.exists() && blockedSnap.data()?.blocked !== false) {
-      throw new Error('هذا الرقم محظور من قبل إدارة النظام. تواصل مع الدعم لرفع الحظر.');
+      throw new Error(tKey('errors.phoneBlocked', 'هذا الرقم محظور من قبل إدارة النظام. تواصل مع الدعم لرفع الحظر.'));
     }
     claimPhoneInTransaction(tx, phone, 'customer', customerRef.id);
     tx.set(customerRef, stripUndefinedFields(customerData));
@@ -146,7 +153,7 @@ export async function createStoreWithUniquePhoneAndUsername(
   await runTransaction(db, async (tx) => {
     const blockedSnap = await tx.get(doc(db, BLOCKED_PHONES, phoneKey));
     if (blockedSnap.exists() && blockedSnap.data()?.blocked !== false) {
-      throw new Error('هذا الرقم محظور من قبل إدارة النظام. تواصل مع الدعم لرفع الحظر.');
+      throw new Error(tKey('errors.phoneBlocked', 'هذا الرقم محظور من قبل إدارة النظام. تواصل مع الدعم لرفع الحظر.'));
     }
     claimPhoneInTransaction(tx, phone, 'store', storeRef.id);
     claimUsernameInTransaction(tx, username, storeRef.id);
@@ -190,7 +197,7 @@ export async function blockPhoneRegistry(
   },
 ): Promise<string> {
   const phoneKey = normalizePhoneKey(phone);
-  if (!phoneKey) throw new Error('رقم الهاتف غير صالح');
+  if (!phoneKey) throw new Error(tKey('errors.phoneInvalid', 'رقم الهاتف غير صالح'));
   await setDoc(doc(db, BLOCKED_PHONES, phoneKey), {
     phone: phoneKey,
     phoneKey,

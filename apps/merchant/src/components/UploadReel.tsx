@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useApp } from '@shared/context/useApp';
 import { db, storage } from '@shared/lib/firebase';
 import { collection, doc, setDoc, updateDoc, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
@@ -13,6 +14,7 @@ interface UploadReelProps {
 }
 
 export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, onCancel }) => {
+  const { t } = useTranslation();
   const { currentMerchant } = useApp();
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProds, setLoadingProds] = useState(false);
@@ -64,7 +66,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
         
         setProducts(fetchedProds);
       } catch (err: any) {
-        setError("فشل تحميل قائمة المنتجات من Firestore. يرجى التحقق من الشبكة.");
+        setError(t('merchant.reels.upload.errors.loadProducts'));
       } finally {
         setLoadingProds(false);
       }
@@ -93,7 +95,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
     // 1. Check file size (limit to 250MB for general convenience)
     const maxSize = 250 * 1024 * 1024; // 250MB
     if (file.size > maxSize) {
-      setError("حجم الفيديو كبير جداً! الحد الأقصى المسموح به هو 250 ميجابايت.");
+      setError(t('merchant.reels.upload.errors.fileTooLarge'));
       return;
     }
 
@@ -107,7 +109,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
       
       // 2. Check duration (Limit to 60 seconds)
       if (videoElement.duration > 60.5) {
-        setError("مدة المقطع طويلة جداً! يرجى تحميل مقطع لا يزيد عن 60 ثانية (ريلز قصير).");
+        setError(t('merchant.reels.upload.errors.durationTooLong'));
         setVideoFile(null);
         setVideoPreview(null);
         return;
@@ -119,7 +121,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
 
     videoElement.onerror = () => {
       URL.revokeObjectURL(videoElement.src);
-      setError("صيغة الفيديو غير مدعومة أو الملف تالف!");
+      setError(t('merchant.reels.upload.errors.invalidFormat'));
     };
   };
 
@@ -137,15 +139,15 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
   const handleUploadAndSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!videoFile && !reelToEdit) {
-      setError("يرجى اختيار مقطع فيديو أولاً.");
+      setError(t('merchant.reels.upload.errors.noVideo'));
       return;
     }
     if (!selectedProductId) {
-      setError("يرجى اختيار المنتج المرتبط بهذا المقطع.");
+      setError(t('merchant.reels.upload.errors.noProduct'));
       return;
     }
     if (!merchantId) {
-      setError("فشل التعرف على المتجر الحالي! يرجى تسجيل الدخول.");
+      setError(t('merchant.reels.upload.errors.noStore'));
       return;
     }
 
@@ -174,7 +176,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
               setUploadProgress(Math.round(progress));
             },
             (err) => {
-              reject(new Error("حدث خطأ أثناء رفع الفيديو إلى التخزين السحابي."));
+              reject(new Error(t('merchant.reels.upload.errors.uploadFailed')));
             },
             async () => {
               try {
@@ -196,7 +198,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
                 await setDoc(reelDocRef, reelData);
                 resolve();
               } catch (saveErr: any) {
-                reject(new Error("فشل حفظ بيانات المقطع في قاعدة البيانات."));
+                reject(new Error(t('merchant.reels.upload.errors.saveFailed')));
               }
             }
           );
@@ -214,7 +216,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
       setSelectedProductId('');
       if (onSuccess) onSuccess();
     } catch (err: any) {
-      setError(err?.message || "حدث خطأ غير متوقع أثناء الرفع.");
+      setError(err?.message || t('merchant.reels.upload.errors.generic'));
     } finally {
       setUploading(false);
       setUploadProgress(null);
@@ -222,16 +224,16 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
   };
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-100 shadow-xl p-5 sm:p-6" dir="rtl">
-      <div className="flex items-center gap-3 mb-6 border-b border-slate-50 pb-4">
-        <div className="w-10 h-10 rounded-2xl bg-vibrant-purple/10 flex items-center justify-center text-vibrant-purple">
+    <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-3xl shadow-xl p-5 sm:p-6 text-white" dir="rtl">
+      <div className="flex items-center gap-3 mb-6 border-b border-white/15 pb-4">
+        <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-[#fff700]">
           <Film size={22} />
         </div>
         <div>
-          <h2 className="text-lg font-black text-slate-900 font-tajawal">
-            {reelToEdit ? "تعديل مقطع فيديو تسوقي (ريل)" : "إضافة مقطع فيديو تسوقي (ريل)"}
+          <h2 className="text-lg font-black text-white font-tajawal">
+            {reelToEdit ? t('merchant.reels.upload.titleEdit') : t('merchant.reels.upload.titleAdd')}
           </h2>
-          <p className="text-xs text-slate-500 font-medium">ارفع مقاطع قصيرة رائعة واربطها بمنتجات متجرك لزيادة المبيعات والطلب المباشر!</p>
+          <p className="text-xs text-white/60 font-medium">{t('merchant.reels.upload.subtitle')}</p>
         </div>
       </div>
 
@@ -245,7 +247,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
       {success && (
         <div className="mb-5 p-4 rounded-2xl bg-emerald-50 border border-emerald-100 text-[#00AA4F] text-xs sm:text-sm font-bold flex items-start gap-2.5">
           <CheckCircle size={18} className="text-[#00AA4F] shrink-0 mt-0.5" />
-          <span>تم رفع مقطع الريل التسوقي وحفظه بنجاح! ✅ ستظهر للزبائن في قائمة الفيديوهات للتسوق الفوري.</span>
+          <span>{t('merchant.reels.upload.successMsg')}</span>
         </div>
       )}
 
@@ -254,19 +256,19 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
         {/* Dropdown: Product Selection */}
         <div className="space-y-2">
           <label className="block text-xs font-black text-slate-800 font-tajawal">
-            اختر المنتج المرتبط بالفيديو <span className="text-rose-500">*</span>
+            {t('merchant.reels.upload.productLabel')} <span className="text-rose-500">*</span>
           </label>
           {loadingProds ? (
             <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-100 text-slate-500 text-xs font-bold">
               <Loader2 size={16} className="animate-spin text-vibrant-purple" />
-              <span>جاري تحميل قائمة منتجات متجرك...</span>
+              <span>{t('merchant.reels.upload.loadingProducts')}</span>
             </div>
           ) : products.length === 0 ? (
             <div className="p-4 rounded-2xl bg-amber-50 border border-amber-100 text-amber-800 text-xs font-bold flex items-start gap-2.5">
               <AlertTriangle size={18} className="text-amber-600 shrink-0" />
               <div>
-                <p>لا توجد منتجات منشورة في متجرك حالياً!</p>
-                <p className="text-[10px] text-amber-700 font-medium mt-1">يجب إضافة منتجات أولاً لتتمكن من ربطها بمقاطع الفيديو التسوقية.</p>
+                <p>{t('merchant.reels.upload.noProductsTitle')}</p>
+                <p className="text-[10px] text-amber-700 font-medium mt-1">{t('merchant.reels.upload.noProductsHint')}</p>
               </div>
             </div>
           ) : (
@@ -274,10 +276,10 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
               value={selectedProductId}
               onChange={(e) => setSelectedProductId(e.target.value)}
               disabled={uploading}
-              className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-xs sm:text-sm font-bold focus:ring-4 focus:ring-vibrant-purple/5 focus:border-vibrant-purple outline-none transition-all placeholder:text-slate-400"
+              className="welcome-select welcome-select--lg"
               required
             >
-              <option value="">-- اختر أحد المنتجات للتسوق --</option>
+              <option value="">{t('merchant.reels.upload.productPlaceholder')}</option>
               {products.map((prod) => (
                 <option key={prod.id} value={prod.id}>
                   {prod.name} ({prod.finalPrice} د.ع)
@@ -290,7 +292,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
         {/* Video Upload area */}
         <div className="space-y-2">
           <label className="block text-xs font-black text-slate-800 font-tajawal">
-            مقطع الفيديو العمودي <span className="text-rose-500">*</span>
+            {t('merchant.reels.upload.videoLabel')} <span className="text-rose-500">*</span>
           </label>
           
           {!videoPreview ? (
@@ -309,9 +311,9 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
               <div className="w-14 h-14 rounded-full bg-vibrant-purple/5 group-hover:bg-vibrant-purple/10 text-vibrant-purple flex items-center justify-center mb-4 transition-all group-hover:scale-110">
                 <Upload size={26} />
               </div>
-              <p className="text-xs sm:text-sm font-black text-slate-800 font-tajawal">انقر لتحميل مقطع الريل لربطه بالمنتج</p>
+              <p className="text-xs sm:text-sm font-black text-slate-800 font-tajawal">{t('merchant.reels.upload.uploadPrompt')}</p>
               <p className="text-[10px] sm:text-xs text-slate-400 font-medium mt-2 max-w-[280px]">
-                يفضل فيديو عمودي بنسبة أبعاد (9:16)، الحد الأقصى للحجم <strong className="text-slate-500">250MB</strong> والمدة لا تزيد عن <strong className="text-slate-500">60 ثانية</strong>.
+                {t('merchant.reels.upload.uploadHint')}
               </p>
             </div>
           ) : (
@@ -328,16 +330,16 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
               <div className="flex-1 space-y-3 p-2 self-start md:self-center">
                 <div className="flex items-center gap-2 text-indigo-400">
                   <VideoIcon size={18} />
-                  <span className="text-xs font-bold text-white">مقطع جاهز للرفع</span>
+                  <span className="text-xs font-bold text-white">{t('merchant.reels.upload.videoReady')}</span>
                 </div>
                 <div className="text-xs text-slate-400 font-medium">
                   {videoFile ? (
                     <>
                       <p className="truncate max-w-[200px] text-white font-bold">{videoFile.name}</p>
-                      <p className="mt-1">الحجم: {(videoFile.size / (1024 * 1024)).toFixed(2)} ميجابايت (MB)</p>
+                      <p className="mt-1">{t('merchant.reels.upload.videoSize', { size: (videoFile.size / (1024 * 1024)).toFixed(2) })}</p>
                     </>
                   ) : (
-                    <p className="text-white font-bold">مقطع الفيديو الحالي المخزن في السحابة</p>
+                    <p className="text-white font-bold">{t('merchant.reels.upload.cloudVideo')}</p>
                   )}
                 </div>
                 
@@ -348,7 +350,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
                     className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition active:scale-95 flex items-center gap-1.5"
                   >
                     <X size={14} />
-                    <span>إلغاء المقطع الحالي</span>
+                    <span>{t('merchant.reels.upload.removeVideo')}</span>
                   </button>
                 )}
               </div>
@@ -360,7 +362,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
         {uploading && uploadProgress !== null && (
           <div className="space-y-2 p-3 bg-indigo-50/50 rounded-2xl border border-indigo-100">
             <div className="flex justify-between items-center text-xs font-black text-vibrant-purple">
-              <span>جاري رفع الفيديو إلى السحابة...</span>
+              <span>{t('merchant.reels.upload.uploading')}</span>
               <span>{uploadProgress}%</span>
             </div>
             <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
@@ -381,7 +383,7 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
               disabled={uploading}
               className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm rounded-2xl transition active:scale-95 text-center"
             >
-              إلغاء التعديل
+              {t('merchant.reels.upload.cancelEdit')}
             </button>
           )}
           <button
@@ -396,12 +398,12 @@ export const UploadReel: React.FC<UploadReelProps> = ({ onSuccess, reelToEdit, o
             {uploading ? (
               <>
                 <Loader2 size={18} className="animate-spin text-white" />
-                <span>جاري المعالجة والرفع...</span>
+                <span>{t('merchant.reels.upload.processing')}</span>
               </>
             ) : (
               <>
                 <Film size={18} />
-                <span>{reelToEdit ? "حفظ التعديلات ريل 🚀" : "نشر الريل للمشترين الآن 🚀"}</span>
+                <span>{reelToEdit ? t('merchant.reels.upload.submitEdit') : t('merchant.reels.upload.submitAdd')}</span>
               </>
             )}
           </button>

@@ -16,10 +16,16 @@ service cloud.firestore {
       );
     }
 
+    // Explicit permissions[] (set per-employee, or as a custom role's default
+    // set, from the Admin Management UI) always grants the pages it lists —
+    // this is what makes custom roles (which have no matrix row below)
+    // functional, and also lets a built-in role be granted extra pages
+    // beyond its default row.
     function roleHasPageAccess(perm) {
       return isDashboardStaff() && (
         adminDoc().role == 'owner' ||
         adminDoc().role == 'admin' ||
+        (adminDoc().permissions is list && perm in adminDoc().permissions) ||
         (adminDoc().role == 'supervisor' && (perm == 'stores' || perm == 'orders' || perm == 'activityLogs')) ||
         (adminDoc().role == 'support' && (perm == 'customers' || perm == 'orders')) ||
         (adminDoc().role == 'accountant' && (perm == 'subscriptions' || perm == 'payouts'))
@@ -37,7 +43,8 @@ service cloud.firestore {
     function isSuperAdmin() {
       return isDashboardStaff() && (
         adminDoc().role == 'owner' ||
-        adminDoc().role == 'supervisor'
+        adminDoc().role == 'supervisor' ||
+        roleHasPageAccess('activityLogs')
       );
     }
 
@@ -108,7 +115,8 @@ service cloud.firestore {
     function customerSelfProfileUpdate() {
       return isCustomerSelf(customerId) && !incoming().diff(resource.data).affectedKeys().hasAny([
         'points', 'tier', 'isBlocked', 'ordersCount', 'monthlyOrdersCount', 'authUid', 'password',
-        'blockedStoreIds'
+        'blockedStoreIds',
+        'spinWheelDailyDate', 'spinWheelDailyCount', 'spinWheelPeriodStartedAt', 'spinWheelLastSpinAt', 'spinWheelLastPrizeId'
       ]);
     }
 
@@ -117,16 +125,23 @@ service cloud.firestore {
     function customerStaffUpdateSafe() {
       return !incoming().diff(resource.data).affectedKeys().hasAny([
         'points', 'tier', 'isBlocked', 'monthlyOrdersCount', 'ordersCount',
-        'authUid', 'password', 'blockedStoreIds'
+        'authUid', 'password', 'blockedStoreIds',
+        'spinWheelDailyDate', 'spinWheelDailyCount', 'spinWheelPeriodStartedAt', 'spinWheelLastSpinAt', 'spinWheelLastPrizeId'
       ]);
     }
 
     function storeOwnerProfileUpdate() {
       return !incoming().diff(resource.data).affectedKeys().hasAny([
         'isVerified', 'verificationType', 'verificationExpiresAt',
+        'verificationAmountIqd', 'verificationLifetimeRevenueIqd',
+        'verificationLastActivatedAt', 'verificationIsGift',
         'walletBalance', 'payoutMethods', 'password',
         'subscriptionStatus', 'subscriptionValidUntil',
         'subscriptionExpiry', 'subscriptionExpiryDate', 'subscriptionId',
+        'subscriptionAmountIqd', 'subscriptionLifetimeRevenueIqd',
+        'subscriptionLastActivatedAt', 'subscriptionIsGift',
+        'subscriptionReminderStage', 'subscriptionReminderStageFor',
+        'verificationReminderStage',
         'autoSubscriptionDuration', 'autoSubscriptionDisabled', 'status',
         'rating', 'totalReviews', 'blockedCustomerIds'
       ]);
@@ -142,7 +157,15 @@ service cloud.firestore {
         && d.get('subscriptionExpiryDate', 'none') == 'none'
         && !d.keys().hasAny(['subscriptionValidUntil', 'autoSubscriptionDuration'])
         && d.get('autoSubscriptionDisabled', false) == false
-        && !d.keys().hasAny(['walletBalance', 'payoutMethods', 'password']);
+        && !d.keys().hasAny([
+          'walletBalance', 'payoutMethods', 'password',
+          'subscriptionAmountIqd', 'subscriptionLifetimeRevenueIqd',
+          'subscriptionLastActivatedAt', 'subscriptionIsGift',
+          'subscriptionReminderStage', 'subscriptionReminderStageFor',
+          'verificationReminderStage',
+          'verificationAmountIqd', 'verificationLifetimeRevenueIqd',
+          'verificationLastActivatedAt', 'verificationIsGift'
+        ]);
     }
 
     function ownsStoreSecrets(storeId) {
@@ -236,13 +259,23 @@ service cloud.firestore {
 
     match /admins/{adminId} {
       allow read: if isOwner(adminId) || isDashboardStaff();
-      allow write: if isDashboardStaff() && adminDoc().role == 'owner';
-      // Any dashboard staff may write push-notification fields to their own document only.
+      // Owner accounts are fully protected — no one (not even another owner,
+      // and not even the owner themself) may edit or delete an EXISTING
+      // owner's admin record via client writes. Only non-owner target
+      // records may be created/updated this way; owner deletion has no
+      // matching allow rule below and is therefore always denied.
+      allow create: if isDashboardStaff() && adminDoc().role == 'owner';
+      allow update: if isDashboardStaff() && adminDoc().role == 'owner'
+        && resource.data.get('role', '') != 'owner';
+      // Any dashboard staff may write push-notification, presence-heartbeat,
+      // and their own basic profile (name/photo) fields to their own document
+      // only — this applies even to the owner, since it is self-service and
+      // never touches role/permissions/status/time-restriction.
       // Covers both update (doc exists) and create (first setDoc with merge:true).
       allow update: if isDashboardStaff()
         && request.auth.uid == adminId
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['fcmToken', 'oneSignalId', 'pushEnabled']);
+             .hasOnly(['fcmToken', 'oneSignalId', 'pushEnabled', 'isOnline', 'lastActiveAt', 'name', 'photoUrl']);
       allow create: if isDashboardStaff()
         && request.auth.uid == adminId
         && request.resource.data.keys().hasOnly(['fcmToken', 'oneSignalId', 'pushEnabled']);
@@ -357,18 +390,27 @@ service cloud.firestore {
         && !exists(/databases/$(database)/documents/store_reviews/$(reviewId));
     }
 
+    function productReviewCreateAllowed(reviewId) {
+      return isSignedIn()
+        && ownsCustomerId(incoming().customerId)
+        && incoming().productId is string
+        && incoming().productId != ''
+        && reviewId == incoming().productId + '_' + request.auth.uid
+        && !exists(/databases/$(database)/documents/product_reviews/$(reviewId));
+    }
+
     match /store_reviews/{reviewId} {
       allow read: if true;
       allow create: if roleHasPageAccess('reviews') || storeReviewCreateAllowed(reviewId);
-      allow update: if ownsCustomerId(resource.data.customerId) || roleHasPageAccess('reviews');
-      allow delete: if roleHasPageAccess('reviews') || ownsCustomerId(resource.data.customerId);
+      allow update: if roleHasPageAccess('reviews');
+      allow delete: if roleHasPageAccess('reviews');
     }
 
     match /product_reviews/{reviewId} {
       allow read: if true;
-      allow create: if isSignedIn() && ownsCustomerId(incoming().customerId);
-      allow update: if ownsCustomerId(resource.data.customerId) || roleHasPageAccess('reviews');
-      allow delete: if roleHasPageAccess('reviews') || ownsCustomerId(resource.data.customerId);
+      allow create: if roleHasPageAccess('reviews') || productReviewCreateAllowed(reviewId);
+      allow update: if roleHasPageAccess('reviews');
+      allow delete: if roleHasPageAccess('reviews');
     }
 
     match /notifications/{notificationId} {
@@ -384,8 +426,11 @@ service cloud.firestore {
     }
 
     match /flash_sale_requests/{requestId} {
-      allow read: if isSignedIn()
-        && (ownsStore(resource.data.storeId) || roleHasPageAccess('flashSales'));
+      // Approved participation is public catalog data (customer Flash Sales UI).
+      // Pending/rejected remain private to the owning store / flashSales staff.
+      allow read: if resource.data.status == 'approved'
+        || (isSignedIn()
+          && (ownsStore(resource.data.storeId) || roleHasPageAccess('flashSales')));
       allow create: if isSignedIn() && ownsStore(incoming().storeId);
       allow update, delete: if roleHasPageAccess('flashSales');
     }
@@ -423,6 +468,16 @@ service cloud.firestore {
         || (ownsStore(resource.data.storeId) && promoFieldsSafe());
       // Customers may NOT delete promo codes.
       allow delete: if roleHasPageAccess('promoCodes') || ownsStore(resource.data.storeId);
+    }
+
+    // Spin wheel audit — Cloud Functions (Admin SDK) only.
+    match /spin_wheel_history/{spinId} {
+      allow read: if isSignedIn() && (
+        roleHasPageAccess('spinWheel')
+        || roleHasPageAccess('loyaltyWallet')
+        || ownsCustomerId(resource.data.customerId)
+      );
+      allow write: if false;
     }
 
     // Legacy collection — same rules as promo_codes above.
@@ -568,6 +623,21 @@ service cloud.firestore {
       }
     }
 
+    /* زيارات دخول صفحة المتجر من تطبيق الزبون — العدد عام للقراءة، الكتابة = +1 فقط */
+    match /store_visit_stats/{storeId} {
+      allow read: if true;
+
+      allow create: if incoming().storeId == storeId
+        && incoming().visitCount == 1;
+
+      allow update: if incoming().storeId == storeId
+        && incoming().visitCount == resource.data.get('visitCount', 0) + 1
+        && incoming().diff(resource.data).affectedKeys()
+             .hasOnly(['visitCount', 'lastVisitAt', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
     match /counters/{counterId} {
       allow read, write: if false;
     }
@@ -578,7 +648,10 @@ service cloud.firestore {
 
     match /settings/global {
       allow read: if true;
-      allow write: if roleHasPageAccess('settings') || roleHasPageAccess('subscriptions');
+      allow write: if roleHasPageAccess('settings')
+        || roleHasPageAccess('subscriptions')
+        || roleHasPageAccess('spinWheel')
+        || roleHasPageAccess('loyaltyWallet');
     }
 
     match /settings_internal/{docId} {

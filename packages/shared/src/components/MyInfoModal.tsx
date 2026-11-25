@@ -1,5 +1,6 @@
 import React from 'react';
 import { User } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { LegalSheetModal } from './LegalSheetModal';
 import { MyInfoContent } from './MyInfoContent';
 
@@ -22,8 +23,9 @@ export const MyInfoModal: React.FC<MyInfoModalProps> = ({
   onNameChange,
   onSave,
 }) => {
+  const { t } = useTranslation();
   return (
-    <LegalSheetModal open={open} onClose={onClose} title="معلوماتي" icon={User} variant="home">
+    <LegalSheetModal open={open} onClose={onClose} title={t('profile.myInfo.title')} icon={User} variant="home">
       <MyInfoContent
         compact
         showHeader

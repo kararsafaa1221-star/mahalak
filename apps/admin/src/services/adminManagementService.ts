@@ -1,6 +1,5 @@
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { app } from '@shared/lib/firebase';
-import type { DashboardAdminRole } from '../lib/adminAuth';
 
 export interface CreateAdminAccountPayload {
   email: string;
@@ -9,8 +8,13 @@ export interface CreateAdminAccountPayload {
   phone?: string;
   province?: string;
   area?: string;
-  role: DashboardAdminRole;
+  /** One of the 5 built-in roles, or a custom role id (settings/global.customRoles). */
+  role: string;
   permissions?: string[];
+  photoUrl?: string;
+  isTimeRestricted?: boolean;
+  workStartTime?: string;
+  workEndTime?: string;
 }
 
 export interface UpdateAdminAccountPayload {

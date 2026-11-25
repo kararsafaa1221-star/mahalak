@@ -1,3 +1,5 @@
+import i18n, { getLanguageMeta, isAppLanguage } from '../i18n';
+
 export function getTimestampMillis(dateValue: unknown): number {
   if (!dateValue) return 0;
   const value = dateValue as { toMillis?: () => number; seconds?: number };
@@ -25,16 +27,35 @@ export function parseToDate(dateValue: any): Date | null {
   return d;
 }
 
+/** Active UI date/number locale (ar-IQ or ckb-IQ) */
+export function getActiveDateLocale(): string {
+  const lng = i18n.language;
+  if (isAppLanguage(lng)) return getLanguageMeta(lng).locale;
+  return 'ar-IQ';
+}
+
+export function formatAppNumber(
+  value: number,
+  locale: string = getActiveDateLocale(),
+  options?: Intl.NumberFormatOptions,
+): string {
+  try {
+    return Number(value).toLocaleString(locale, options);
+  } catch {
+    return String(value);
+  }
+}
+
 export function formatSafeDate(
   dateValue: any,
-  locale: string = 'ar-IQ',
+  locale?: string,
   options?: Intl.DateTimeFormatOptions,
   fallback: string = '-'
 ): string {
   const d = parseToDate(dateValue);
   if (!d) return fallback;
   try {
-    return d.toLocaleDateString(locale, options);
+    return d.toLocaleDateString(locale || getActiveDateLocale(), options);
   } catch (e) {
     return fallback;
   }
@@ -42,14 +63,14 @@ export function formatSafeDate(
 
 export function formatSafeTimeString(
   dateValue: any,
-  locale: string = 'ar-IQ',
+  locale?: string,
   options?: Intl.DateTimeFormatOptions,
   fallback: string = '-'
 ): string {
   const d = parseToDate(dateValue);
   if (!d) return fallback;
   try {
-    return d.toLocaleTimeString(locale, options);
+    return d.toLocaleTimeString(locale || getActiveDateLocale(), options);
   } catch (e) {
     return fallback;
   }
@@ -57,14 +78,14 @@ export function formatSafeTimeString(
 
 export function formatSafeDateTimeString(
   dateValue: any,
-  locale: string = 'ar-IQ',
+  locale?: string,
   options?: Intl.DateTimeFormatOptions,
   fallback: string = '-'
 ): string {
   const d = parseToDate(dateValue);
   if (!d) return fallback;
   try {
-    return d.toLocaleString(locale, options);
+    return d.toLocaleString(locale || getActiveDateLocale(), options);
   } catch (e) {
     return fallback;
   }

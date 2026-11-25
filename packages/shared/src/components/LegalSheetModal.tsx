@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronRight, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { WelcomeScreenBackground } from './WelcomeScreenBackground';
 
 const MODAL_Z_INDEX = 10050;
@@ -57,6 +58,7 @@ export const LegalSheetModal: React.FC<LegalSheetModalProps> = ({
   children,
   variant = 'default',
 }) => {
+  const { t } = useTranslation();
   useLockBodyScroll(open);
 
   useEffect(() => {
@@ -100,7 +102,7 @@ export const LegalSheetModal: React.FC<LegalSheetModalProps> = ({
           }`}
         >
           <ChevronRight size={16} />
-          رجوع للتطبيق
+          {t('common.backToApp')}
         </button>
 
         <div className="flex items-center gap-2 min-w-0 flex-1 justify-center">
@@ -120,7 +122,7 @@ export const LegalSheetModal: React.FC<LegalSheetModalProps> = ({
           type="button"
           onClick={onClose}
           className="p-2.5 hover:bg-white/10 rounded-xl transition-all shrink-0 active:scale-95"
-          aria-label="إغلاق"
+          aria-label={t('common.close')}
         >
           <X size={18} className="text-slate-300" />
         </button>

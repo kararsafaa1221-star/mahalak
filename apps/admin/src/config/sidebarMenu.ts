@@ -7,6 +7,7 @@ import {
   Bell,
   Calculator,
   CreditCard,
+  Gift,
   Map,
   Megaphone,
   MessageCircle,
@@ -22,38 +23,63 @@ import {
   Wallet,
   Zap,
 } from 'lucide-react';
+import { SpinWheelIcon } from '@shared/components/SpinWheelIcon';
 import type { AdminPanelTab, PageKey } from '../lib/permissions';
 
 export interface SidebarMenuItem {
   pageKey: PageKey;
   tab: AdminPanelTab;
   label: string;
+  /** Compact label for the desktop bottom navigation bar. */
+  shortLabel: string;
   icon: LucideIcon;
-  iconClassName?: string;
+  /** Section this item belongs to — used to render group headers/dividers in the sidebar. */
+  section: string;
 }
 
-/** Ordered sidebar entries — visibility filtered at runtime via usePermission(pageKey). */
+/**
+ * Ordered sidebar entries, grouped into sections so related pages sit one under
+ * the other. Icons intentionally share one neutral color scheme (no per-item
+ * custom colors) so the whole list reads as a single, unified set — active/hover
+ * state is what conveys color, not the icon itself.
+ */
 export const SIDEBAR_MENU_ITEMS: SidebarMenuItem[] = [
-  { pageKey: 'overview', tab: 'overview', label: 'نظرة عامة', icon: BarChart3 },
-  { pageKey: 'stores', tab: 'stores', label: 'إدارة المتاجر', icon: StoreIcon },
-  { pageKey: 'customers', tab: 'customers', label: 'إدارة الزبائن', icon: Users },
-  { pageKey: 'blockedAccounts', tab: 'blocked', label: 'الحسابات المحظورة', icon: ShieldBan, iconClassName: 'text-red-400' },
-  { pageKey: 'orders', tab: 'orders', label: 'إدارة الطلبات', icon: ShoppingBag },
-  { pageKey: 'products', tab: 'products', label: 'إدارة المنتجات', icon: Package },
-  { pageKey: 'rechargeCodes', tab: 'recharge', label: 'شحن الكودات (توليد)', icon: Zap, iconClassName: 'text-emerald-400' },
-  { pageKey: 'loyaltyWallet', tab: 'loyaltyWallet', label: 'محفظة النقاط والولاء', icon: Award, iconClassName: 'text-amber-400' },
-  { pageKey: 'promoCodes', tab: 'promos', label: 'أكواد الخصم', icon: Ticket },
-  { pageKey: 'subscriptions', tab: 'subscriptions', label: 'الاشتراكات والتفعيل التلقائي', icon: CreditCard },
-  { pageKey: 'payouts', tab: 'payouts', label: 'أرباح المتاجر (مستحقات)', icon: Wallet, iconClassName: 'text-emerald-400' },
-  { pageKey: 'accounts', tab: 'accounts', label: 'الحسابات', icon: Calculator, iconClassName: 'text-violet-400' },
-  { pageKey: 'flashSales', tab: 'flashsales', label: 'الفعاليات المركزية', icon: Zap, iconClassName: 'text-yellow-400' },
-  { pageKey: 'reviews', tab: 'reviews', label: 'تقييمات المتاجر', icon: Star },
-  { pageKey: 'broadcast', tab: 'broadcast', label: 'إرسال إشعارات', icon: Bell },
-  { pageKey: 'whatsapp', tab: 'whatsapp', label: 'حملات الواتساب', icon: MessageCircle, iconClassName: 'text-green-500' },
-  { pageKey: 'heatmap', tab: 'heatmap', label: 'الخريطة الحرارية للطلبات', icon: Map },
-  { pageKey: 'database', tab: 'database', label: 'قاعدة البيانات', icon: Archive, iconClassName: 'text-amber-400' },
-  { pageKey: 'ads', tab: 'ads', label: 'الإعلانات الممولة', icon: Megaphone, iconClassName: 'text-pink-400' },
-  { pageKey: 'adminManagement', tab: 'adminManagement', label: 'إدارة المدراء (Admins)', icon: Shield },
-  { pageKey: 'activityLogs', tab: 'activityLogs', label: 'سجل النشاط', icon: Activity },
-  { pageKey: 'settings', tab: 'settings', label: 'إعدادات النظام', icon: Settings },
+  // الرئيسية
+  { pageKey: 'overview', tab: 'overview', label: 'نظرة عامة', shortLabel: 'عامة', icon: BarChart3, section: 'الرئيسية' },
+
+  // إدارة المتاجر
+  { pageKey: 'stores', tab: 'stores', label: 'إدارة المتاجر', shortLabel: 'المتاجر', icon: StoreIcon, section: 'إدارة المتاجر' },
+  { pageKey: 'subscriptions', tab: 'subscriptions', label: 'الاشتراكات والتفعيل التلقائي', shortLabel: 'اشتراكات', icon: CreditCard, section: 'إدارة المتاجر' },
+  { pageKey: 'reviews', tab: 'reviews', label: 'تقييمات المتاجر', shortLabel: 'تقييمات', icon: Star, section: 'إدارة المتاجر' },
+  { pageKey: 'flashSales', tab: 'flashsales', label: 'الفعاليات المركزية', shortLabel: 'فعاليات', icon: Zap, section: 'إدارة المتاجر' },
+
+  // إدارة الزبائن
+  { pageKey: 'customers', tab: 'customers', label: 'إدارة الزبائن', shortLabel: 'الزبائن', icon: Users, section: 'إدارة الزبائن' },
+  { pageKey: 'blockedAccounts', tab: 'blocked', label: 'الحسابات المحظورة', shortLabel: 'محظورة', icon: ShieldBan, section: 'إدارة الزبائن' },
+
+  // الطلبات والمنتجات
+  { pageKey: 'orders', tab: 'orders', label: 'إدارة الطلبات', shortLabel: 'طلبات', icon: ShoppingBag, section: 'الطلبات والمنتجات' },
+  { pageKey: 'products', tab: 'products', label: 'إدارة المنتجات', shortLabel: 'منتجات', icon: Package, section: 'الطلبات والمنتجات' },
+  { pageKey: 'heatmap', tab: 'heatmap', label: 'الخريطة الحرارية للطلبات', shortLabel: 'خريطة', icon: Map, section: 'الطلبات والمنتجات' },
+
+  // النقاط والعروض
+  { pageKey: 'loyaltyWallet', tab: 'loyaltyWallet', label: 'محفظة النقاط والولاء', shortLabel: 'ولاء', icon: Award, section: 'النقاط والعروض' },
+  { pageKey: 'spinWheel', tab: 'spinWheel', label: 'عجلة الحظ', shortLabel: 'عجلة', icon: SpinWheelIcon as LucideIcon, section: 'النقاط والعروض' },
+  { pageKey: 'rechargeCodes', tab: 'recharge', label: 'شحن الكودات (توليد)', shortLabel: 'شحن', icon: Gift, section: 'النقاط والعروض' },
+  { pageKey: 'promoCodes', tab: 'promos', label: 'أكواد الخصم', shortLabel: 'خصم', icon: Ticket, section: 'النقاط والعروض' },
+
+  // المالية
+  { pageKey: 'payouts', tab: 'payouts', label: 'أرباح المتاجر (مستحقات)', shortLabel: 'مستحقات', icon: Wallet, section: 'المالية' },
+  { pageKey: 'accounts', tab: 'accounts', label: 'الحسابات', shortLabel: 'حسابات', icon: Calculator, section: 'المالية' },
+
+  // التسويق والتواصل
+  { pageKey: 'notificationTemplates', tab: 'notificationCenter', label: 'مركز الإشعارات', shortLabel: 'إشعارات', icon: Bell, section: 'التسويق والتواصل' },
+  { pageKey: 'whatsapp', tab: 'whatsapp', label: 'حملات الواتساب', shortLabel: 'واتساب', icon: MessageCircle, section: 'التسويق والتواصل' },
+  { pageKey: 'ads', tab: 'ads', label: 'الإعلانات الممولة', shortLabel: 'إعلانات', icon: Megaphone, section: 'التسويق والتواصل' },
+
+  // النظام
+  { pageKey: 'database', tab: 'database', label: 'قاعدة البيانات', shortLabel: 'قاعدة', icon: Archive, section: 'النظام' },
+  { pageKey: 'adminManagement', tab: 'adminManagement', label: 'إدارة المدراء (Admins)', shortLabel: 'مدراء', icon: Shield, section: 'النظام' },
+  { pageKey: 'activityLogs', tab: 'activityLogs', label: 'سجل النشاط', shortLabel: 'سجل', icon: Activity, section: 'النظام' },
+  { pageKey: 'settings', tab: 'settings', label: 'إعدادات النظام', shortLabel: 'إعدادات', icon: Settings, section: 'النظام' },
 ];

@@ -32,6 +32,14 @@ export interface Store {
   isVerified?: boolean;
   verificationType?: 'days' | 'months' | 'years' | 'lifetime';
   verificationExpiresAt?: string;
+  /** Amount (IQD) charged when verification badge was last granted */
+  verificationAmountIqd?: number;
+  /** Cumulative verification revenue from this store (increments on each paid grant) */
+  verificationLifetimeRevenueIqd?: number;
+  /** ISO timestamp of last verification grant */
+  verificationLastActivatedAt?: string;
+  /** True when the current verification badge was granted as a free admin gift (excluded from revenue accounting) */
+  verificationIsGift?: boolean;
   is_virtual?: boolean;
   walletBalance?: number;
   payoutMethods?: { zainCashNumber?: string; mastercardNumber?: string; };
@@ -40,6 +48,8 @@ export interface Store {
   subscriptionAmountIqd?: number;
   subscriptionLifetimeRevenueIqd?: number;
   subscriptionLastActivatedAt?: string;
+  /** True when the current active subscription was granted as a free admin gift (excluded from revenue accounting) */
+  subscriptionIsGift?: boolean;
   subscriptionExpiryDate?: string;
   autoSubscriptionDuration?: { value: number; unit: 'days' | 'months' | 'years' };
   autoSubscriptionDisabled?: boolean;
@@ -161,7 +171,8 @@ export interface Admin {
   phone?: string;
   province?: string;
   area?: string;
-  role: 'owner' | 'admin' | 'supervisor' | 'accountant' | 'support';
+  /** One of the 5 built-in roles, or a custom role id defined in settings/global.customRoles. */
+  role: 'owner' | 'admin' | 'supervisor' | 'accountant' | 'support' | string;
   permissions: string[];
   /** Stored permissions[] from Firestore (may differ from effective permissions for owner). */
   rawPermissions?: string[];
@@ -170,6 +181,18 @@ export interface Admin {
   lastLogin?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Staff profile photo — base64 data URL or hosted URL, same convention as store logos. */
+  photoUrl?: string;
+  /** Live presence flag — self-written heartbeat while the dashboard tab is open. */
+  isOnline?: boolean;
+  /** ISO timestamp of the last presence heartbeat — used to detect stale/crashed sessions. */
+  lastActiveAt?: string;
+  /** "HH:mm" — start of the allowed login/session window (ignored unless isTimeRestricted). */
+  workStartTime?: string;
+  /** "HH:mm" — end of the allowed login/session window (ignored unless isTimeRestricted). */
+  workEndTime?: string;
+  /** When true, login is blocked and active sessions are force-logged-out outside work hours. Never applies to the owner. */
+  isTimeRestricted?: boolean;
 }
 
 export interface ActivityLog {

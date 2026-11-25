@@ -1,46 +1,34 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { AppProvider } from '@shared/context/AppContext';
 import { StorageService } from '@shared/services/storageService';
-import { useApp } from '@shared/context/useApp';
-import { CustomerApp } from './views/CustomerApp';
+import { useAuthSession } from '@shared/context/AuthSessionContext';
+import { NetworkStatusBanner } from '@shared/components/NetworkStatusBanner';
+import { useAdaptivePlatform } from '@shared/hooks/useAdaptivePlatform';
 import { WelcomeScreen } from './views/WelcomeScreen';
 import { PrivacyPolicy } from './views/PrivacyPolicy';
 import { AboutUs } from './views/AboutUs';
 import { registerServiceWorker, setupPushNotifications, resetPushNotificationSetup, preloadOneSignal } from '@shared/lib/pushNotifications';
 import { warnIfOneSignalNotConfigured } from '@shared/lib/onesignalConfig';
-import { auth } from '@shared/lib/firebase';
 import { useAndroidBackButton } from '@shared/hooks/useAndroidBackButton';
-import { Bell, WifiOff, Loader2 } from 'lucide-react';
+import { UpdateManager } from '@shared/components/UpdateManager';
+import { LocaleProvider } from '@shared/i18n/LocaleProvider';
+import { Bell, Loader2 } from 'lucide-react';
+import appVersions from '../../../config/app-versions.json';
 
-const StatusIndicator: React.FC = () => {
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+const CUSTOMER_ANDROID_STORE_URL = 'https://play.google.com/store/apps/details?id=iq.mahalak.app';
+// Replace this search URL with the direct listing after App Store Connect assigns its numeric app ID.
+const CUSTOMER_IOS_STORE_URL = 'https://apps.apple.com/iq/search?term=%D9%85%D8%AD%D9%84%D9%83';
 
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  if (isOnline) return null;
-
-  return (
-    <div className="fixed top-0 left-0 right-0 z-[10000] bg-red-600 text-white text-[10px] font-bold py-1 px-4 flex items-center justify-center gap-2 animate-pulse">
-      <WifiOff size={14} />
-      <span>فقدت الاتصال بالإنترنت</span>
-    </div>
-  );
-};
+const CustomerApp = lazy(() =>
+  import('./views/CustomerApp').then((module) => ({ default: module.CustomerApp })),
+);
 
 interface RootRouteProps {
   authInitialized: boolean;
   authLoading: boolean;
-  currentCustomer: ReturnType<typeof useApp>['currentCustomer'];
+  currentCustomer: ReturnType<typeof useAuthSession>['currentCustomer'];
 }
 
 /**
@@ -72,9 +60,11 @@ const RootRoute: React.FC<RootRouteProps> = ({ authInitialized, authLoading, cur
 };
 
 const CustomerRoutes: React.FC = () => {
-  const { currentCustomer, authInitialized, authLoading } = useApp();
+  const { currentCustomer, authInitialized, authLoading } = useAuthSession();
+  const { t } = useTranslation();
   const [foregroundNotification, setForegroundNotification] = useState<{ title: string; body: string } | null>(null);
 
+  useAdaptivePlatform();
   useAndroidBackButton();
 
   useEffect(() => {
@@ -85,7 +75,7 @@ const CustomerRoutes: React.FC = () => {
     if (currentCustomer) {
       const handleReceived = (notification: { title?: string; body?: string }) => {
         setForegroundNotification({
-          title: notification.title || 'إشعار جديد',
+          title: notification.title || t('notifications.newNotification'),
           body: notification.body || '',
         });
       };
@@ -93,7 +83,7 @@ const CustomerRoutes: React.FC = () => {
     } else {
       resetPushNotificationSetup();
     }
-  }, [currentCustomer]);
+  }, [currentCustomer, t]);
 
   useEffect(() => {
     if (!foregroundNotification) return;
@@ -103,7 +93,7 @@ const CustomerRoutes: React.FC = () => {
 
   return (
     <>
-      <StatusIndicator />
+      <NetworkStatusBanner />
       {foregroundNotification && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100000] w-[90%] max-w-sm">
           <div className="bg-white rounded-2xl shadow-2xl p-4 border border-slate-100 flex items-start gap-4">
@@ -114,7 +104,7 @@ const CustomerRoutes: React.FC = () => {
               <h4 className="text-base font-black text-slate-900 mb-1 leading-snug">{foregroundNotification.title}</h4>
               <p className="text-sm text-slate-500 font-normal leading-relaxed">{foregroundNotification.body}</p>
             </div>
-            <button type="button" onClick={() => setForegroundNotification(null)} className="text-slate-400 p-1.5">✕</button>
+            <button type="button" onClick={() => setForegroundNotification(null)} className="text-slate-400 p-1.5 touch-target-sm">✕</button>
           </div>
         </div>
       )}
@@ -129,7 +119,20 @@ const CustomerRoutes: React.FC = () => {
         />
         <Route path="/about" element={<AboutUs />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
-        <Route path="/dashboard/*" element={<CustomerApp />} />
+        <Route
+          path="/dashboard/*"
+          element={
+            <Suspense
+              fallback={
+                <div className="min-h-screen flex items-center justify-center bg-mahalak-gradient">
+                  <Loader2 size={32} className="text-white animate-spin" />
+                </div>
+              }
+            >
+              <CustomerApp />
+            </Suspense>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
@@ -138,10 +141,26 @@ const CustomerRoutes: React.FC = () => {
 
 export default function App() {
   return (
-    <HashRouter>
-      <AppProvider>
-        <CustomerRoutes />
-      </AppProvider>
-    </HashRouter>
+    <LocaleProvider>
+      <CustomerAppShell />
+    </LocaleProvider>
+  );
+}
+
+function CustomerAppShell() {
+  const { t } = useTranslation();
+  return (
+    <UpdateManager
+      appName={t('app.customerName')}
+      currentVersion={appVersions.customer.versionName}
+      androidStoreUrl={CUSTOMER_ANDROID_STORE_URL}
+      iosStoreUrl={CUSTOMER_IOS_STORE_URL}
+    >
+      <HashRouter>
+        <AppProvider>
+          <CustomerRoutes />
+        </AppProvider>
+      </HashRouter>
+    </UpdateManager>
   );
 }

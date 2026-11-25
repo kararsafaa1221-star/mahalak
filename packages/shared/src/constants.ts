@@ -1,6 +1,20 @@
 import { Province, SubscriptionPlan } from '@shared/types';
+import { tKey } from '@shared/i18n/tKey';
 
 export const IRAQ_PROVINCES: Province[] = [{id:'1',name:'بغداد'},{id:'2',name:'البصرة'},{id:'3',name:'نينوى'},{id:'4',name:'أربيل'},{id:'5',name:'السليمانية'},{id:'6',name:'دهوك'},{id:'7',name:'كركوك'},{id:'8',name:'ديالى'},{id:'9',name:'الأنبار'},{id:'10',name:'واسط'},{id:'11',name:'بابل'},{id:'12',name:'كربلاء'},{id:'13',name:'النجف'},{id:'14',name:'ميسان'},{id:'15',name:'ذي قار'},{id:'16',name:'المثنى'},{id:'17',name:'القادسية'},{id:'18',name:'صلاح الدين'}];
+
+/** Display label for a province; stored value stays Arabic `name` for DB matching. */
+export function getProvinceLabel(provinceOrName: Province | string | undefined | null): string {
+  if (!provinceOrName) return '';
+  const province =
+    typeof provinceOrName === 'string'
+      ? IRAQ_PROVINCES.find((p) => p.name === provinceOrName || p.id === provinceOrName)
+      : provinceOrName;
+  if (!province) {
+    return typeof provinceOrName === 'string' ? provinceOrName : '';
+  }
+  return tKey(`provinces.${province.id}`, province.name);
+}
 
 import { DEFAULT_MERCHANT_RENEWAL_PLANS } from '@shared/constants/merchantRenewalPlans';
 
@@ -19,6 +33,12 @@ export const STORE_BADGES = [
   { id: 'top_rated', label: 'الأعلى تقييم 🌟', color: 'bg-purple-100 text-purple-700 border-purple-200' },
   { id: 'premium', label: 'مميز 👑', color: 'bg-amber-100 text-amber-700 border-amber-200' }
 ];
+
+export function getStoreBadgeLabel(badgeId: string, fallbackLabel?: string): string {
+  const badge = STORE_BADGES.find((b) => b.id === badgeId);
+  const fallback = fallbackLabel || badge?.label || badgeId;
+  return tKey(`badges.${badgeId}`, fallback);
+}
 
 export const STORE_CATEGORIES = [
   { 
@@ -177,11 +197,23 @@ export const STORE_CATEGORY_SHORT_NAMES: Record<string, string> = {
 };
 
 export function getStoreCategoryLabel(categoryId?: string): string {
-  if (!categoryId) return 'عام';
+  if (!categoryId) return tKey('categories.general', 'عام');
   const normalized = normalizeStoreCategoryId(categoryId) ?? categoryId;
-  return (
+  const shortFallback =
     STORE_CATEGORY_SHORT_NAMES[normalized] ||
     STORE_CATEGORIES.find((c) => c.id === normalized)?.name ||
-    categoryId
-  );
+    categoryId;
+  const short = tKey(`categories.${normalized}`, '');
+  if (short) return short;
+  const full = tKey(`categories.full.${normalized}`, '');
+  if (full) return full;
+  return shortFallback;
+}
+
+/** Full category display name (for merchant forms / filters) */
+export function getStoreCategoryFullLabel(categoryId?: string): string {
+  if (!categoryId) return tKey('categories.general', 'عام');
+  const normalized = normalizeStoreCategoryId(categoryId) ?? categoryId;
+  const fallback = STORE_CATEGORIES.find((c) => c.id === normalized)?.name || categoryId;
+  return tKey(`categories.full.${normalized}`, fallback);
 }

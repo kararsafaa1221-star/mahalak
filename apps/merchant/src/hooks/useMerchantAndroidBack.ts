@@ -22,6 +22,7 @@ export type MerchantBackSnapshot = {
   activeTab: string;
   showNotifications: boolean;
   iframeUrl: string | null;
+  showStorePreview: boolean;
   showShareModal: boolean;
   showSubscriptionModal: boolean;
   showUnsavedModal: boolean;
@@ -42,6 +43,9 @@ export type MerchantBackSnapshot = {
   giftModalShow: boolean;
   replacementModalShow: boolean;
   returnConfirmModalShow: boolean;
+  profileSubPage: null | "storeInfo" | "location" | "wallet" | "verification" | "settings";
+  myStoreSubPage: null | "reports" | "marketing" | "delivery" | "customers";
+  audienceSegment: null | "followers" | "notifications" | "pastBuyers" | "total";
 };
 
 export type MerchantBackActions = {
@@ -49,6 +53,7 @@ export type MerchantBackActions = {
   setActiveTab: (tab: string) => void;
   setShowNotifications: (show: boolean) => void;
   setIframeUrl: (url: string | null) => void;
+  setShowStorePreview: (show: boolean) => void;
   setShowShareModal: (show: boolean) => void;
   setShowSubscriptionModal: (show: boolean) => void;
   setShowUnsavedModal: (show: boolean) => void;
@@ -70,6 +75,11 @@ export type MerchantBackActions = {
   closeGiftModal: () => void;
   closeReplacementModal: () => void;
   closeReturnConfirmModal: () => void;
+  setProfileSubPage: (page: null | "storeInfo" | "location" | "wallet" | "verification" | "settings") => void;
+  setMyStoreSubPage: (page: null | "reports" | "marketing" | "delivery" | "customers") => void;
+  setAudienceSegment: (segment: null | "followers" | "notifications" | "pastBuyers" | "total") => void;
+  /** يُستدعى عند الرجوع من صفحة بيانات المتجر/الموقع إن وُجدت تعديلات غير محفوظة */
+  requestLeaveProfileSubPage?: () => boolean;
 };
 
 type UseMerchantAndroidBackOptions = {
@@ -162,6 +172,10 @@ export function useMerchantAndroidBack({
         a.setIframeUrl(null);
         return true;
       }
+      if (snapshot.showStorePreview) {
+        a.setShowStorePreview(false);
+        return true;
+      }
       if (snapshot.returnConfirmModalShow) {
         a.closeReturnConfirmModal();
         return true;
@@ -241,6 +255,21 @@ export function useMerchantAndroidBack({
       }
       if (snapshot.showQRMenu) {
         a.setShowQRMenu(false);
+        return true;
+      }
+      if (snapshot.profileSubPage !== null) {
+        if (a.requestLeaveProfileSubPage?.()) {
+          return true;
+        }
+        a.setProfileSubPage(null);
+        return true;
+      }
+      if (snapshot.myStoreSubPage === "customers" && snapshot.audienceSegment !== null) {
+        a.setAudienceSegment(null);
+        return true;
+      }
+      if (snapshot.myStoreSubPage !== null) {
+        a.setMyStoreSubPage(null);
         return true;
       }
 

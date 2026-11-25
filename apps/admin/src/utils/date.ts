@@ -55,10 +55,26 @@ export function formatSafeTimeString(
   }
 }
 
+// Applied whenever a caller doesn't pass explicit options. Without this,
+// `toLocaleString('ar-IQ')` falls back to a 2-digit year in some browser ICU
+// builds (e.g. showing "٢٦" instead of "٢٠٢٦") which reads ambiguously next
+// to the day/month, and — with no explicit timeZone — renders using the
+// viewer's own device clock instead of Iraq's local time. Pinning both here
+// keeps every activity-log timestamp unambiguous and consistent for all admins.
+const DEFAULT_DATETIME_OPTIONS: Intl.DateTimeFormatOptions = {
+  timeZone: 'Asia/Baghdad',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true,
+};
+
 export function formatSafeDateTimeString(
   dateValue: any,
   locale: string = 'ar-IQ',
-  options?: Intl.DateTimeFormatOptions,
+  options: Intl.DateTimeFormatOptions = DEFAULT_DATETIME_OPTIONS,
   fallback: string = '-'
 ): string {
   const d = parseToDate(dateValue);

@@ -10,6 +10,7 @@ export const PAGE_KEYS = [
   'products',
   'rechargeCodes',
   'loyaltyWallet',
+  'spinWheel',
   'promoCodes',
   'subscriptions',
   'payouts',
@@ -17,6 +18,7 @@ export const PAGE_KEYS = [
   'flashSales',
   'reviews',
   'broadcast',
+  'notificationTemplates',
   'whatsapp',
   'heatmap',
   'database',
@@ -81,11 +83,13 @@ const OWNER_ADMIN_EXTRA: PageKey[] = [
   'overview',
   'reviews',
   'broadcast',
+  'notificationTemplates',
   'whatsapp',
   'heatmap',
   'database',
   'ads',
   'loyaltyWallet',
+  'spinWheel',
   'adminManagement',
   'settings',
 ];
@@ -94,8 +98,10 @@ const OWNER_ADMIN_EXTRA: PageKey[] = [
 const OWNER_EXTRA: PageKey[] = ['activityLogs', ...OWNER_ADMIN_EXTRA];
 
 /**
- * Role → allowed pageKeys.
- * UI access is driven strictly by role (not Firestore permissions[]).
+ * Role → default allowed pageKeys. This is only the *fallback* used when an
+ * admin doc has no explicit permissions[] override (see resolvePermissions).
+ * Owner is the sole exception — it always resolves to every page and can
+ * never be narrowed by a custom permissions[] list.
  */
 export const ROLE_PERMISSION_MATRIX: Record<DashboardRole, PageKey[]> = {
   owner: [...MATRIX_CORE.owner, ...OWNER_EXTRA],
@@ -113,9 +119,12 @@ export type AdminPanelTab =
   | 'products'
   | 'recharge'
   | 'loyaltyWallet'
+  | 'spinWheel'
   | 'promos'
   | 'subscriptions'
   | 'broadcast'
+  | 'notificationTemplates'
+  | 'notificationCenter'
   | 'heatmap'
   | 'settings'
   | 'flashsales'
@@ -138,9 +147,15 @@ export const TAB_TO_PAGE_KEY: Record<AdminPanelTab, PageKey> = {
   products: 'products',
   recharge: 'rechargeCodes',
   loyaltyWallet: 'loyaltyWallet',
+  spinWheel: 'spinWheel',
   promos: 'promoCodes',
   subscriptions: 'subscriptions',
   broadcast: 'broadcast',
+  notificationTemplates: 'notificationTemplates',
+  // مركز الإشعارات الموحّد يعرض قسمي البث والقوالب معاً — بوابة الوصول للتاب نفسه
+  // مبنية على صلاحية "notificationTemplates"، وكل قسم داخل الصفحة يُخفى بشكل مستقل
+  // حسب صلاحية الموظف الفعلية (broadcast / notificationTemplates).
+  notificationCenter: 'notificationTemplates',
   heatmap: 'heatmap',
   settings: 'settings',
   flashsales: 'flashSales',
@@ -189,17 +204,33 @@ function isActiveAdmin(adminDoc: AdminDocLike | null | undefined): boolean {
   return !(adminDoc.status === 'suspended' || adminDoc.isSuspended === true);
 }
 
-function normalizeRole(role: unknown): DashboardRole | null {
-  if (typeof role !== 'string') return null;
-  return role in ROLE_PERMISSION_MATRIX ? (role as DashboardRole) : null;
+function normalizeExplicitPermissions(raw: unknown): PageKey[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((p): p is PageKey => typeof p === 'string' && isValidPageKey(p));
 }
 
-/** Effective pageKeys for a role (ignores Firestore permissions[] overrides). */
+/**
+ * Effective pageKeys for an admin doc. Owner always gets every page and can
+ * never be restricted. For every other role, an explicit non-empty
+ * `permissions[]` array on the Firestore doc — set per-employee from the
+ * Admin Management UI — fully overrides the role's default page set, letting
+ * the owner grant any employee access to all pages or just a hand-picked
+ * subset. Leaving `permissions[]` empty falls back to the role's defaults —
+ * but that fallback only exists for the 5 built-in roles (ROLE_PERMISSION_MATRIX).
+ * Custom roles (settings/global.customRoles) have no matrix entry, so the
+ * Admin Management UI always writes a non-empty explicit permissions[] for
+ * them at creation/edit time; if one somehow arrives empty here, the admin
+ * simply resolves to zero pages rather than crashing.
+ */
 export function resolvePermissions(adminDoc: AdminDocLike | null | undefined): PageKey[] {
   if (!isActiveAdmin(adminDoc)) return [];
-  const role = normalizeRole(adminDoc?.role);
-  if (!role) return [];
-  return [...ROLE_PERMISSION_MATRIX[role]];
+  const role = adminDoc?.role;
+  if (typeof role !== 'string' || !role) return [];
+  if (role === 'owner') return [...ROLE_PERMISSION_MATRIX.owner];
+  const explicit = normalizeExplicitPermissions(adminDoc?.permissions);
+  if (explicit.length > 0) return explicit;
+  if (role in ROLE_PERMISSION_MATRIX) return [...ROLE_PERMISSION_MATRIX[role as DashboardRole]];
+  return [];
 }
 
 /** @deprecated Use resolvePermissions */
@@ -211,9 +242,11 @@ export function hasPageAccess(role: DashboardRole | string | null | undefined, p
 }
 
 export function hasPermission(adminDoc: AdminDocLike | null | undefined, pageKey: string): boolean {
-  if (!isActiveAdmin(adminDoc)) return false;
   if (!isValidPageKey(pageKey)) return false;
-  return hasPageAccess(adminDoc?.role, pageKey);
+  // Routed through resolvePermissions (not the static hasPageAccess matrix)
+  // so per-employee custom permissions[] and custom roles are both honored —
+  // hasPageAccess alone can't see either of those.
+  return resolvePermissions(adminDoc).includes(pageKey);
 }
 
 /** Full CRUD write access for a page the role can view. */
@@ -251,13 +284,14 @@ const TAB_PRIORITY: AdminPanelTab[] = [
   'products',
   'recharge',
   'loyaltyWallet',
+  'spinWheel',
   'promos',
   'subscriptions',
   'payouts',
   'accounts',
   'flashsales',
   'reviews',
-  'broadcast',
+  'notificationCenter',
   'whatsapp',
   'heatmap',
   'database',
@@ -292,18 +326,40 @@ export function canAssignOwnerRole(adminDoc: AdminDocLike | null | undefined): b
   return adminDoc?.role === 'owner';
 }
 
+/**
+ * Restricts a requested page-access list to only the pages the acting admin
+ * can themself access — nobody with adminManagement access can grant another
+ * employee a page they don't have access to. Owner is exempt (always full
+ * access, so no cap is ever needed there).
+ */
+export function capPermissionsToActor(
+  actor: AdminDocLike | null | undefined,
+  requested: PageKey[],
+): PageKey[] {
+  if (actor?.role === 'owner') return requested;
+  const actorPages = resolvePermissions(actor);
+  return requested.filter((p) => actorPages.includes(p));
+}
+
+/**
+ * The owner account is fully protected — no one (not even another owner, and
+ * not even the owner themself) may edit or delete an existing owner's admin
+ * record from the dashboard. Any legitimate change to the owner's own record
+ * must happen outside this admin-management flow.
+ */
 export function canModifyAdminRecord(
   actor: AdminDocLike | null | undefined,
   target: AdminDocLike & { id?: string },
   actorUid?: string | null,
 ): boolean {
   if (!canAccessAdminManagement(actor)) return false;
-  if (actor?.role === 'owner') return true;
   if (target.role === 'owner') return false;
+  if (actor?.role === 'owner') return true;
   if (actorUid && target.id === actorUid) return false;
   return false;
 }
 
+/** Owner accounts can never be deleted, by anyone — including another owner. */
 export function canDeleteAdminRecord(
   actor: AdminDocLike | null | undefined,
   target: AdminDocLike & { id?: string },
@@ -312,10 +368,11 @@ export function canDeleteAdminRecord(
   return target.role !== 'owner';
 }
 
-/** Activity log read — owner and supervisor only (matches Firestore isSuperAdmin). */
+/** Activity log read — owner, supervisor, or anyone explicitly granted the 'activityLogs' page (matches Firestore isSuperAdmin). */
 export function canReadActivityLogs(adminDoc: AdminDocLike | null | undefined): boolean {
   if (!isActiveAdmin(adminDoc)) return false;
-  return adminDoc?.role === 'owner' || adminDoc?.role === 'supervisor';
+  if (adminDoc?.role === 'owner' || adminDoc?.role === 'supervisor') return true;
+  return hasPermission(adminDoc, 'activityLogs');
 }
 
 /** @deprecated Use resolvePermissions */
@@ -336,6 +393,7 @@ export const PAGE_KEY_LABELS_AR: Record<PageKey, string> = {
   products: 'إدارة المنتجات',
   rechargeCodes: 'شحن الكودات (توليد)',
   loyaltyWallet: 'محفظة النقاط والولاء',
+  spinWheel: 'عجلة الحظ',
   promoCodes: 'أكواد الخصم',
   subscriptions: 'الاشتراكات والتفعيل التلقائي',
   payouts: 'أرباح المتاجر (مستحقات)',
@@ -343,6 +401,7 @@ export const PAGE_KEY_LABELS_AR: Record<PageKey, string> = {
   flashSales: 'الفعاليات المركزية',
   reviews: 'تقييمات المتاجر',
   broadcast: 'إرسال إشعارات',
+  notificationTemplates: 'نصوص الإشعارات',
   whatsapp: 'حملات الواتساب',
   heatmap: 'الخريطة الحرارية',
   database: 'قاعدة البيانات',
@@ -351,3 +410,33 @@ export const PAGE_KEY_LABELS_AR: Record<PageKey, string> = {
   adminManagement: 'إدارة المدراء',
   settings: 'إعدادات النظام',
 };
+
+/**
+ * Owner-defined role, stored in settings/global.customRoles, that behaves
+ * exactly like a built-in role except it has no entry in ROLE_PERMISSION_MATRIX
+ * — its default page set is `permissions` here instead. Admins assigned a
+ * custom role always carry an explicit, non-empty permissions[] on their doc
+ * (forked from this default at creation/edit time), since there is no
+ * fallback matrix to resolve to if it were left empty.
+ */
+export interface CustomRoleDef {
+  id: string;
+  label: string;
+  description: string;
+  permissions: PageKey[];
+}
+
+export function isBuiltInRole(role: string | null | undefined): role is DashboardRole {
+  return !!role && role in ROLE_PERMISSION_MATRIX;
+}
+
+/** Default page set for a role — built-in matrix first, then custom role definitions. */
+export function getRoleDefaultPages(
+  role: string | null | undefined,
+  customRoles: CustomRoleDef[] = [],
+): PageKey[] {
+  if (!role) return [];
+  if (role in ROLE_PERMISSION_MATRIX) return [...ROLE_PERMISSION_MATRIX[role as DashboardRole]];
+  const custom = customRoles.find((r) => r.id === role);
+  return custom ? [...custom.permissions] : [];
+}

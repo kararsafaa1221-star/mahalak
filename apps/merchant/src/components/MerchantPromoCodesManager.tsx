@@ -1,4 +1,5 @@
 import React, { memo, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   CheckCircle,
@@ -19,17 +20,24 @@ import {
   isPromoActive,
   normalizePromoCode,
 } from '@shared/utils/promoCode';
+import { showToast } from '@shared/utils/alerts';
 
 type FilterTab = 'all' | 'active' | 'expired';
 
 type TargetAudience = PromoCode['targetAudience'];
 
-const AUDIENCE_LABELS: Record<NonNullable<TargetAudience>, string> = {
-  ALL: 'الجميع',
-  FOLLOWERS: 'المتابعين فقط',
-  PAST_BUYERS: 'الزبائن السابقين',
-  FOLLOWERS_AND_PAST_BUYERS: 'المتابعين والزبائن السابقين',
-};
+function audienceLabelKey(audience: NonNullable<TargetAudience>): string {
+  switch (audience) {
+    case 'FOLLOWERS':
+      return 'merchant.promos.audienceFollowers';
+    case 'PAST_BUYERS':
+      return 'merchant.promos.audiencePastBuyers';
+    case 'FOLLOWERS_AND_PAST_BUYERS':
+      return 'merchant.promos.audienceFollowersAndBuyers';
+    default:
+      return 'merchant.promos.audienceAll';
+  }
+}
 
 function getDaysRemaining(expiresAt?: string | null): number | null {
   if (!expiresAt) return null;
@@ -81,6 +89,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
   modalOpen: modalOpenProp,
   onModalOpenChange,
 }: MerchantPromoCodesManagerProps) {
+  const { t } = useTranslation();
   const [internalModalOpen, setInternalModalOpen] = useState(false);
   const modalOpen = modalOpenProp ?? internalModalOpen;
 
@@ -145,19 +154,19 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
 
     const normalizedCode = normalizePromoCode(pCode);
     if (normalizedCode.length < 3) {
-      setFormError('رمز الكود يجب أن يكون 3 أحرف على الأقل.');
+      setFormError(t('merchant.promos.errorCodeMin'));
       return;
     }
     if (pDiscount < 1) {
-      setFormError('أدخل قيمة خصم أكبر من صفر.');
+      setFormError(t('merchant.promos.errorDiscountMin'));
       return;
     }
     if (pDiscountType === 'percent' && pDiscount > 99) {
-      setFormError('نسبة الخصم يجب ألا تتجاوز 99%.');
+      setFormError(t('merchant.promos.errorDiscountMax'));
       return;
     }
     if (pMaxUses < 1 || pMaxUsesPerUser < 1) {
-      setFormError('حدود الاستخدام يجب أن تكون 1 على الأقل.');
+      setFormError(t('merchant.promos.errorUsageMin'));
       return;
     }
 
@@ -165,21 +174,21 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
       (p) => normalizePromoCode(p.code) === normalizedCode && p.storeId === storeId,
     );
     if (duplicate) {
-      setFormError('هذا الكود مستخدم مسبقاً في متجرك. اختر رمزاً مختلفاً.');
+      setFormError(t('merchant.promos.errorDuplicate'));
       return;
     }
 
     let finalEndDate: string | null = pEndDate || null;
     if (pExpiryType === 'days') {
       if (pExpiryDays < 1) {
-        setFormError('أدخل عدد أيام صلاحية صحيح.');
+        setFormError(t('merchant.promos.errorDaysMin'));
         return;
       }
       const expDate = new Date();
       expDate.setDate(expDate.getDate() + pExpiryDays);
       finalEndDate = expDate.toISOString().split('T')[0];
     } else if (!finalEndDate) {
-      setFormError('حدد تاريخ انتهاء للكود.');
+      setFormError(t('merchant.promos.errorEndDate'));
       return;
     }
 
@@ -210,17 +219,42 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
     try {
       await createPromoCode(data);
       setModalOpen(false);
+      showToast(
+        'success',
+        t('merchant.promos.createSuccessTitle'),
+        t('merchant.promos.createSuccessBody', { code: String(data.code || '') }),
+      );
     } catch {
-      setFormError('تعذر إنشاء الكود. تحقق من الاتصال وحاول مجدداً.');
+      setFormError(t('merchant.promos.errorCreateFailed'));
+      showToast('error', t('merchant.promos.errorCreateFailed'));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDelete = (promo: PromoCode) => {
-    if (!window.confirm(`حذف كود «${promo.code}» نهائياً؟`)) return;
-    deletePromoCode(promo.id);
+  const handleDelete = async (promo: PromoCode) => {
+    if (!window.confirm(t('merchant.promos.deleteConfirm', { code: promo.code }))) return;
+    try {
+      await deletePromoCode(promo.id);
+      showToast(
+        'success',
+        t('merchant.promos.deleteSuccessTitle'),
+        t('merchant.promos.deleteSuccessBody', { code: promo.code }),
+      );
+    } catch {
+      showToast('error', t('merchant.promos.deleteFailedTitle'), t('merchant.promos.deleteFailedBody'));
+    }
   };
+
+  const filterTabs = useMemo(
+    () =>
+      ([
+        { id: 'all', label: t('merchant.promos.filterAll') },
+        { id: 'active', label: t('merchant.promos.filterActive') },
+        { id: 'expired', label: t('merchant.promos.filterExpired') },
+      ] as const),
+    [t],
+  );
 
   return (
     <>
@@ -232,17 +266,17 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
           <div className="relative z-10">
             <h2 className="text-lg font-black text-[#fff700] flex items-center gap-2">
               <Gift size={20} className="text-[#fff700]" />
-              أكواد الخصم 🎫
+              {t('merchant.promos.title')}
             </h2>
             <p className="text-xs text-white/70 mt-1">
-              أنشئ أكواد خصم لجذب الزبائن وتعزيز المبيعات.
+              {t('merchant.promos.subtitle')}
             </p>
             <div className="flex flex-wrap gap-2 mt-3">
               <span className="text-[10px] font-bold text-[#fff700] bg-white/10 border border-white/20 px-2.5 py-1 rounded-full">
-                {stats.active} نشط
+                {t('merchant.promos.activeCount', { count: stats.active })}
               </span>
               <span className="text-[10px] font-bold text-white/70 bg-white/5 border border-white/10 px-2.5 py-1 rounded-full">
-                {stats.totalUses} استخدام كلي
+                {t('merchant.promos.totalUses', { count: stats.totalUses })}
               </span>
             </div>
           </div>
@@ -252,17 +286,13 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
             className="relative z-10 px-4 py-2.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white text-white font-bold rounded-xl shadow-md flex items-center gap-2 active:scale-95 transition-all"
           >
             <Plus size={18} />
-            <span>إنشاء كود خصم</span>
+            <span>{t('merchant.promos.createBtn')}</span>
           </button>
         </div>
 
         {promos.length > 0 && (
           <div className="flex gap-2 flex-wrap">
-            {([
-              { id: 'all', label: 'الكل' },
-              { id: 'active', label: 'نشطة' },
-              { id: 'expired', label: 'منتهية' },
-            ] as const).map((tab) => (
+            {filterTabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -284,13 +314,13 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
             <Gift size={48} className="mx-auto text-[#fff700] mb-4 opacity-80" />
             <p className="font-bold text-brand-white mb-1">
               {filter === 'all'
-                ? 'لا توجد أكواد خصم نشطة حالياً'
+                ? t('merchant.promos.emptyAll')
                 : filter === 'active'
-                  ? 'لا توجد أكواد نشطة'
-                  : 'لا توجد أكواد منتهية'}
+                  ? t('merchant.promos.emptyActive')
+                  : t('merchant.promos.emptyExpired')}
             </p>
             <p className="text-xs text-white/60">
-              اضغط على «إنشاء كود خصم» لإطلاق أول عرض ترويجي.
+              {t('merchant.promos.emptyHint')}
             </p>
           </div>
         ) : (
@@ -322,7 +352,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                           : 'bg-rose-500/20 text-rose-300 border border-rose-400/30'
                       }`}
                     >
-                      {active ? 'فعال' : 'منتهي'}
+                      {active ? t('merchant.promos.statusActive') : t('merchant.promos.statusExpired')}
                     </span>
                   </div>
 
@@ -330,14 +360,14 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
 
                   {p.targetAudience && p.targetAudience !== 'ALL' && (
                     <p className="text-[10px] text-[#fff700]/80 mt-1 font-bold">
-                      {AUDIENCE_LABELS[p.targetAudience]}
+                      {t(audienceLabelKey(p.targetAudience))}
                     </p>
                   )}
 
                   <div className="mt-3 space-y-2">
                     <div className="flex justify-between text-xs text-white/60">
-                      <p>استخدام: {used}/{maxUses || '∞'}</p>
-                      {p.maxUsesPerUser ? <p>حصة الفرد: {p.maxUsesPerUser}</p> : null}
+                      <p>{t('merchant.promos.usage', { used, max: maxUses || '∞' })}</p>
+                      {p.maxUsesPerUser ? <p>{t('merchant.promos.perUserQuota', { count: p.maxUsesPerUser })}</p> : null}
                     </div>
                     {maxUses > 0 && (
                       <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
@@ -352,13 +382,13 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                   </div>
 
                   <p className="text-[10px] text-white/50 mt-2 merchant-panel-inset p-1.5 rounded-lg text-center border border-white/10">
-                    {p.startDate ? `${formatSafeDate(p.startDate)} إلى ` : ''}
+                    {p.startDate ? `${formatSafeDate(p.startDate)} ${t('merchant.promos.dateRangeTo')} ` : ''}
                     {p.expiresAt || p.expirationDate
                       ? formatSafeDate(p.expiresAt || p.expirationDate!)
-                      : 'مستمر'}
+                      : t('merchant.promos.ongoing')}
                     {daysLeft !== null && active && (
                       <span className="block text-[#fff700] font-bold mt-0.5">
-                        {daysLeft === 0 ? 'ينتهي اليوم' : `باقي ${daysLeft} يوم`}
+                        {daysLeft === 0 ? t('merchant.promos.expiresToday') : t('merchant.promos.daysRemaining', { count: daysLeft })}
                       </span>
                     )}
                   </p>
@@ -366,20 +396,39 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                   <div className="flex justify-between items-center mt-3 pt-3 border-t border-white/10">
                     <button
                       type="button"
-                      onClick={() => togglePromoCodeStatus(p.id)}
+                      onClick={async () => {
+                        try {
+                          await togglePromoCodeStatus(p.id);
+                          showToast(
+                            'success',
+                            active
+                              ? t('merchant.promos.pauseSuccessTitle')
+                              : t('merchant.promos.activateSuccessTitle'),
+                            active
+                              ? t('merchant.promos.pauseSuccessBody')
+                              : t('merchant.promos.activateSuccessBody'),
+                          );
+                        } catch {
+                          showToast(
+                            'error',
+                            t('merchant.promos.toggleFailedTitle'),
+                            t('merchant.promos.toggleFailedBody'),
+                          );
+                        }
+                      }}
                       className={`text-xs font-bold px-3 py-1.5 rounded-xl transition border ${
                         active
                           ? 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border-amber-400/30'
                           : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border-emerald-400/30'
                       }`}
                     >
-                      {active ? 'إيقاف' : 'تفعيل'}
+                      {active ? t('merchant.promos.pause') : t('merchant.promos.activate')}
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDelete(p)}
                       className="p-1.5 text-rose-300 bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/30 hover:text-white rounded-xl transition"
-                      title="حذف الكود نهائياً"
+                      title={t('merchant.promos.deleteTitle')}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -402,20 +451,20 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
               transition={{ duration: 0.25, ease: 'easeOut' }}
-              className="bg-white rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl text-right max-h-[90vh] overflow-y-auto relative border border-slate-100 no-scrollbar"
+              className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl text-right max-h-[90vh] overflow-y-auto relative text-white no-scrollbar"
             >
-              <div className="absolute top-1/2 -left-3 w-6 h-6 bg-slate-50 border-r border-slate-100 rounded-full transform -translate-y-1/2 z-10 hidden sm:block" />
-              <div className="absolute top-1/2 -right-3 w-6 h-6 bg-slate-50 border-l border-slate-100 rounded-full transform -translate-y-1/2 z-10 hidden sm:block" />
+              <div className="absolute top-1/2 -left-3 w-6 h-6 bg-[#0b1320] border border-white/20 rounded-full transform -translate-y-1/2 z-10 hidden sm:block" />
+              <div className="absolute top-1/2 -right-3 w-6 h-6 bg-[#0b1320] border border-white/20 rounded-full transform -translate-y-1/2 z-10 hidden sm:block" />
 
               <div className="flex justify-between items-start mb-6">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-purple-50 text-vibrant-purple rounded-2xl flex items-center justify-center border border-purple-100 shrink-0">
+                  <div className="w-12 h-12 bg-white/10 text-[#fff700] rounded-2xl flex items-center justify-center border border-white/20 shrink-0">
                     <Ticket size={24} className="transform -rotate-12" />
                   </div>
                   <div>
-                    <h3 className="font-black text-lg text-slate-800 leading-tight">إنشاء كود خصم جديد</h3>
-                    <p className="text-[10px] font-medium text-slate-400 mt-0.5">
-                      صمم كوداً مميزاً لزيادة المبيعات والطلب
+                    <h3 className="font-black text-lg text-white leading-tight">{t('merchant.promos.modalTitle')}</h3>
+                    <p className="text-[10px] font-medium text-white/55 mt-0.5">
+                      {t('merchant.promos.modalSubtitle')}
                     </p>
                   </div>
                 </div>
@@ -431,7 +480,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
               <form onSubmit={handleCreatePromo} className="space-y-5">
                 <div className="bg-slate-50/50 p-4 rounded-3xl border border-dashed border-slate-200">
                   <label className="block text-[11px] font-black text-slate-500 mb-2.5">
-                    رمز كود الخصم
+                    {t('merchant.promos.codeLabel')}
                   </label>
                   <div className="relative">
                     <input
@@ -439,7 +488,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                       value={pCode}
                       onChange={(e) => setPCode(e.target.value.toUpperCase())}
                       required
-                      placeholder="مثال: COUPO20"
+                      placeholder={t('merchant.promos.codePlaceholder')}
                       className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple focus:ring-4 focus:ring-purple-50 p-4 rounded-2xl font-mono text-center text-lg font-black uppercase tracking-widest text-violet transition-all"
                     />
                     <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-300">
@@ -448,37 +497,35 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                   </div>
                   <div className="flex items-center justify-between mt-2 gap-2">
                     <p className="text-[9px] text-slate-400">
-                      سيتم تحويل الأحرف إلى اللغة الإنجليزية الكبيرة تلقائياً
+                      {t('merchant.promos.codeAutoUppercase')}
                     </p>
                     <button
                       type="button"
                       onClick={() => setPCode(generatePromoCodeSuggestion())}
                       className="text-[9px] font-black text-vibrant-purple hover:underline shrink-0"
                     >
-                      اقتراح رمز
+                      {t('merchant.promos.suggestCode')}
                     </button>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">نوع الخصم</label>
+                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">{t('merchant.promos.discountType')}</label>
                     <div className="relative">
                       <select
                         value={pDiscountType}
                         onChange={(e) => setPDiscountType(e.target.value as 'percent' | 'amount')}
-                        className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple p-3.5 rounded-2xl text-xs font-bold text-slate-700 appearance-none focus:outline-none focus:ring-4 focus:ring-purple-50 transition-all cursor-pointer"
+                        className="welcome-select welcome-select--sm welcome-select--with-chevron"
                       >
-                        <option value="amount">مبلغ ثابت (د.ع)</option>
-                        <option value="percent">نسبة مئوية (%)</option>
+                        <option value="amount">{t('merchant.promos.discountFixed')}</option>
+                        <option value="percent">{t('merchant.promos.discountPercent')}</option>
                       </select>
-                      <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-slate-400">
-                        <ChevronDown size={14} />
-                      </div>
+                      <ChevronDown size={14} className="welcome-select-chevron" aria-hidden />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">القيمة</label>
+                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">{t('merchant.promos.value')}</label>
                     <div className="relative">
                       <input
                         type="number"
@@ -499,7 +546,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">إجمالي الاستخدام</label>
+                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">{t('merchant.promos.totalUsesLabel')}</label>
                     <div className="relative">
                       <input
                         type="number"
@@ -515,7 +562,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">للزبون الواحد</label>
+                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">{t('merchant.promos.perCustomer')}</label>
                     <div className="relative">
                       <input
                         type="number"
@@ -533,34 +580,35 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-1.5">الجمهور المستهدف</label>
-                  <select
-                    value={pTargetAudience}
-                    onChange={(e) => setPTargetAudience(e.target.value as NonNullable<TargetAudience>)}
-                    className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple focus:ring-4 focus:ring-purple-50 p-3.5 pr-10 rounded-2xl text-xs font-black text-slate-800 transition-all appearance-none outline-none"
-                  >
-                    <option value="ALL">الجميع</option>
-                    <option value="FOLLOWERS">المتابعين فقط</option>
-                    <option value="PAST_BUYERS">الزبائن السابقين</option>
-                    <option value="FOLLOWERS_AND_PAST_BUYERS">المتابعين والزبائن السابقين</option>
-                  </select>
+                  <label className="block text-[11px] font-black text-slate-500 mb-1.5">{t('merchant.promos.targetAudience')}</label>
+                  <div className="welcome-select-wrap">
+                    <select
+                      value={pTargetAudience}
+                      onChange={(e) => setPTargetAudience(e.target.value as NonNullable<TargetAudience>)}
+                      className="welcome-select welcome-select--sm welcome-select--with-chevron"
+                    >
+                      <option value="ALL">{t('merchant.promos.audienceAll')}</option>
+                      <option value="FOLLOWERS">{t('merchant.promos.audienceFollowers')}</option>
+                      <option value="PAST_BUYERS">{t('merchant.promos.audiencePastBuyers')}</option>
+                      <option value="FOLLOWERS_AND_PAST_BUYERS">{t('merchant.promos.audienceFollowersAndBuyers')}</option>
+                    </select>
+                    <ChevronDown size={14} className="welcome-select-chevron" aria-hidden />
+                  </div>
                 </div>
 
                 <div className="bg-slate-50/50 p-4 rounded-3xl border border-slate-100 space-y-3">
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">مدة صلاحية الكود</label>
+                    <label className="block text-[11px] font-black text-slate-500 mb-1.5">{t('merchant.promos.validityLabel')}</label>
                     <div className="relative">
                       <select
                         value={pExpiryType}
                         onChange={(e) => setPExpiryType(e.target.value as 'days' | 'date')}
-                        className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple p-3 rounded-2xl text-xs font-bold text-slate-700 appearance-none focus:outline-none focus:ring-4 focus:ring-purple-50 transition-all cursor-pointer"
+                        className="welcome-select welcome-select--sm welcome-select--with-chevron"
                       >
-                        <option value="days">تفعيل لعدد أيام متبقية</option>
-                        <option value="date">تحديد تاريخ بدء وانتهاء مخصص</option>
+                        <option value="days">{t('merchant.promos.validityDays')}</option>
+                        <option value="date">{t('merchant.promos.validityDateRange')}</option>
                       </select>
-                      <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-slate-400">
-                        <ChevronDown size={14} />
-                      </div>
+                      <ChevronDown size={14} className="welcome-select-chevron" aria-hidden />
                     </div>
                   </div>
 
@@ -575,7 +623,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                       >
                         <input
                           type="number"
-                          placeholder="مثال: 30"
+                          placeholder={t('merchant.promos.daysPlaceholder')}
                           value={pExpiryDays || ''}
                           onChange={(e) => setPExpiryDays(parseInt(e.target.value, 10) || 0)}
                           required
@@ -583,7 +631,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                           className="w-full bg-white border border-slate-200 hover:border-purple-200 focus:border-vibrant-purple focus:ring-4 focus:ring-purple-50 p-3 rounded-2xl text-center text-xs font-black text-slate-800 transition-all"
                         />
                         <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs font-bold text-slate-400 font-tajawal">
-                          أيام
+                          {t('merchant.promos.daysUnit')}
                         </div>
                       </motion.div>
                     ) : (
@@ -596,7 +644,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                       >
                         <div>
                           <label className="block text-[9px] font-black text-slate-400 mb-1">
-                            تاريخ البدء (اختياري)
+                            {t('merchant.promos.startDateOptional')}
                           </label>
                           <input
                             type="date"
@@ -606,7 +654,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                           />
                         </div>
                         <div>
-                          <label className="block text-[9px] font-black text-slate-400 mb-1">تاريخ الانتهاء</label>
+                          <label className="block text-[9px] font-black text-slate-400 mb-1">{t('merchant.promos.endDate')}</label>
                           <input
                             type="date"
                             value={pEndDate}
@@ -633,7 +681,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                     disabled={isSubmitting}
                     className="w-1/3 py-3.5 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-600 font-black rounded-2xl text-xs transition-colors cursor-pointer disabled:opacity-50"
                   >
-                    إلغاء
+                    {t('merchant.promos.cancel')}
                   </button>
                   <button
                     type="submit"
@@ -641,7 +689,7 @@ export const MerchantPromoCodesManager = memo(function MerchantPromoCodesManager
                     className="w-2/3 py-3.5 bg-gradient-to-r from-vibrant-purple to-deep-navy border border-white active:scale-[0.98] text-white font-black rounded-2xl shadow-lg shadow-purple-100/50 text-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                   >
                     <CheckCircle size={15} />
-                    <span>{isSubmitting ? 'جاري النشر...' : 'تفعيل الكود ونشره'}</span>
+                    <span>{isSubmitting ? t('merchant.promos.submitting') : t('merchant.promos.submit')}</span>
                   </button>
                 </div>
               </form>

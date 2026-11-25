@@ -18,10 +18,16 @@ import {
 } from 'firebase/firestore';
 import { db, uploadProductImageStorage, app } from '@shared/lib/firebase';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { runAdminAction, type AdminActor } from '../lib/adminActionRunner';
+import { runAdminAction, assertWritePage, type AdminActor } from '../lib/adminActionRunner';
 import { classifyStoreUpdate, buildSettingsChangeLog } from '../lib/adminChangeLog';
 import { normalizePromoCode, PROMO_CODE_DEFAULTS } from '@shared/utils/promoCode';
 import { buildAutoSubscriptionPatch } from '@shared/utils/store';
+import {
+  buildNotificationContent,
+  resolveOrderStatusText,
+  notificationDeliveryFields,
+  NOTIFICATION_TEMPLATE_DEFS,
+} from '@shared/constants/notificationTemplates';
 import {
   normalizePhoneKey,
   normalizeUsernameKey,
@@ -46,6 +52,11 @@ import type {
 } from '@shared/types';
 import { computeProductFinalPrice } from '@shared/utils/productPricing';
 import { buildVirtualStore, buildVirtualProduct } from '../utils/virtualDataSeed';
+import { stripUndefinedFields } from '@shared/lib/firestoreUtils';
+
+export type ReadyMadeNotificationTarget =
+  | { mode: 'broadcast' }
+  | { mode: 'targeted'; entityType: 'store' | 'customer'; entityId: string };
 
 export interface AdminServiceContext {
   stores: Store[];
@@ -72,11 +83,25 @@ export function createAdminService(actor: AdminActor) {
     const store = ctx.stores.find((s) => s.id === id);
     return runAdminAction(actor, 'stores', 'store.status_update', id, { name: store?.shopName, status }, async () => {
       await updateDoc(doc(db, 'stores', id), { status });
-      let msg = '';
-      if (status === 'active') msg = 'تم تفعيل حساب متجرك بنجاح. يمكنك الآن استقبال الطلبات!';
-      if (status === 'suspended') msg = 'تم إيقاف حساب متجرك مؤقتاً. يرجى التواصل مع الدعم الفني.';
-      if (msg) {
-        await ctx.addNotification({ userId: id, role: 'merchant', type: 'system', title: 'تحديث حالة المتجر', message: msg, targetId: id });
+      const statusKey =
+        status === 'active'
+          ? 'merchant.storeActivated'
+          : status === 'suspended'
+            ? 'merchant.storeSuspended'
+            : null;
+      if (statusKey) {
+        const content = buildNotificationContent(ctx.adminSettings, statusKey);
+        if (content) {
+          await ctx.addNotification({
+            userId: id,
+            role: 'merchant',
+            type: 'system',
+            title: content.title,
+            message: content.message,
+            targetId: id,
+            ...notificationDeliveryFields(ctx.adminSettings, statusKey),
+          });
+        }
       }
     });
   }
@@ -229,25 +254,12 @@ export function createAdminService(actor: AdminActor) {
 
   async function deleteCustomer(id: string, ctx: AdminServiceContext) {
     const cust = ctx.customers.find((c) => c.id === id);
-    const phoneKey = cust?.phone ? normalizePhoneKey(cust.phone) : '';
-    const phoneStillBlocked = cust?.phone ? await isPhoneBlocked(cust.phone) : false;
     return runAdminAction(actor, 'customers', 'customer.delete', id, { name: cust?.name }, async () => {
-      for (const o of ctx.orders.filter((x) => x.customerId === id)) {
-        await deleteDoc(doc(db, 'orders', o.id));
-      }
-      for (const r of ctx.storeReviews.filter((x) => x.customerId === id)) {
-        await deleteDoc(doc(db, 'store_reviews', r.id));
-      }
-      for (const n of ctx.notifications.filter((x) => x.userId === id)) {
-        await deleteDoc(doc(db, 'notifications', n.id));
-      }
-      for (const p of ctx.promoCodes.filter((x) => x.ownerCustomerId === id)) {
-        await deleteDoc(doc(db, 'promo_codes', p.id));
-      }
-      await deleteDoc(doc(db, 'customers', id));
-      if (phoneKey && !phoneStillBlocked) {
-        await releasePhoneRegistry(phoneKey);
-      }
+      const fn = httpsCallable<{ customerId: string }, { success: boolean }>(
+        getFunctions(app),
+        'adminDeleteCustomerSecure',
+      );
+      await fn({ customerId: id });
     });
   }
 
@@ -303,25 +315,26 @@ export function createAdminService(actor: AdminActor) {
         }
 
         if (order?.customerId) {
-          let statusText = status;
-          if (status === 'accepted') statusText = 'تم قبول طلبك بنجاح';
-          if (status === 'shipped') statusText = 'طلبك في الطريق إليك ومندوب التوصيل في طريقه';
-          if (status === 'delivered') statusText = 'تم توصيل طلبك بنجاح. شكراً لك!';
-          if (status === 'rejected') statusText = `تم رفض الطلب: ${reason || ''}`;
-          if (status === 'returned') statusText = `تم إرجاع الطلب: ${reason || ''}`;
-          if (status === 'replaced') statusText = `تم استبدال الطلب: ${reason || ''}`;
+          const statusText = resolveOrderStatusText(ctx.adminSettings, status, reason);
           const orderLabel =
             order.orderNumber != null && Number.isFinite(Number(order.orderNumber))
               ? `#${order.orderNumber}`
               : id;
-          await ctx.addNotification({
-            userId: order.customerId,
-            role: 'customer',
-            type: 'order',
-            title: 'تحديث حالة الطلب',
-            message: `طلب رقم ${orderLabel}: ${statusText}`,
-            targetId: id,
+          const orderContent = buildNotificationContent(ctx.adminSettings, 'customer.orderStatus', {
+            orderLabel,
+            statusText,
           });
+          if (orderContent) {
+            await ctx.addNotification({
+              userId: order.customerId,
+              role: 'customer',
+              type: 'order',
+              title: orderContent.title,
+              message: orderContent.message,
+              targetId: id,
+              ...notificationDeliveryFields(ctx.adminSettings, 'customer.orderStatus'),
+            });
+          }
         }
       },
     );
@@ -516,30 +529,55 @@ export function createAdminService(actor: AdminActor) {
   async function updateAdminSettings(data: Partial<Record<string, unknown>>, ctx: AdminServiceContext) {
     const updated = { ...ctx.adminSettings, ...data };
     const changeLog = buildSettingsChangeLog(ctx.adminSettings, data);
-    ctx.setAdminSettings?.(updated);
+    const previousSettings = ctx.adminSettings;
 
     const shouldApprovePending =
       data.autoApproveStores === true && ctx.adminSettings?.autoApproveStores !== true;
 
+    const patchKeys = Object.keys(data);
+    // Staff with only spinWheel / loyaltyWallet can save those settings keys.
+    const writePageKey =
+      patchKeys.length === 1 && patchKeys[0] === 'spinWheel'
+        ? 'spinWheel'
+        : patchKeys.length === 1 && patchKeys[0] === 'loyaltyWallet'
+          ? 'loyaltyWallet'
+          : 'settings';
+
     const persist = async () => {
-      await setDoc(doc(db, 'settings', 'global'), updated);
+      // حفظ جزئي آمن لمفاتيح العجلة/المحفظة حتى لا يُستبدل مستند الإعدادات بالكامل إن كان الـ context ناقصاً
+      if (writePageKey === 'spinWheel' || writePageKey === 'loyaltyWallet') {
+        await setDoc(
+          doc(db, 'settings', 'global'),
+          stripUndefinedFields({ [writePageKey]: data[writePageKey] }),
+          { merge: true },
+        );
+      } else {
+        await setDoc(doc(db, 'settings', 'global'), stripUndefinedFields(updated));
+      }
       if (shouldApprovePending) {
         await approveAllPendingStores(ctx, updated);
       }
     };
 
-    if (!changeLog) {
-      await persist();
-      return;
+    try {
+      if (!changeLog) {
+        assertWritePage(actor, writePageKey);
+        await persist();
+      } else {
+        await runAdminAction(
+          actor,
+          writePageKey,
+          changeLog.actionKey,
+          'global',
+          { description: changeLog.description },
+          persist,
+        );
+      }
+      ctx.setAdminSettings?.(updated);
+    } catch (err) {
+      ctx.setAdminSettings?.(previousSettings);
+      throw err;
     }
-    return runAdminAction(
-      actor,
-      'settings',
-      changeLog.actionKey,
-      'global',
-      { description: changeLog.description },
-      persist,
-    );
   }
 
   async function approveAllPendingStores(ctx: AdminServiceContext, settings: Record<string, unknown>) {
@@ -564,14 +602,18 @@ export function createAdminService(actor: AdminActor) {
         );
       }
       await updateDoc(doc(db, 'stores', store.id), patch);
-      await ctx.addNotification({
-        userId: store.id,
-        role: 'merchant',
-        type: 'system',
-        title: 'تم تفعيل متجرك',
-        message: 'تم تفعيل حساب متجرك بنجاح. يمكنك الآن استقبال الطلبات!',
-        targetId: store.id,
-      });
+      const activated = buildNotificationContent(ctx.adminSettings, 'merchant.storeActivated');
+      if (activated) {
+        await ctx.addNotification({
+          userId: store.id,
+          role: 'merchant',
+          type: 'system',
+          title: activated.title,
+          message: activated.message,
+          targetId: store.id,
+          ...notificationDeliveryFields(ctx.adminSettings, 'merchant.storeActivated'),
+        });
+      }
     }
   }
 
@@ -657,22 +699,125 @@ export function createAdminService(actor: AdminActor) {
     );
   }
 
+  // ─── Notification Center — ready-made manual send ───────────────────────
+  function resolveAutoVarsForTarget(
+    target: ReadyMadeNotificationTarget,
+    ctx: AdminServiceContext,
+  ): Record<string, string> {
+    if (target.mode !== 'targeted') return {};
+    if (target.entityType === 'store') {
+      const store = ctx.stores.find((s) => s.id === target.entityId);
+      if (!store) return {};
+      const expiryDate = store.subscriptionExpiry || store.subscriptionExpiryDate || '—';
+      let diffDays = '';
+      const validUntilRaw = store.subscriptionValidUntil;
+      if (validUntilRaw) {
+        const validUntilMs = new Date(validUntilRaw).getTime();
+        if (!Number.isNaN(validUntilMs)) {
+          diffDays = String(Math.max(0, Math.ceil((validUntilMs - Date.now()) / (1000 * 60 * 60 * 24))));
+        }
+      }
+      return {
+        shopName: store.shopName || '',
+        ownerName: store.ownerName || '',
+        expiryDate,
+        diffDays,
+      };
+    }
+    const customer = ctx.customers.find((c) => c.id === target.entityId);
+    if (!customer) return {};
+    return { customerName: customer.name || '' };
+  }
+
+  async function sendReadyMadeNotification(
+    templateKey: string,
+    target: ReadyMadeNotificationTarget,
+    manualVars: Record<string, string>,
+    ctx: AdminServiceContext,
+  ) {
+    const def = NOTIFICATION_TEMPLATE_DEFS.find((d) => d.key === templateKey);
+    if (!def || !def.sendable) {
+      throw new Error('هذا القالب غير قابل للإرسال اليدوي');
+    }
+    if (target.mode === 'targeted' && def.sendable !== 'targeted') {
+      throw new Error('هذا القالب يُرسل كبث جماعي فقط');
+    }
+    if (target.mode === 'broadcast' && def.sendable !== 'broadcast') {
+      throw new Error('هذا القالب يتطلب اختيار متجر/زبون محدد');
+    }
+
+    const autoVars = resolveAutoVarsForTarget(target, ctx);
+    const vars = { ...autoVars, ...manualVars };
+    const content = buildNotificationContent(ctx.adminSettings, templateKey, vars);
+    if (!content) {
+      throw new Error('القالب معطّل من إعدادات النصوص — فعّله أولاً من مركز الإشعارات ثم أعد المحاولة');
+    }
+    const delivery = notificationDeliveryFields(ctx.adminSettings, templateKey);
+    const isCustomerAudience = def.audience === 'customer';
+
+    return runAdminAction(
+      actor,
+      'notificationTemplates',
+      'broadcast.send_template',
+      templateKey,
+      {
+        title: def.labelAr,
+        description:
+          target.mode === 'broadcast'
+            ? `تم إرسال القالب الجاهز "${def.labelAr}" كبث جماعي لكل ${isCustomerAudience ? 'الزبائن' : 'التجار'}.`
+            : `تم إرسال القالب الجاهز "${def.labelAr}" إلى ${target.entityType === 'store' ? 'المتجر' : 'الزبون'} (${target.entityId}).`,
+      },
+      async () => {
+        if (target.mode === 'broadcast') {
+          const recipients = isCustomerAudience
+            ? ctx.customers.filter((c) => !c.isBlocked)
+            : ctx.stores.filter((s) => s.status === 'active' && !s.isBanned && !s.is_virtual);
+          const notifs = recipients.map((r) => ({
+            userId: r.id,
+            role: isCustomerAudience ? ('customer' as const) : ('merchant' as const),
+            title: content.title,
+            message: content.message,
+            type: 'system' as const,
+            ...delivery,
+          }));
+          if (notifs.length > 0) await ctx.addBulkNotifications(notifs);
+          return;
+        }
+        await ctx.addNotification({
+          userId: target.entityId,
+          role: target.entityType === 'store' ? 'merchant' : 'customer',
+          title: content.title,
+          message: content.message,
+          type: 'system',
+          targetId: target.entityId,
+          ...delivery,
+        });
+      },
+    );
+  }
+
   // ─── Flash sales ──────────────────────────────────────────────────────────
   async function createFlashSale(data: Omit<FlashSale, 'id'>, ctx: AdminServiceContext) {
     const id = 'fs_' + Date.now();
     return runAdminAction(actor, 'flashSales', 'flash_sale.create', id, { title: data.title }, async () => {
       await setDoc(doc(db, 'flash_sales', id), { ...data, id, createdAt: serverTimestamp() });
-      const notifs = ctx.stores
-        .filter((s) => s.status === 'active' && !s.isBanned)
-        .map((store) => ({
-          userId: store.id,
-          role: 'merchant',
-          title: 'محلك',
-          message: `فعالية جديدة معلنة! "${data.title}"، يمكنك الآن طلب المشاركة بمنتجاتك!`,
-          type: 'system',
-          targetId: id,
-        }));
-      if (notifs.length > 0) await ctx.addBulkNotifications(notifs);
+      const flashCreated = buildNotificationContent(ctx.adminSettings, 'merchant.flashSaleCreated', {
+        saleTitle: data.title,
+      });
+      if (flashCreated) {
+        const notifs = ctx.stores
+          .filter((s) => s.status === 'active' && !s.isBanned)
+          .map((store) => ({
+            userId: store.id,
+            role: 'merchant',
+            title: flashCreated.title,
+            message: flashCreated.message,
+            type: 'system',
+            targetId: id,
+            ...notificationDeliveryFields(ctx.adminSettings, 'merchant.flashSaleCreated'),
+          }));
+        if (notifs.length > 0) await ctx.addBulkNotifications(notifs);
+      }
     });
   }
 
@@ -681,17 +826,49 @@ export function createAdminService(actor: AdminActor) {
     return runAdminAction(actor, 'flashSales', 'flash_sale.status_update', id, { title: sale?.title, status }, async () => {
       await updateDoc(doc(db, 'flash_sales', id), { status });
       if (status === 'active' && sale) {
-        const notifs = ctx.customers
-          .filter((c) => !c.isBlocked)
-          .map((customer) => ({
-            userId: customer.id,
-            role: 'customer',
-            title: 'محلك',
-            message: `بدأت الآن الفعالية الكبرى "${sale.title}"! تصفح أفضل العروض والخصومات.`,
-            type: 'system',
-            targetId: id,
-          }));
-        if (notifs.length > 0) await ctx.addBulkNotifications(notifs);
+        const flashActive = buildNotificationContent(ctx.adminSettings, 'customer.flashSaleActive', {
+          saleTitle: sale.title,
+        });
+        if (flashActive) {
+          const notifs = ctx.customers
+            .filter((c) => !c.isBlocked)
+            .map((customer) => ({
+              userId: customer.id,
+              role: 'customer',
+              title: flashActive.title,
+              message: flashActive.message,
+              type: 'system',
+              targetId: id,
+              ...notificationDeliveryFields(ctx.adminSettings, 'customer.flashSaleActive'),
+            }));
+          if (notifs.length > 0) await ctx.addBulkNotifications(notifs);
+        }
+
+        // إشعار التجار المشاركين فعلياً (لديهم منتج معتمد ضمن هذه الفعالية) بانطلاقها
+        const approvedStoreIds = [
+          ...new Set(
+            ctx.flashSaleRequests
+              .filter((r) => r.flashSaleId === id && r.status === 'approved')
+              .map((r) => r.storeId),
+          ),
+        ];
+        if (approvedStoreIds.length > 0) {
+          const merchantActive = buildNotificationContent(ctx.adminSettings, 'merchant.flashSaleActive', {
+            saleTitle: sale.title,
+          });
+          if (merchantActive) {
+            const merchantNotifs = approvedStoreIds.map((storeId) => ({
+              userId: storeId,
+              role: 'merchant',
+              title: merchantActive.title,
+              message: merchantActive.message,
+              type: 'system',
+              targetId: id,
+              ...notificationDeliveryFields(ctx.adminSettings, 'merchant.flashSaleActive'),
+            }));
+            await ctx.addBulkNotifications(merchantNotifs);
+          }
+        }
       }
     });
   }
@@ -700,6 +877,20 @@ export function createAdminService(actor: AdminActor) {
     const sale = ctx.flashSales.find((f) => f.id === id);
     return runAdminAction(actor, 'flashSales', 'flash_sale.dates_update', id, { title: sale?.title }, async () => {
       await updateDoc(doc(db, 'flash_sales', id), { startTime, endTime });
+    });
+  }
+
+  async function updateFlashSale(
+    id: string,
+    data: Partial<Pick<FlashSale, 'title' | 'description' | 'startTime' | 'endTime' | 'status'>>,
+    ctx: AdminServiceContext,
+  ) {
+    const sale = ctx.flashSales.find((f) => f.id === id);
+    return runAdminAction(actor, 'flashSales', 'flash_sale.update', id, { title: data.title || sale?.title }, async () => {
+      const payload = Object.fromEntries(
+        Object.entries(data).filter(([, v]) => v !== undefined),
+      );
+      await updateDoc(doc(db, 'flash_sales', id), payload);
     });
   }
 
@@ -957,9 +1148,11 @@ export function createAdminService(actor: AdminActor) {
     updateAdminSettings,
     updateSubscriptionPrice,
     sendBroadcast,
+    sendReadyMadeNotification,
     createFlashSale,
     updateFlashSaleStatus,
     updateFlashSaleDates,
+    updateFlashSale,
     deleteFlashSale,
     updateFlashSaleRequestStatus,
     updateStoreReview,

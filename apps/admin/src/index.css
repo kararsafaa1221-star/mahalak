@@ -240,6 +240,25 @@ input[type="number"] {
   .admin-sidebar-closed {
     transform: translateX(0) !important;
   }
+
+  /* شريط التنقل السفلي على الكمبيوتر */
+  .admin-bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .admin-bottom-nav .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(153, 82, 255, 0.35) transparent;
+  }
+
+  .admin-bottom-nav .scrollbar-thin::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .admin-bottom-nav .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(153, 82, 255, 0.35);
+    border-radius: 999px;
+  }
 }
 
 /* ==========================================

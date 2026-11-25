@@ -15,6 +15,7 @@ export default {
       },
       fontFamily: {
         sans: [
+          'var(--font-ui)',
           'Plus Jakarta Sans',
           'Cairo',
           'IBM Plex Sans Arabic',
@@ -23,8 +24,9 @@ export default {
           'Segoe UI',
           'sans-serif',
         ],
-        arabic: ['Cairo', 'IBM Plex Sans Arabic', 'sans-serif'],
+        arabic: ['var(--font-ui)', 'Cairo', 'IBM Plex Sans Arabic', 'sans-serif'],
         english: ['Plus Jakarta Sans', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        kurdish: ['Vazirmatn', 'Noto Sans Arabic', 'Cairo', 'sans-serif'],
       },
       boxShadow: {
         'brand-glow': '0 0 15px -3px rgba(123, 61, 255, 0.5), 0 4px 6px -2px rgba(123, 61, 255, 0.2)',

@@ -34,7 +34,10 @@ export interface LoyaltyEarnRule {
   emoji: string;
   points: number;
   pointsPer1000Iqd?: number;
+  /** @deprecated use LoyaltySettings.shareRewardCooldownHours for share_app */
   dailyLimit?: number;
+  /** Cooldown hours between share rewards (share_app only); synced with shareRewardCooldownHours */
+  cooldownHours?: number;
   enabled: boolean;
 }
 
@@ -79,14 +82,29 @@ export interface LoyaltySettings {
   orderDeliveryBonusPoints: number;
   signupBonusPoints: number;
   shareRewardPoints: number;
-  shareDailyLimit: number;
+  /**
+   * Hours between share rewards. Sharing itself is unlimited;
+   * points are granted at most once per this window.
+   */
+  shareRewardCooldownHours: number;
   storeReviewRewardPoints: number;
   productReviewRewardPoints: number;
+  /**
+   * When true, loyalty points for store/product reviews are granted
+   * only on the customer's first review of that type (ever).
+   * One review per store/product is always enforced separately.
+   */
+  reviewRewardOnFirstOnly: boolean;
   tierUpgradeBonuses: LoyaltyTierUpgradeBonuses;
   /** كل كم شهر يُصفَّر عداد الطلبات والمستوى (1 = شهرياً) */
   tierResetPeriodMonths: number;
   redemptionBasePoints: number;
   redemptionBaseDiscountIqd: number;
+  /**
+   * Validity of promo codes created from points redemption (days).
+   * 0 = no expiry date on the code.
+   */
+  redemptionPromoValidityDays: number;
   tiers: LoyaltyTierConfig[];
   redemptionPackages: LoyaltyRedemptionPackage[];
   earnRules: LoyaltyEarnRule[];
@@ -132,17 +150,17 @@ const DEFAULT_EARN_RULES: LoyaltyEarnRule[] = [
     id: 'earn_share',
     type: 'share_app',
     titleAr: 'مشاركة التطبيق',
-    descriptionAr: 'شارك رابط التطبيق عبر الواتساب واحصل على نقاط هدية.',
+    descriptionAr: 'شارك بلا حد — المكافأة تُمنح مرة واحدة كل فترة محددة من لوحة الأدمن.',
     emoji: '📱',
     points: 5,
-    dailyLimit: 10,
+    cooldownHours: 24,
     enabled: true,
   },
   {
     id: 'earn_store_review',
     type: 'store_review',
     titleAr: 'تقييم المتجر',
-    descriptionAr: 'شاركنا رأيك وقيّم المتجر لتحصل على نقاط ولاء.',
+    descriptionAr: 'قيّم كل متجر مرة واحدة — المكافأة لأول تقييم متجر فقط (إن فُعّلت من الأدمن).',
     emoji: '⭐',
     points: 50,
     enabled: true,
@@ -151,7 +169,7 @@ const DEFAULT_EARN_RULES: LoyaltyEarnRule[] = [
     id: 'earn_product_review',
     type: 'product_review',
     titleAr: 'تقييم المنتج',
-    descriptionAr: 'قيّم المنتجات التي اشتريتها واحصل على نقاط ولاء.',
+    descriptionAr: 'قيّم كل منتج مرة واحدة — المكافأة لأول تقييم منتج فقط (إن فُعّلت من الأدمن).',
     emoji: '💬',
     points: 0,
     enabled: false,
@@ -203,9 +221,10 @@ export const DEFAULT_LOYALTY_SETTINGS: LoyaltySettings = {
   orderDeliveryBonusPoints: 0,
   signupBonusPoints: 50,
   shareRewardPoints: 5,
-  shareDailyLimit: 10,
+  shareRewardCooldownHours: 24,
   storeReviewRewardPoints: 50,
   productReviewRewardPoints: 0,
+  reviewRewardOnFirstOnly: true,
   tierUpgradeBonuses: {
     silverToGold: 100,
     goldToPlatinum: 125,
@@ -214,6 +233,7 @@ export const DEFAULT_LOYALTY_SETTINGS: LoyaltySettings = {
   tierResetPeriodMonths: 1,
   redemptionBasePoints: 150,
   redemptionBaseDiscountIqd: 5000,
+  redemptionPromoValidityDays: 30,
   tiers: DEFAULT_TIERS,
   redemptionPackages: DEFAULT_REDEMPTION_PACKAGES,
   earnRules: DEFAULT_EARN_RULES,
@@ -311,6 +331,7 @@ function mergeEarnRules(raw: unknown): LoyaltyEarnRule[] {
         points: Number(r.points) || 0,
         pointsPer1000Iqd: r.pointsPer1000Iqd != null ? Number(r.pointsPer1000Iqd) : undefined,
         dailyLimit: r.dailyLimit != null ? Number(r.dailyLimit) : undefined,
+        cooldownHours: r.cooldownHours != null ? Number(r.cooldownHours) : undefined,
         enabled: r.enabled !== false,
       };
     })
@@ -347,13 +368,29 @@ export function resolveLoyaltySettings(adminSettings?: Record<string, unknown> |
     orderDeliveryBonusPoints: Number(raw.orderDeliveryBonusPoints ?? DEFAULT_LOYALTY_SETTINGS.orderDeliveryBonusPoints),
     signupBonusPoints: Number(raw.signupBonusPoints ?? DEFAULT_LOYALTY_SETTINGS.signupBonusPoints),
     shareRewardPoints: Number(raw.shareRewardPoints ?? DEFAULT_LOYALTY_SETTINGS.shareRewardPoints),
-    shareDailyLimit: Number(raw.shareDailyLimit ?? DEFAULT_LOYALTY_SETTINGS.shareDailyLimit),
+    shareRewardCooldownHours: Math.max(
+      1,
+      Math.min(
+        8760,
+        Math.round(
+          Number(
+            raw.shareRewardCooldownHours ??
+              (raw.shareDailyLimit != null ? 24 : DEFAULT_LOYALTY_SETTINGS.shareRewardCooldownHours),
+          ),
+        ),
+      ),
+    ),
     storeReviewRewardPoints: Number(raw.storeReviewRewardPoints ?? DEFAULT_LOYALTY_SETTINGS.storeReviewRewardPoints),
     productReviewRewardPoints: Number(raw.productReviewRewardPoints ?? DEFAULT_LOYALTY_SETTINGS.productReviewRewardPoints),
+    reviewRewardOnFirstOnly: raw.reviewRewardOnFirstOnly !== false,
     tierUpgradeBonuses: syncTierUpgradeBonusesFromTiers(tiers),
     tierResetPeriodMonths,
     redemptionBasePoints: Number(raw.redemptionBasePoints ?? DEFAULT_LOYALTY_SETTINGS.redemptionBasePoints),
     redemptionBaseDiscountIqd: Number(raw.redemptionBaseDiscountIqd ?? DEFAULT_LOYALTY_SETTINGS.redemptionBaseDiscountIqd),
+    redemptionPromoValidityDays: Math.max(
+      0,
+      Math.min(3650, Math.round(Number(raw.redemptionPromoValidityDays ?? DEFAULT_LOYALTY_SETTINGS.redemptionPromoValidityDays))),
+    ),
     tiers,
     redemptionPackages: mergeRedemptionPackages(raw.redemptionPackages),
     earnRules: mergeEarnRules(raw.earnRules),

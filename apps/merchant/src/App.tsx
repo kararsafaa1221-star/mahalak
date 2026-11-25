@@ -1,45 +1,36 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { AppProvider } from '@shared/context/AppContext';
 import { StorageService } from '@shared/services/storageService';
-import { useApp } from '@shared/context/useApp';
-import { MerchantApp } from './views/MerchantApp';
+import { useAuthSession } from '@shared/context/AuthSessionContext';
+import { NetworkStatusBanner } from '@shared/components/NetworkStatusBanner';
+import { useAdaptivePlatform } from '@shared/hooks/useAdaptivePlatform';
 import { WelcomeScreen } from './views/WelcomeScreen';
 import { PrivacyPolicy } from './views/PrivacyPolicy';
 import { AboutUs } from './views/AboutUs';
 import { registerServiceWorker, setupPushNotifications, resetPushNotificationSetup, preloadOneSignal } from '@shared/lib/pushNotifications';
 import { warnIfOneSignalNotConfigured } from '@shared/lib/onesignalConfig';
 import { useAndroidBackButton } from '@shared/hooks/useAndroidBackButton';
-import { Bell, WifiOff } from 'lucide-react';
+import { UpdateManager } from '@shared/components/UpdateManager';
+import { LocaleProvider } from '@shared/i18n/LocaleProvider';
+import { Bell, Loader2 } from 'lucide-react';
+import appVersions from '../../../config/app-versions.json';
 
-const StatusIndicator: React.FC = () => {
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+const MERCHANT_ANDROID_STORE_URL = 'https://play.google.com/store/apps/details?id=iq.mahalak.merchant';
+// Replace this search URL with the direct listing after App Store Connect assigns its numeric app ID.
+const MERCHANT_IOS_STORE_URL = 'https://apps.apple.com/iq/search?term=%D9%85%D8%AD%D9%84%D9%83%20%D8%AA%D8%A7%D8%AC%D8%B1';
 
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  if (isOnline) return null;
-
-  return (
-    <div className="fixed top-0 left-0 right-0 z-[10000] bg-red-600 text-white text-[10px] font-bold py-1 px-4 flex items-center justify-center gap-2">
-      <WifiOff size={14} />
-      <span>فقدت الاتصال بالإنترنت</span>
-    </div>
-  );
-};
+const MerchantApp = lazy(() =>
+  import('./views/MerchantApp').then((module) => ({ default: module.MerchantApp })),
+);
 
 const MerchantRoutes: React.FC = () => {
-  const { currentMerchant, authInitialized } = useApp();
+  const { currentMerchant, authInitialized } = useAuthSession();
+  const { t } = useTranslation();
   const [foregroundNotification, setForegroundNotification] = useState<{ title: string; body: string } | null>(null);
 
+  useAdaptivePlatform();
   useAndroidBackButton();
 
   useEffect(() => {
@@ -50,7 +41,7 @@ const MerchantRoutes: React.FC = () => {
     if (currentMerchant) {
       const handleReceived = (notification: { title?: string; body?: string }) => {
         setForegroundNotification({
-          title: notification.title || 'إشعار جديد',
+          title: notification.title || t('notifications.newNotification'),
           body: notification.body || '',
         });
       };
@@ -58,11 +49,11 @@ const MerchantRoutes: React.FC = () => {
     } else {
       resetPushNotificationSetup();
     }
-  }, [currentMerchant]);
+  }, [currentMerchant, t]);
 
   return (
     <>
-      <StatusIndicator />
+      <NetworkStatusBanner />
       {foregroundNotification && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100000] w-[90%] max-w-sm">
           <div className="bg-white rounded-2xl shadow-2xl p-4 border flex items-start gap-4">
@@ -85,7 +76,20 @@ const MerchantRoutes: React.FC = () => {
         />
         <Route path="/about" element={<AboutUs />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
-        <Route path="/dashboard/*" element={<MerchantApp />} />
+        <Route
+          path="/dashboard/*"
+          element={
+            <Suspense
+              fallback={
+                <div className="min-h-screen flex items-center justify-center bg-mahalak-gradient">
+                  <Loader2 size={32} className="text-white animate-spin" />
+                </div>
+              }
+            >
+              <MerchantApp />
+            </Suspense>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
@@ -94,10 +98,26 @@ const MerchantRoutes: React.FC = () => {
 
 export default function App() {
   return (
-    <HashRouter>
-      <AppProvider>
-        <MerchantRoutes />
-      </AppProvider>
-    </HashRouter>
+    <LocaleProvider>
+      <MerchantAppShell />
+    </LocaleProvider>
+  );
+}
+
+function MerchantAppShell() {
+  const { t } = useTranslation();
+  return (
+    <UpdateManager
+      appName={t('app.merchantName')}
+      currentVersion={appVersions.merchant.versionName}
+      androidStoreUrl={MERCHANT_ANDROID_STORE_URL}
+      iosStoreUrl={MERCHANT_IOS_STORE_URL}
+    >
+      <HashRouter>
+        <AppProvider>
+          <MerchantRoutes />
+        </AppProvider>
+      </HashRouter>
+    </UpdateManager>
   );
 }

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { normalizeIraqiPhone, normalizeOtpCode } from '../utils/phone';
+import { tKey } from '../i18n/tKey';
 
 function functionsBaseUrl(): string {
   const configured = import.meta.env.VITE_FUNCTIONS_BASE_URL?.replace(/\/$/, '');
@@ -12,27 +13,27 @@ function extractOtpError(error: unknown, phase: 'request' | 'verify' = 'request'
   if (axios.isAxiosError(error)) {
     if (error.code === 'ECONNABORTED') {
       return phase === 'verify'
-        ? 'استغرق التحقق وقتاً أطول. إن نجح تسجيل الدخول فتجاهل هذه الرسالة.'
-        : 'استغرق الإرسال وقتاً أطول. تحقق من واتساب — إن وصلك الرمز أدخله.';
+        ? tKey('errors.otpTimeoutVerify', 'استغرق التحقق وقتاً أطول. إن نجح تسجيل الدخول فتجاهل هذه الرسالة.')
+        : tKey('errors.otpTimeoutRequest', 'استغرق الإرسال وقتاً أطول. تحقق من واتساب — إن وصلك الرمز أدخله.');
     }
     const data = error.response?.data as { error?: string; code?: string } | undefined;
     if (data?.code === 'wasender_not_configured') {
-      return 'خدمة واتساب غير مهيأة على السيرفر. تواصل مع دعم محلك.';
+      return tKey('errors.whatsappNotConfigured', 'خدمة واتساب غير مهيأة على السيرفر. تواصل مع دعم محلك.');
     }
     if (typeof data?.error === 'string' && data.error.trim()) {
       return data.error;
     }
     if (error.response?.status === 429) {
-      return 'طلبات كثيرة. انتظر دقيقة ثم حاول مجدداً.';
+      return tKey('errors.otpRateLimited', 'انتظر 60 ثانية قبل طلب رمز جديد.');
     }
     if (error.response?.status === 503) {
-      return 'خدمة إرسال الرمز غير متاحة حالياً. حاول لاحقاً.';
+      return tKey('errors.otpServiceUnavailable', 'خدمة إرسال الرمز غير متاحة حالياً. حاول لاحقاً.');
     }
   }
   if (error instanceof Error && error.message) return error.message;
   return phase === 'verify'
-    ? 'حدث خطأ أثناء التحقق من الرمز.'
-    : 'حدث خطأ أثناء طلب رمز التحقق.';
+    ? tKey('errors.otpVerifyFailed', 'حدث خطأ أثناء التحقق من الرمز.')
+    : tKey('errors.otpRequestFailed', 'حدث خطأ أثناء طلب رمز التحقق.');
 }
 
 export const authService = {
@@ -45,7 +46,7 @@ export const authService = {
         { timeout: 45000 },
       );
       if (!response.data?.success) {
-        throw new Error(response.data?.error || 'حدث خطأ أثناء طلب رمز التحقق.');
+        throw new Error(response.data?.error || tKey('errors.otpRequestFailed', 'حدث خطأ أثناء طلب رمز التحقق.'));
       }
       return true;
     } catch (error) {

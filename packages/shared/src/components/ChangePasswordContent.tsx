@@ -1,5 +1,6 @@
 import React from 'react';
 import { Phone, Shield, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { LegalGlowCard } from './LegalGlowCard';
 
 interface ChangePasswordContentProps {
@@ -34,6 +35,8 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
   onSubmit,
   onResendOtp,
 }) => {
+  const { t } = useTranslation();
+
   return (
     <div
       className={`animate-fade-in font-tajawal text-right ${compact ? 'space-y-4' : 'space-y-5'}`}
@@ -48,12 +51,10 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
               <Shield size={compact ? 28 : 32} />
             </div>
             <h1 className={`font-black text-[#fff700] mb-1.5 ${compact ? 'text-lg' : 'text-2xl'}`}>
-              تغيير كلمة المرور
+              {t('profile.changePassword')}
             </h1>
             <p className="text-[10px] sm:text-xs font-bold text-purple-100">
-              {pwStep === 1
-                ? 'سنرسل رمز تحقق إلى رقم هاتفك المسجل لتأكيد هويتك'
-                : 'أدخل رمز التحقق وكلمة المرور الجديدة'}
+              {pwStep === 1 ? t('auth.changePassword.step1Hint') : t('auth.changePassword.step2Hint')}
             </p>
           </div>
         </header>
@@ -67,8 +68,7 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
                 <Phone size={16} />
               </div>
               <p className="text-[11px] sm:text-xs font-bold text-purple-100/90 leading-relaxed pt-0.5">
-                سنقوم بإرسال رمز التحقق (OTP) إلى رقم هاتفك المسجل عبر واتساب لتأكيد هويتك قبل
-                تحديث كلمة المرور.
+                {t('auth.changePassword.otpExplain')}
               </p>
             </div>
 
@@ -77,7 +77,7 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
                 <Phone size={18} className="text-[#fff700] shrink-0" />
                 <div className="text-center min-w-0">
                   <span className="text-[10px] text-purple-100/80 font-bold block mb-0.5">
-                    رقم الهاتف المسجل
+                    {t('auth.registeredPhone')}
                   </span>
                   <span className="text-sm font-black text-white font-mono tracking-wider" dir="ltr">
                     {phone}
@@ -93,10 +93,10 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
                 {isSendingOtp ? (
                   <>
                     <Loader2 size={16} className="animate-spin shrink-0" />
-                    جار ارسال رمز التحقق
+                    {t('auth.sending')}
                   </>
                 ) : (
-                  'إرسال رمز التحقق'
+                  t('auth.changePassword.sendCode')
                 )}
               </button>
             </div>
@@ -108,7 +108,7 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
                 <Shield size={16} />
               </div>
               <h2 className="font-black text-[#fff700] text-sm sm:text-base leading-relaxed pt-0.5">
-                تأكيد الرمز وكلمة المرور الجديدة
+                {t('auth.changePassword.step2Hint')}
               </h2>
             </div>
 
@@ -119,14 +119,14 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
                 maxLength={6}
                 value={otpPwCode}
                 onChange={(e) => onOtpChange(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                placeholder="إدخال رمز التحقق"
+                placeholder={t('auth.otpPlaceholder')}
                 className={`${inputClass} text-lg tracking-[0.5em] placeholder:tracking-normal placeholder:text-[10px]`}
               />
               <input
                 type="password"
                 value={newPassword}
                 onChange={(e) => onNewPasswordChange(e.target.value)}
-                placeholder="كلمة المرور الجديدة (8+ رموز)"
+                placeholder={t('auth.newPasswordPlaceholder')}
                 className={inputClass}
               />
               <button
@@ -137,10 +137,10 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
                 {isUpdatingPassword ? (
                   <>
                     <Loader2 size={16} className="animate-spin shrink-0" />
-                    جاري تحديث كلمة المرور...
+                    {t('auth.updatingPassword')}
                   </>
                 ) : (
-                  'تحديث كلمة المرور'
+                  t('auth.changePassword.verifyAndSave')
                 )}
               </button>
               {onResendOtp && (
@@ -153,10 +153,10 @@ export const ChangePasswordContent: React.FC<ChangePasswordContentProps> = ({
                   {isSendingOtp ? (
                     <>
                       <Loader2 size={14} className="animate-spin shrink-0" />
-                      جار ارسال رمز التحقق
+                      {t('auth.sending')}
                     </>
                   ) : (
-                    'لم يصلك الرمز؟ أعد الإرسال'
+                    t('auth.resendOtp')
                   )}
                 </button>
               )}

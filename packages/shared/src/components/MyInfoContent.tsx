@@ -1,5 +1,6 @@
 import React from 'react';
 import { Lock, Phone, User, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { LegalGlowCard } from './LegalGlowCard';
 
 interface MyInfoContentProps {
@@ -24,6 +25,8 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
   onNameChange,
   onSave,
 }) => {
+  const { t } = useTranslation();
+
   return (
     <div
       className={`animate-fade-in font-tajawal text-right ${compact ? 'space-y-4' : 'space-y-5'}`}
@@ -38,10 +41,10 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
               <User size={compact ? 28 : 32} />
             </div>
             <h1 className={`font-black text-[#fff700] mb-1.5 ${compact ? 'text-lg' : 'text-2xl'}`}>
-              معلوماتي
+              {t('profile.myInfo.title')}
             </h1>
             <p className="text-[10px] sm:text-xs font-bold text-purple-100">
-              رقم الهاتف والاسم الكامل لحسابك
+              {t('profile.myInfoHint')}
             </p>
           </div>
         </header>
@@ -53,14 +56,14 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
             <Phone size={16} />
           </div>
           <h2 className="font-black text-[#fff700] text-sm sm:text-base leading-relaxed pt-0.5">
-            بيانات الحساب
+            {t('profile.myInfo.title')}
           </h2>
         </div>
 
         <div className="grid md:grid-cols-2 gap-4">
           <div>
             <label className="block text-[10px] font-black text-purple-100/80 mb-2 mr-1">
-              رقم الهاتف (لا يمكن تغييره)
+              {t('profile.myInfo.phone')}
             </label>
             <div className="flex items-center gap-3 bg-white/10 border border-white/20 px-4 py-3.5 rounded-2xl opacity-70 backdrop-blur-md">
               <Phone size={14} className="text-[#fff700]/70" />
@@ -74,14 +77,14 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
           </div>
           <div>
             <label className="block text-[10px] font-black text-purple-100/80 mb-2 mr-1">
-              الاسم الكامل
+              {t('profile.myInfo.name')}
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => onNameChange(e.target.value)}
               className={inputClass}
-              placeholder="أدخل اسمك الكامل"
+              placeholder={t('auth.fullName')}
               disabled={isSaving}
             />
           </div>
@@ -97,10 +100,10 @@ export const MyInfoContent: React.FC<MyInfoContentProps> = ({
             {isSaving ? (
               <>
                 <Loader2 size={16} className="animate-spin shrink-0" />
-                جاري الحفظ...
+                {t('profile.myInfo.saving')}
               </>
             ) : (
-              'حفظ التغييرات'
+              t('profile.myInfo.save')
             )}
           </button>
         </div>

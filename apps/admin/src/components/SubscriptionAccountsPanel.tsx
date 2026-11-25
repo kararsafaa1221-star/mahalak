@@ -1,11 +1,12 @@
 import React, { useMemo } from 'react';
-import { Wallet, Store as StoreIcon, TrendingUp, Calendar } from 'lucide-react';
+import { Wallet, Store as StoreIcon, TrendingUp, Calendar, BadgeCheck } from 'lucide-react';
 import type { Store } from '@shared/types';
 import { isStoreSubscriptionActive } from '@shared/utils/store';
 import {
   computeSubscriptionAccounts,
   formatIqd,
 } from '@shared/constants/merchantRenewalPlans';
+import { computeVerificationAccounts, formatVerificationIqd } from '@shared/constants/verificationPricing';
 
 type Props = {
   stores: Store[];
@@ -17,6 +18,7 @@ export const SubscriptionAccountsPanel: React.FC<Props> = ({ stores, adminSettin
     () => computeSubscriptionAccounts(stores, adminSettings, isStoreSubscriptionActive),
     [stores, adminSettings],
   );
+  const verificationSummary = useMemo(() => computeVerificationAccounts(stores), [stores]);
 
   const now = new Date();
   const monthLabel = now.toLocaleDateString('ar-IQ', { month: 'long', year: 'numeric' });
@@ -28,12 +30,12 @@ export const SubscriptionAccountsPanel: React.FC<Props> = ({ stores, adminSettin
         <div className="flex items-center gap-2">
           <Wallet size={18} className="text-mahalak-violet shrink-0" />
           <div>
-            <h3 className="font-black text-sm">الحسابات — أرباح الاشتراكات</h3>
-            <p className="text-[10px] text-mahalak-violet/90 font-bold">المبالغ تبقى محسوبة حتى بعد انتهاء الاشتراك</p>
+            <h3 className="font-black text-sm">الحسابات — أرباح الاشتراكات والتوثيق</h3>
+            <p className="text-[10px] text-mahalak-violet/90 font-bold">المبالغ تبقى محسوبة حتى بعد انتهاء الاشتراك أو التوثيق</p>
           </div>
         </div>
         <div className="text-left shrink-0">
-          <p className="text-[10px] text-white/70 font-bold">إجمالي أرباح الشركة (كل المتاجر)</p>
+          <p className="text-[10px] text-white/70 font-bold">إجمالي أرباح الاشتراكات (كل المتاجر)</p>
           <p className="text-lg font-black tabular-nums">{formatIqd(summary.grandTotalLifetimeIqd)} <span className="text-xs">د.ع</span></p>
         </div>
       </div>
@@ -132,6 +134,62 @@ export const SubscriptionAccountsPanel: React.FC<Props> = ({ stores, adminSettin
             ))}
             {summary.ledger.length === 0 && (
               <p className="px-3 py-8 text-center text-slate-400 font-bold text-xs">لا توجد اشتراكات مسجّلة للمتاجر</p>
+            )}
+          </div>
+        </div>
+
+        <div className="border-t border-slate-100 pt-5">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h4 className="text-sm font-black text-mahalak-navy flex items-center gap-2">
+              <BadgeCheck size={16} className="text-blue-600" />
+              أرباح التوثيق (الشارة الرسمية)
+            </h4>
+            <p className="text-lg font-black text-blue-600 tabular-nums">
+              {formatVerificationIqd(verificationSummary.grandTotalLifetimeIqd)} <span className="text-xs">د.ع</span>
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-mahalak-navy mb-1 flex items-center gap-1">
+                <TrendingUp size={12} /> اليوم
+              </p>
+              <p className="text-lg font-black text-blue-600 tabular-nums">{formatVerificationIqd(verificationSummary.periods.todayIqd)} د.ع</p>
+            </div>
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-mahalak-navy mb-1 flex items-center gap-1">
+                <Calendar size={12} /> {monthLabel}
+              </p>
+              <p className="text-lg font-black text-blue-600 tabular-nums">{formatVerificationIqd(verificationSummary.periods.monthIqd)} د.ع</p>
+            </div>
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-mahalak-navy mb-1">سنة {yearLabel}</p>
+              <p className="text-lg font-black text-blue-600 tabular-nums">{formatVerificationIqd(verificationSummary.periods.yearIqd)} د.ع</p>
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-slate-500 mb-1">شارات موثّقة نشطة الآن</p>
+              <p className="text-lg font-black text-slate-700 tabular-nums">{verificationSummary.activeVerifiedCount}</p>
+              <p className="text-[9px] text-slate-400 font-bold mt-0.5">{verificationSummary.totalStoresWithRevenue} متجر سجّل إيراد توثيق</p>
+            </div>
+          </div>
+
+          <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+            {verificationSummary.ledger.slice(0, 150).map((row) => (
+              <div key={row.storeId} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-xs hover:bg-slate-50">
+                <div className="min-w-0">
+                  <p className="font-black text-mahalak-navy truncate">{row.shopName}</p>
+                  <p className="text-[10px] text-slate-500 font-bold">{row.ownerName}</p>
+                </div>
+                <div className="text-left shrink-0">
+                  <p className="font-black text-blue-600 tabular-nums">{formatVerificationIqd(row.lifetimeRevenueIqd)} د.ع</p>
+                  <p className={`text-[10px] font-bold ${row.isActive ? 'text-emerald-600' : 'text-slate-400'}`}>
+                    {row.isActive ? `موثّق · ${row.expiry}` : `منتهي/ملغى`}
+                  </p>
+                </div>
+              </div>
+            ))}
+            {verificationSummary.ledger.length === 0 && (
+              <p className="px-3 py-8 text-center text-slate-400 font-bold text-xs">لا توجد إيرادات توثيق مسجّلة</p>
             )}
           </div>
         </div>

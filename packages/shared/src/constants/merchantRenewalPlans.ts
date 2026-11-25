@@ -7,6 +7,7 @@ import {
   buildActiveSubscriptionPatch,
   formatSubscriptionExpiryDate,
 } from '@shared/utils/store';
+import { tKey } from '../i18n/tKey';
 
 export interface MerchantRenewalPlanConfig {
   /** Same value stored on store.subscriptionId */
@@ -156,13 +157,30 @@ export function resolveMerchantRenewalPageSettings(
   const base = DEFAULT_MERCHANT_RENEWAL_PAGE_SETTINGS;
   const plans = resolveAllSubscriptionPlans(adminSettings);
 
+  const pickPage = (
+    rawVal: string | undefined,
+    arabicDefault: string,
+    i18nKey: string,
+  ): string => {
+    const trimmed = String(rawVal ?? '').trim();
+    if (trimmed && trimmed !== arabicDefault) return trimmed;
+    return tKey(i18nKey, arabicDefault);
+  };
+
   return {
-    titleRenewal: String(raw?.titleRenewal ?? base.titleRenewal).trim() || base.titleRenewal,
-    titleActivation: String(raw?.titleActivation ?? base.titleActivation).trim() || base.titleActivation,
-    subtitle: String(raw?.subtitle ?? base.subtitle).trim() || base.subtitle,
-    footerNote: String(raw?.footerNote ?? base.footerNote).trim() || base.footerNote,
-    whatsappButtonLabel:
-      String(raw?.whatsappButtonLabel ?? base.whatsappButtonLabel).trim() || base.whatsappButtonLabel,
+    titleRenewal: pickPage(raw?.titleRenewal, base.titleRenewal, 'plans.renewal.pageTitleRenewal'),
+    titleActivation: pickPage(
+      raw?.titleActivation,
+      base.titleActivation,
+      'plans.renewal.pageTitleActivation',
+    ),
+    subtitle: pickPage(raw?.subtitle, base.subtitle, 'plans.renewal.pageSubtitle'),
+    footerNote: pickPage(raw?.footerNote, base.footerNote, 'plans.renewal.pageFooter'),
+    whatsappButtonLabel: pickPage(
+      raw?.whatsappButtonLabel,
+      base.whatsappButtonLabel,
+      'plans.renewal.whatsappButton',
+    ),
     plans,
   };
 }
@@ -179,10 +197,15 @@ export function getSubscriptionPlanLabel(
   subscriptionId: string | undefined | null,
   adminSettings?: Record<string, unknown> | null,
 ): string {
-  if (!subscriptionId) return 'غير محددة';
+  if (!subscriptionId) return tKey('errors.planUnspecified', 'غير محددة');
   const plan = findSubscriptionPlanById(subscriptionId, adminSettings);
-  if (plan) return plan.labelAr;
-  return LEGACY_SUBSCRIPTION_LABELS[subscriptionId] ?? subscriptionId;
+  if (plan) {
+    const def = DEFAULT_MERCHANT_RENEWAL_PLANS.find((p) => p.id === plan.id);
+    if (def && plan.labelAr !== def.labelAr) return plan.labelAr;
+    return tKey(`plans.renewal.${plan.id}`, plan.labelAr);
+  }
+  const legacy = LEGACY_SUBSCRIPTION_LABELS[subscriptionId];
+  return tKey(`plans.renewal.legacy_${subscriptionId}`, legacy ?? subscriptionId);
 }
 
 export function getStoreSubscriptionAmountIqd(
@@ -239,10 +262,12 @@ function isSameCalendarYear(a: Date, b: Date): boolean {
 }
 
 function hasRecordedSubscription(
-  store: Pick<Store, 'subscriptionId' | 'subscriptionAmountIqd' | 'subscriptionLifetimeRevenueIqd'>,
+  store: Pick<Store, 'subscriptionId' | 'subscriptionAmountIqd' | 'subscriptionLifetimeRevenueIqd' | 'subscriptionIsGift'>,
   adminSettings?: Record<string, unknown> | null,
 ): boolean {
   if (!store.subscriptionId || store.subscriptionId === 'none') return false;
+  // Gift subscriptions are activated for free and must never count toward revenue accounting.
+  if (store.subscriptionIsGift) return false;
   return getStoreLifetimeRevenueIqd(store, adminSettings) > 0;
 }
 
@@ -420,6 +445,46 @@ export function buildStoreActivationFromPlan(
       subscriptionAmountIqd: plan.priceIqd,
       subscriptionLastActivatedAt: activatedAt.toISOString(),
       subscriptionLifetimeRevenueIqd: prevLifetime + plan.priceIqd,
+      // Clear any previous gift flag — this is a real paid activation/renewal.
+      subscriptionIsGift: false,
+    },
+  };
+}
+
+/** Build store patch when admin gifts a subscription for free — activates the plan's duration
+ *  but records zero revenue and flags `subscriptionIsGift` so accounting always excludes it. */
+export function buildStoreGiftActivationFromPlan(
+  planId: string,
+  adminSettings?: Record<string, unknown> | null,
+  baseDate: Date = new Date(),
+  existingStore?: Pick<Store, 'subscriptionExpiry' | 'subscriptionLifetimeRevenueIqd'>,
+) {
+  const plan = findSubscriptionPlanById(planId, adminSettings);
+  if (!plan) return null;
+
+  let start = baseDate;
+  if (existingStore?.subscriptionExpiry) {
+    const exp = existingStore.subscriptionExpiry;
+    if (exp !== 'none' && exp !== 'منتهي' && exp !== 'Lifetime') {
+      const parsed = new Date(exp);
+      if (!Number.isNaN(parsed.getTime()) && parsed > baseDate) start = parsed;
+    }
+  }
+
+  const activatedAt = new Date();
+  const expiryDate = addDurationToDate(start, plan.durationDays, 'days');
+  const finalExpiry = formatSubscriptionExpiryDate(expiryDate);
+  const prevLifetime = existingStore?.subscriptionLifetimeRevenueIqd ?? 0;
+
+  return {
+    plan,
+    patch: {
+      ...buildActiveSubscriptionPatch(finalExpiry, plan.id, expiryDate.toISOString()),
+      subscriptionAmountIqd: 0,
+      subscriptionLastActivatedAt: activatedAt.toISOString(),
+      // Lifetime revenue is left untouched — gift grants never add to accumulated revenue.
+      subscriptionLifetimeRevenueIqd: prevLifetime,
+      subscriptionIsGift: true,
     },
   };
 }

@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
+import i18n from '../i18n';
 
 interface Props {
   children?: ReactNode;
@@ -28,9 +29,9 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center" dir="rtl">
           <div className="w-full max-w-md bg-slate-800 rounded-2xl p-6 shadow-2xl">
-            <h1 className="text-xl font-bold text-red-400 mb-4">عذراً، حدث خطأ غير متوقع</h1>
+            <h1 className="text-xl font-bold text-red-400 mb-4">{i18n.t('app.unexpectedError')}</h1>
             <p className="text-sm text-slate-300 mb-4">
-              يبدو أن هناك مشكلة أثناء تشغيل التطبيق. رسالة الخطأ:
+              {i18n.t('app.unexpectedErrorHint')}
             </p>
             <div className="bg-deep-navy text-left p-3 rounded text-red-300 font-mono text-xs overflow-auto max-h-48 mb-6">
               {this.state.errorStr}
@@ -39,7 +40,7 @@ export class ErrorBoundary extends Component<Props, State> {
               onClick={() => window.location.reload()}
               className="bg-indigo-600 hover:bg-indigo-700 w-full py-2 rounded-xl"
             >
-              إعادة تحميل التطبيق
+              {i18n.t('app.reload')}
             </button>
           </div>
         </div>

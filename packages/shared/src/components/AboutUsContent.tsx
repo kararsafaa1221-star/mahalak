@@ -1,12 +1,13 @@
 import React from 'react';
 import { Target, Heart, Sparkles, Shield, ShoppingBag, Store } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { MahalakLogoIcon } from './MahalakLogo';
 import { LegalGlowCard } from './LegalGlowCard';
 
 export const aboutSections = [
   {
     icon: Heart,
-    title: 'من نحن',
+    id: 'whoWeAre',
     body: `"محلك".. سوقك الأقرب، وتجارتك الأسهل.
 
 "محلك" هي منصة تجارة إلكترونية عراقية رائدة، صُممت خصيصاً لتكون حلقة الوصل الأمثل بين التجار المحليين والزبائن. نحن لسنا مجرد تطبيق تسوق تقليدي، بل نحن مجتمع تجاري رقمي متكامل يهدف إلى إعادة صياغة تجربة البيع والشراء عبر الإنترنت لتصبح أكثر سهولة، أماناً، وتفاعلية.
@@ -15,17 +16,17 @@ export const aboutSections = [
   },
   {
     icon: Target,
-    title: 'رؤيتنا',
+    id: 'vision',
     body: `نسعى لأن نكون المنصة الأولى والوجهة الأكثر ثقة في قطاع التجارة الإلكترونية محلياً، من خلال تمكين أصحاب المتاجر من توسيع نطاق أعمالهم رقمياً، وتزويد المتسوقين بتجربة استثنائية تواكب أحدث تقنيات التسوق الذكي.`,
   },
   {
     icon: Sparkles,
-    title: 'رسالتنا',
+    id: 'mission',
     body: `توفير بيئة تجارية آمنة وشفافة، تتيح للتاجر إدارة متجره الإلكتروني بكفاءة عالية، وتمنح الزبون القدرة على اكتشاف المنتجات، التفاعل معها، وطلبها بخطوات بسيطة وسريعة.`,
   },
   {
     icon: Store,
-    title: 'ما الذي يميز منصة «محلك»؟',
+    id: 'features',
     body: `• منظومة متكاملة (تطبيق التاجر وتطبيق الزبون): نقدم نظاماً مزدوجاً يمنح كل طرف أدواته الخاصة. لوحة تحكم متكاملة للتاجر لإدارة الطلبات والمنتجات، وواجهة سلسة للزبون للتسوق والمتابعة.
 
 • تجربة تسوق تفاعلية: نتيح للتجار عرض منتجاتهم بطريقة جذابة، مما يمنح الزبون تجربة تسوق رائعة.
@@ -45,6 +46,8 @@ export const AboutUsContent: React.FC<AboutUsContentProps> = ({
   compact = false,
   showHeader = true,
 }) => {
+  const { t } = useTranslation();
+
   return (
     <div
       className={`animate-fade-in font-tajawal text-right ${compact ? 'space-y-4' : 'space-y-5'}`}
@@ -59,22 +62,24 @@ export const AboutUsContent: React.FC<AboutUsContentProps> = ({
               <MahalakLogoIcon size={compact ? 28 : 32} inverted />
             </div>
             <h1 className={`font-black text-[#fff700] mb-1.5 ${compact ? 'text-lg' : 'text-2xl'}`}>
-              من نحن — منصة «محلك»
+              {t('aboutUs.headerTitle')}
             </h1>
             <p className="text-[10px] sm:text-xs font-bold text-purple-100">
-              سوقك الأقرب، وتجارتك الأسهل
+              {t('aboutUs.headerSubtitle')}
             </p>
           </div>
         </header>
       )}
 
-      {aboutSections.map(({ icon: Icon, title, body }) => (
-        <LegalGlowCard key={title}>
+      {aboutSections.map(({ icon: Icon, id, body }) => (
+        <LegalGlowCard key={id}>
           <div className="flex items-start gap-3 mb-2.5">
             <div className="p-2.5 rounded-xl bg-white/15 border border-white/20 text-[#fff700] shrink-0 shadow-sm">
               <Icon size={16} />
             </div>
-            <h2 className="font-black text-[#fff700] text-sm sm:text-base leading-relaxed pt-0.5">{title}</h2>
+            <h2 className="font-black text-[#fff700] text-sm sm:text-base leading-relaxed pt-0.5">
+              {t(`aboutUs.sections.${id}.title`)}
+            </h2>
           </div>
           <p className="text-[11px] sm:text-xs font-bold text-purple-100/90 leading-relaxed whitespace-pre-line">
             {body}

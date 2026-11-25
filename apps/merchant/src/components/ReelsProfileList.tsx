@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable react-hooks/immutability */
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { db } from '@shared/lib/firebase';
 import { collection, doc, getDoc, getDocs, updateDoc, increment, arrayRemove, arrayUnion, query, limit } from 'firebase/firestore';
 import { Reel, Product, Store, Customer } from '@shared/types';
@@ -31,6 +32,7 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
   onVisitStore,
   onShareReel
 }) => {
+  const { t } = useTranslation();
   const [reels, setReels] = useState<Reel[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -137,74 +139,94 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
   const handleLikeReel = async (reel: Reel, e: React.MouseEvent) => {
     e.stopPropagation();
     const isLiked = localLiked[reel.id];
-    
-    try {
-      const reelDocRef = doc(db, 'reels', reel.id);
-      await updateDoc(reelDocRef, { 
-        likesCount: increment(isLiked ? -1 : 1) 
-      });
+    const nextLiked = !isLiked;
+    const delta = isLiked ? -1 : 1;
 
-      setLocalLiked(prev => ({ ...prev, [reel.id]: !isLiked }));
-      setReels(prev => prev.map(r => r.id === reel.id ? { ...r, likesCount: Math.max(0, (r.likesCount || 0) + (isLiked ? -1 : 1)) } : r));
-      setSelectedReel(prev => prev && prev.id === reel.id ? { ...prev, likesCount: Math.max(0, (prev.likesCount || 0) + (isLiked ? -1 : 1)) } : prev);
-      
+    setLocalLiked((prev) => ({ ...prev, [reel.id]: nextLiked }));
+    setReels((prev) =>
+      prev.map((r) =>
+        r.id === reel.id ? { ...r, likesCount: Math.max(0, (r.likesCount || 0) + delta) } : r,
+      ),
+    );
+    setSelectedReel((prev) =>
+      prev && prev.id === reel.id
+        ? { ...prev, likesCount: Math.max(0, (prev.likesCount || 0) + delta) }
+        : prev,
+    );
+
+    try {
+      await updateDoc(doc(db, 'reels', reel.id), { likesCount: increment(delta) });
+
       if (currentCustomer) {
-        const customerRef = doc(db, 'customers', currentCustomer.id);
-        await updateDoc(customerRef, {
-          likedReels: isLiked ? arrayRemove(reel.id) : arrayUnion(reel.id)
+        await updateDoc(doc(db, 'customers', currentCustomer.id), {
+          likedReels: isLiked ? arrayRemove(reel.id) : arrayUnion(reel.id),
         });
-        if (currentCustomer.likedReels) {
-          if (isLiked) {
-            currentCustomer.likedReels = currentCustomer.likedReels.filter(id => id !== reel.id);
-          } else {
-            currentCustomer.likedReels = [...currentCustomer.likedReels, reel.id];
-          }
-        } else {
-          currentCustomer.likedReels = isLiked ? [] : [reel.id];
-        }
       } else {
         const storedLikes = JSON.parse(localStorage.getItem('unregistered_liked_reels') || '[]');
-        const newLikes = isLiked ? storedLikes.filter((id: string) => id !== reel.id) : [...storedLikes, reel.id];
+        const newLikes = isLiked
+          ? storedLikes.filter((id: string) => id !== reel.id)
+          : [...storedLikes, reel.id];
         localStorage.setItem('unregistered_liked_reels', JSON.stringify(newLikes));
       }
-    } catch (err) {
+    } catch {
+      setLocalLiked((prev) => ({ ...prev, [reel.id]: isLiked }));
+      setReels((prev) =>
+        prev.map((r) =>
+          r.id === reel.id ? { ...r, likesCount: Math.max(0, (r.likesCount || 0) - delta) } : r,
+        ),
+      );
+      setSelectedReel((prev) =>
+        prev && prev.id === reel.id
+          ? { ...prev, likesCount: Math.max(0, (prev.likesCount || 0) - delta) }
+          : prev,
+      );
     }
   };
 
   const handleToggleBookmark = async (reel: Reel, e: React.MouseEvent) => {
     e.stopPropagation();
     const isSaved = localSaved[reel.id];
+    const nextSaved = !isSaved;
+    const delta = isSaved ? -1 : 1;
+
+    setLocalSaved((prev) => ({ ...prev, [reel.id]: nextSaved }));
+    setReels((prev) =>
+      prev.map((r) =>
+        r.id === reel.id ? { ...r, savesCount: Math.max(0, (r.savesCount || 0) + delta) } : r,
+      ),
+    );
+    setSelectedReel((prev) =>
+      prev && prev.id === reel.id
+        ? { ...prev, savesCount: Math.max(0, (prev.savesCount || 0) + delta) }
+        : prev,
+    );
 
     try {
-      const reelDocRef = doc(db, 'reels', reel.id);
-      await updateDoc(reelDocRef, { 
-        savesCount: increment(isSaved ? -1 : 1) 
-      });
+      await updateDoc(doc(db, 'reels', reel.id), { savesCount: increment(delta) });
 
-      setLocalSaved(prev => ({ ...prev, [reel.id]: !isSaved }));
-      setReels(prev => prev.map(r => r.id === reel.id ? { ...r, savesCount: Math.max(0, (r.savesCount || 0) + (isSaved ? -1 : 1)) } : r));
-      setSelectedReel(prev => prev && prev.id === reel.id ? { ...prev, savesCount: Math.max(0, (prev.savesCount || 0) + (isSaved ? -1 : 1)) } : prev);
-      
       if (currentCustomer) {
-        const customerRef = doc(db, 'customers', currentCustomer.id);
-        await updateDoc(customerRef, {
-          savedReels: isSaved ? arrayRemove(reel.id) : arrayUnion(reel.id)
+        await updateDoc(doc(db, 'customers', currentCustomer.id), {
+          savedReels: isSaved ? arrayRemove(reel.id) : arrayUnion(reel.id),
         });
-        if (currentCustomer.savedReels) {
-          if (isSaved) {
-            currentCustomer.savedReels = currentCustomer.savedReels.filter(id => id !== reel.id);
-          } else {
-            currentCustomer.savedReels = [...currentCustomer.savedReels, reel.id];
-          }
-        } else {
-          currentCustomer.savedReels = isSaved ? [] : [reel.id];
-        }
       } else {
         const storedSaves = JSON.parse(localStorage.getItem('unregistered_saved_reels') || '[]');
-        const newSaves = isSaved ? storedSaves.filter((id: string) => id !== reel.id) : [...storedSaves, reel.id];
+        const newSaves = isSaved
+          ? storedSaves.filter((id: string) => id !== reel.id)
+          : [...storedSaves, reel.id];
         localStorage.setItem('unregistered_saved_reels', JSON.stringify(newSaves));
       }
-    } catch (err) {
+    } catch {
+      setLocalSaved((prev) => ({ ...prev, [reel.id]: isSaved }));
+      setReels((prev) =>
+        prev.map((r) =>
+          r.id === reel.id ? { ...r, savesCount: Math.max(0, (r.savesCount || 0) - delta) } : r,
+        ),
+      );
+      setSelectedReel((prev) =>
+        prev && prev.id === reel.id
+          ? { ...prev, savesCount: Math.max(0, (prev.savesCount || 0) - delta) }
+          : prev,
+      );
     }
   };
 
@@ -228,20 +250,20 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
   };
 
   return (
-    <div className="w-full bg-white rounded-[2rem] border border-slate-100 shadow-sm p-6 space-y-4" dir="rtl">
+    <div className="merchant-glass-sheet welcome-card-glow welcome-card-border-glow w-full rounded-[2rem] shadow-sm p-6 space-y-4 text-white" dir="rtl">
       
       {/* Segmented control tabs */}
-      <div className="flex bg-slate-100 p-1.5 rounded-2xl gap-1">
+      <div className="flex bg-white/10 p-1.5 rounded-2xl gap-1 border border-white/10">
         <button
           onClick={() => handleTabClick('saved')}
           className={`flex-1 py-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'saved' && isExpanded
               ? 'bg-vibrant-purple text-white shadow-md' 
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              : 'text-white/70 hover:text-white hover:bg-white/10'
           }`}
         >
           <Bookmark size={14} className={activeTab === 'saved' && isExpanded ? "fill-current" : ""} />
-          <span>المحفوظات ({Object.keys(localSaved).filter(k => localSaved[k]).length})</span>
+          <span>{t('merchant.reels.profile.savedTab', { count: Object.keys(localSaved).filter(k => localSaved[k]).length })}</span>
         </button>
 
         <button
@@ -249,32 +271,32 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
           className={`flex-1 py-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'liked' && isExpanded
               ? 'bg-vibrant-purple text-white shadow-md' 
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              : 'text-white/70 hover:text-white hover:bg-white/10'
           }`}
         >
           <Heart size={14} className={activeTab === 'liked' && isExpanded ? "fill-current" : ""} />
-          <span>الاعجابات ({Object.keys(localLiked).filter(k => localLiked[k]).length})</span>
+          <span>{t('merchant.reels.profile.likedTab', { count: Object.keys(localLiked).filter(k => localLiked[k]).length })}</span>
         </button>
       </div>
 
       {isExpanded && (
-        <div className="animate-fade-in space-y-4 border-t border-slate-100 pt-4">
+        <div className="animate-fade-in space-y-4 border-t border-white/15 pt-4">
           <div className="flex justify-between items-center px-1">
-            <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">
-              {activeTab === 'saved' ? 'جميع الريلز المحفوظة في حسابك' : 'قائمة المقاطع التي وضعت عليها إعجاباً'}
+            <span className="text-[10px] uppercase tracking-wider font-extrabold text-white/50">
+              {activeTab === 'saved' ? t('merchant.reels.profile.savedListHint') : t('merchant.reels.profile.likedListHint')}
             </span>
             <button 
               onClick={() => setIsExpanded(false)}
-              className="text-xs font-black text-vibrant-purple hover:underline"
+              className="text-xs font-black text-[#fff700] hover:underline"
             >
-              إغلاق القائمة ×
+              {t('merchant.reels.profile.closeList')}
             </button>
           </div>
 
           {loading ? (
             <div className="flex flex-col items-center justify-center p-12 text-center text-slate-400">
               <Loader2 size={24} className="animate-spin text-vibrant-purple mb-2" />
-              <span className="text-[11px] font-bold">جاري تحميل المفضلة...</span>
+              <span className="text-[11px] font-bold">{t('merchant.reels.profile.loading')}</span>
             </div>
           ) : displayedReels.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 px-4 bg-slate-50 rounded-2xl border border-slate-100 text-center gap-3">
@@ -282,11 +304,11 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
                 <Film size={18} />
               </div>
               <div>
-                <h4 className="text-xs font-black text-slate-700">القائمة فارغة حالياً</h4>
+                <h4 className="text-xs font-black text-slate-700">{t('merchant.reels.profile.emptyTitle')}</h4>
                 <p className="text-[10px] text-slate-400 font-medium max-w-xs mt-1">
                   {activeTab === 'saved' 
-                    ? 'استمتع بمقاطع الفيديو التسوقية وقم بحفظ المفضلة للرجوع إليها بسرعة هنا في أي وقت!' 
-                    : 'اضغط على زر الإعجاب في ريلز المتاجر وسوف تظهر المقاطع المفضلة لديك هنا!'}
+                    ? t('merchant.reels.profile.emptySavedHint')
+                    : t('merchant.reels.profile.emptyLikedHint')}
                 </p>
               </div>
             </div>
@@ -395,7 +417,7 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
                   } else {
                     try {
                       await navigator.clipboard.writeText(selectedReel.videoUrl);
-                      alert('تم نسخ رابط الفيديو لمشاركته! 🔗🎬');
+                      alert(t('merchant.reels.profile.linkCopied'));
                     } catch (err) {
                     }
                   }
@@ -420,7 +442,7 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
               {loadingModalData ? (
                 <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-white flex items-center justify-center gap-2">
                   <Loader2 size={14} className="animate-spin text-amber-500" />
-                  <span className="text-xs font-bold">جاري تحميل بطاقة الشراء...</span>
+                  <span className="text-xs font-bold">{t('merchant.reels.profile.loadingCard')}</span>
                 </div>
               ) : modalProduct ? (
                 <div className="bg-black/45 backdrop-blur-xl border border-white/10 rounded-2xl p-3.5 text-white gap-2.5 flex flex-col">
@@ -448,18 +470,18 @@ export const ReelsProfileList: React.FC<ReelsProfileListProps> = ({
                     onClick={() => {
                       if (onAddToCart) {
                         onAddToCart(modalProduct, 1);
-                        alert(`تمت إضافة ${modalProduct.name} إلى السلة بنجاح 🛍️`);
+                        alert(t('merchant.reels.profile.addedToCart', { name: modalProduct.name }));
                       }
                     }}
                     className="w-full py-2.5 bg-vibrant-purple hover:bg-violet transition text-white font-black text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-lg shadow-vibrant-purple/25/20"
                   >
                     <ShoppingBag size={14} />
-                    <span>إضافة إلى السلة</span>
+                    <span>{t('merchant.reels.profile.addToCart')}</span>
                   </button>
                 </div>
               ) : (
                 <div className="bg-black/40 backdrop-blur-md rounded-2xl p-3 text-white text-center text-[10px] border border-white/10">
-                  لا يوجد منتج مرتبط بهذا الريل حالياً.
+                  {t('merchant.reels.profile.noProduct')}
                 </div>
               )}
             </div>
